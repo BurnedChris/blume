@@ -89,8 +89,10 @@ The companion c15t implementation is published in [c15t/c15t#1204](https://githu
 
 ## Updating SDK re-exports
 
-The installed `@c15t/scripts` package manifest is the source of truth for named public SDK subpaths. After preparing or upgrading c15t, run `bun run sync:c15t-scripts` (also included in `bun run fix`) and commit the generated `src/scripts` files and package exports. The generator adds new entries and removes stale ones while preserving unrelated Blume exports. Root, package metadata, blocked exports, and wildcard deep imports are not mirrored.
+The installed `@c15t/scripts` package manifest is the source of truth for named public SDK subpaths. Its integration registry also generates the catalog in the [integrations guide](../apps/docs/content/docs/configuration/integrations.mdx), keeping rendered documentation and Markdown/agent mirrors in sync. After preparing or upgrading c15t, run `bun run sync:c15t-scripts` (also included in `bun run fix`) and commit the generated `src/scripts` files and package exports. The generator adds new entries and removes stale ones while preserving unrelated Blume exports. Root, package metadata, blocked exports, and wildcard deep imports are not mirrored.
 
 `bun run check:c15t-scripts` is read-only and fails on missing, changed, or stale exports. `bun run check` includes it, so the existing lint CI job enforces parity once its dependencies have been prepared. Do not generate during CI installation, since that would hide uncommitted drift.
 
 The export/deprecation update passed 5,300 tests with 100% line/function coverage, uncached typechecks, the production workspace build, and lint/format plus SDK export parity checks. Built CLI `doctor --json` reports one migration warning and no errors for legacy analytics; the SDK-only fixture reports no diagnostics. Generator regression tests cover additions, nested exports, removals, read-only drift detection, and TypeScript condition order.
+
+The integration documentation update passed the same 5,300-test coverage gate and workspace checks. All six guide examples typecheck against the SDK; `blume validate` reports no diagnostics. The built HTML and Markdown/API mirrors include the full generated vendor catalog.

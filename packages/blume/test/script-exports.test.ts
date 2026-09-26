@@ -94,6 +94,38 @@ it("generates added exports, removes stale ones, and detects drift without chang
     ).toBe("edited\n");
     await expect(run()).resolves.toMatchObject({ code: 0 });
     await expect(run(true)).resolves.toMatchObject({ code: 0 });
+
+    const docsPath = path.join(
+      root,
+      "apps/docs/content/docs/configuration/integrations.mdx"
+    );
+    await mkdir(path.dirname(docsPath), { recursive: true });
+    const draft =
+      "Before\n{/* c15t-integrations:start */}\nStale table\n{/* c15t-integrations:end */}\nAfter\n";
+    await writeFile(docsPath, draft);
+    await writeFile(
+      path.join(sdkRoot, "registry.js"),
+      'export const builtInScriptIntegrations = [{ label: "New Vendor", packageSubpath: "new-vendor", consentCategory: "measurement" }];'
+    );
+    await expect(run(true)).resolves.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("integration documentation catalog"),
+    });
+    expect(await readFile(docsPath, "utf-8")).toBe(draft);
+    await expect(run()).resolves.toMatchObject({ code: 0 });
+    const guide = await readFile(docsPath, "utf-8");
+    expect(guide).toStartWith("Before\n");
+    expect(guide).toEndWith("After\n");
+    expect(guide).toContain(
+      "| New Vendor | `blume/scripts/new-vendor` | `measurement` |"
+    );
+    expect(guide).not.toContain("Stale table");
+    await expect(run(true)).resolves.toMatchObject({ code: 0 });
+    await writeFile(docsPath, "Missing markers");
+    await expect(run()).resolves.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("missing its generated catalog markers"),
+    });
   } finally {
     await rm(root, { force: true, recursive: true });
   }

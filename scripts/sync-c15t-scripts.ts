@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 // This directory and the ./scripts/* package exports are generated together.
 // --root supports checking another checkout without changing the current one.
@@ -21,7 +22,8 @@ const check = args.includes("--check");
 const packageRoot = path.join(root, "packages/blume");
 const packagePath = path.join(packageRoot, "package.json");
 const require = createRequire(packagePath);
-let sdkRoot = path.dirname(require.resolve("@c15t/scripts/registry"));
+const registryPath = require.resolve("@c15t/scripts/registry");
+let sdkRoot = path.dirname(registryPath);
 while (true) {
   const candidate = path.join(sdkRoot, "package.json");
   if (
@@ -108,6 +110,50 @@ for (const name of publicPaths) {
     if (!check) {
       mkdirSync(path.dirname(file), { recursive: true });
       writeFileSync(file, expected);
+    }
+  }
+}
+// Keep the rendered page and Markdown/agent mirrors on the same static catalog.
+const docsPath = path.join(
+  root,
+  "apps/docs/content/docs/configuration/integrations.mdx"
+);
+if (existsSync(docsPath)) {
+  const { builtInScriptIntegrations } = await import(
+    pathToFileURL(registryPath).href
+  );
+  const start = "{/* c15t-integrations:start */}";
+  const end = "{/* c15t-integrations:end */}";
+  const document = readFileSync(docsPath, "utf-8");
+  if (!document.includes(start) || !document.includes(end)) {
+    throw new Error(
+      "Integration guide is missing its generated catalog markers."
+    );
+  }
+  const rows = builtInScriptIntegrations.map(
+    (entry: {
+      label: string;
+      packageSubpath: string;
+      consentCategory: string;
+    }) => {
+      if (!publicPaths.includes(entry.packageSubpath)) {
+        throw new Error(
+          `Registry integration ${entry.packageSubpath} has no named public SDK export.`
+        );
+      }
+      return `| ${entry.label} | \`blume/scripts/${entry.packageSubpath}\` | \`${entry.consentCategory}\` |`;
+    }
+  );
+  const table = [
+    "| Integration | Import path | Default consent category |",
+    "| --- | --- | --- |",
+    ...rows,
+  ].join("\n");
+  const expected = `${document.slice(0, document.indexOf(start) + start.length)}\n\n${table}\n\n${document.slice(document.indexOf(end))}`;
+  if (expected !== document) {
+    drift.push("integration documentation catalog");
+    if (!check) {
+      writeFileSync(docsPath, expected);
     }
   }
 }

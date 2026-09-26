@@ -7,3 +7,5 @@ Use c15t v3 for consent and script lifecycle management. Analytics-only configur
 Deprecate and freeze `blume/analytics` until its removal in the next major release. Emit migration warnings for existing analytics lists, document every adapter migration and rollback, and expose typed client configuration with explicit navigation pageviews for SDK-only and mixed setups.
 
 Generate direct script re-exports from the installed c15t SDK manifest and enforce export parity in lint checks.
+
+Document SDK integration setup, the generated vendor catalog, consent providers, pageviews, events, and custom scripts. Add sidebar navigation and update the configuration overview.

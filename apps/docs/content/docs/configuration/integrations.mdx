@@ -1,0 +1,217 @@
+---
+title: Integrations
+description: Add analytics, advertising pixels, tag managers, and support widgets with Blume's direct c15t script SDK exports.
+---
+
+Use `blume/scripts/*` to add browser integrations to your docs site. These are direct re-exports of the c15t script SDK: the options, types, script loading, and consent callbacks come from c15t. Blume connects that runtime to its navigation, preferences control, and application events.
+
+Browser scripts go in a **consent client entrypoint**. The top-level `integrations` array in `blume.config.ts` is for [Astro plugins](/docs/configuration/customization#astro-integrations), not vendor scripts.
+
+## Add your first integration
+
+Connect a client module from your site configuration:
+
+```ts blume.config.ts
+import { defineConfig } from "blume";
+import { c15t } from "blume/consent";
+
+export default defineConfig({
+  consent: c15t({
+    clientEntrypoint: "./consent.client.ts",
+    legalLinks: { privacyPolicy: { href: "/privacy" } },
+  }),
+});
+```
+
+The entrypoint path is relative to the site root. Replace the privacy link with a real page on your site. Then create the browser module alongside `blume.config.ts`:
+
+```ts consent.client.ts
+import type { ConsentClientOptions } from "blume/consent";
+import { posthog } from "blume/scripts/posthog";
+
+export default {
+  scripts: import.meta.env.PROD
+    ? [
+        posthog({
+          id: "phc_YOUR_PROJECT_KEY",
+          region: "us",
+          loadMode: "after-consent",
+          initOptions: { capture_pageview: "history_change" },
+        }),
+      ]
+    : [],
+} satisfies ConsentClientOptions;
+```
+
+This example waits for measurement consent before loading PostHog and lets PostHog track client-side navigation. It explicitly selects the US region; use `eu` for an EU project, or the SDK's host options for your own endpoint. The production guard disables the script in `blume dev`.
+
+Use the public browser identifier supplied by your vendor. Anything in this module reaches the browser; do not put secret API credentials here.
+
+`c15t()` defaults to an offline banner with a global opt-in policy. Choices are stored in the browser; offline mode does not create server-side consent records. See [Cookie consent](/docs/configuration/consent) to connect a backend or use your existing consent provider.
+
+## Available integrations
+
+Import the subpath shown below and use its exported SDK factory. Your editor exposes the factory's current options and types. There is no bare `blume/scripts` import.
+
+This catalog is generated from the installed c15t registry. The default category describes the integration's consent bucket, **not a guarantee that its script waits for consent before loading**. Some helpers initialize early with denied-state behavior; check the helper's loading options and your vendor configuration.
+
+{/* c15t-integrations:start */}
+
+| Integration | Import path | Default consent category |
+| --- | --- | --- |
+| Cloudflare Zaraz | `blume/scripts/cloudflare-zaraz` | `necessary` |
+| Google Tag Manager | `blume/scripts/google-tag-manager` | `necessary` |
+| Google Tag (gtag.js) | `blume/scripts/google-tag` | `measurement` |
+| Ahrefs Analytics | `blume/scripts/ahrefs-analytics` | `measurement` |
+| Adobe Analytics | `blume/scripts/adobe-analytics` | `measurement` |
+| Amplitude | `blume/scripts/amplitude` | `measurement` |
+| Cloudflare Web Analytics | `blume/scripts/cloudflare-web-analytics` | `measurement` |
+| Clearbit | `blume/scripts/clearbit` | `marketing` |
+| Microsoft Clarity | `blume/scripts/microsoft-clarity` | `measurement` |
+| Databuddy | `blume/scripts/databuddy` | `measurement` |
+| Fathom Analytics | `blume/scripts/fathom-analytics` | `measurement` |
+| Heap | `blume/scripts/heap` | `measurement` |
+| Mixpanel Analytics | `blume/scripts/mixpanel-analytics` | `measurement` |
+| Hotjar | `blume/scripts/hotjar` | `measurement` |
+| Hightouch | `blume/scripts/hightouch` | `measurement` |
+| RudderStack | `blume/scripts/rudderstack` | `measurement` |
+| LogRocket | `blume/scripts/logrocket` | `measurement` |
+| Matomo Analytics | `blume/scripts/matomo-analytics` | `measurement` |
+| PostHog | `blume/scripts/posthog` | `measurement` |
+| Promptwatch | `blume/scripts/promptwatch` | `measurement` |
+| Pirsch | `blume/scripts/pirsch` | `measurement` |
+| Segment | `blume/scripts/segment` | `measurement` |
+| Rybbit Analytics | `blume/scripts/rybbit-analytics` | `measurement` |
+| Plausible Analytics | `blume/scripts/plausible-analytics` | `measurement` |
+| Umami Analytics | `blume/scripts/umami-analytics` | `measurement` |
+| Vercel Analytics | `blume/scripts/vercel-analytics` | `measurement` |
+| Crisp | `blume/scripts/crisp` | `functionality` |
+| Intercom | `blume/scripts/intercom` | `functionality` |
+| Meta Pixel | `blume/scripts/meta-pixel` | `marketing` |
+| OpenAI Pixel (ChatGPT Ads) | `blume/scripts/openai-pixel` | `marketing` |
+| Reddit Pixel | `blume/scripts/reddit-pixel` | `marketing` |
+| TikTok Pixel | `blume/scripts/tiktok-pixel` | `marketing` |
+| LinkedIn Insight Tag | `blume/scripts/linkedin-insights` | `marketing` |
+| Microsoft UET | `blume/scripts/microsoft-uet` | `marketing` |
+| Snapchat Pixel | `blume/scripts/snapchat-pixel` | `marketing` |
+| X (Twitter) Pixel | `blume/scripts/x-pixel` | `marketing` |
+
+{/* c15t-integrations:end */}
+
+`blume/scripts/registry` also exports `builtInScriptIntegrations` and `BUILT_IN_INTEGRATION_CATEGORIES` for discovery tools. `blume/scripts/events` exports c15t's event dispatcher; it is not another vendor loader.
+
+## Combine integrations
+
+Return multiple SDK scripts from the same client module. For example, configure a tag manager, an advertising pixel, and a support widget:
+
+```ts consent.client.ts
+import type { ConsentClientOptions } from "blume/consent";
+import { crisp } from "blume/scripts/crisp";
+import { googleTagManager } from "blume/scripts/google-tag-manager";
+import { metaPixel } from "blume/scripts/meta-pixel";
+
+export default {
+  scripts: import.meta.env.PROD
+    ? [
+        googleTagManager({ id: "GTM-EXAMPLE" }),
+        metaPixel({ pixelId: "123456789" }),
+        crisp({ websiteId: "YOUR_CRISP_WEBSITE_ID" }),
+      ]
+    : [],
+} satisfies ConsentClientOptions;
+```
+
+The helpers retain their own consent categories and callbacks. Meta Pixel uses marketing consent; Crisp uses functionality consent. GTM initializes Consent Mode defaults before its container loads, then receives consent updates. Configure the tags inside that container to honor the signals.
+
+Register each integration once. If GTM already installs Meta Pixel, remove the separate `metaPixel()` entry. The same rule applies to scripts injected by a CMP, hosting provider, custom head tag, or the deprecated `analytics` list. Blume combines configured scripts; it does not deduplicate different installations of the same vendor.
+
+## Consent, backends, and external providers
+
+Keep the scripts in the same client module when changing consent providers. With a c15t backend, add the mode to your configuration:
+
+```ts blume.config.ts
+import { defineConfig } from "blume";
+import { c15t } from "blume/consent";
+
+export default defineConfig({
+  consent: c15t({
+    mode: { type: "hosted", url: "https://consent.example.com" },
+    clientEntrypoint: "./consent.client.ts",
+  }),
+});
+```
+
+For Osano or Fides, set `clientEntrypoint` on `osano()` or `ethyca()` instead. The external provider owns the banner, preferences, persistence, and consent records; c15t reads its permissions and manages scripts. Do not configure a second banner or let the provider independently load those same scripts. Follow the [provider setup and category mapping](/docs/configuration/consent#keep-osano-or-fides).
+
+Blume's footer preferences control opens the active provider. Blume enables reload on consent withdrawal by default because executed vendor code may continue running after its script element is removed. See [Loading and withdrawal](/docs/configuration/consent#loading-and-withdrawal) before overriding that behavior.
+
+## Navigation and pageviews
+
+Blume's client router swaps pages without a full reload. Most SDKs can track history themselves. Segment and Hightouch need explicit navigation pageviews from Blume; declare them in the client module:
+
+```ts consent.client.ts
+import type { ConsentClientOptions } from "blume/consent";
+import { segment } from "blume/scripts/segment";
+
+export default {
+  scripts: import.meta.env.PROD
+    ? [segment({ writeKey: "YOUR_WRITE_KEY" })]
+    : [],
+  pageviews: ["segment"],
+} satisfies ConsentClientOptions;
+```
+
+Use `hightouch` for the Hightouch helper. Add `posthog` only when PostHog captures initial pageviews but does not track history itself. The first PostHog example above uses `capture_pageview: "history_change"`, so it does not need a `pageviews` entry. Do not add one when `capture_pageview` is `false` either.
+
+Initial pageviews belong to the SDK. Blume seeds the initial route without adding another event, deduplicates repeat notifications, and ignores hash-only changes. Explicit navigation pageviews require measurement permission and the integration's own consent gate. Denied events are discarded rather than replayed after acceptance.
+
+Adobe and GTM containers need their own rules for history-change events. For legacy PostHog defaults and other vendor-specific migration details, see [Preserve navigation pageviews](/docs/configuration/analytics-migration#preserve-navigation-pageviews).
+
+## Blume application events
+
+Blume forwards feedback, search, narration, and assistant usage events through c15t to configured vendors supported by its event dispatcher. Delivery requires measurement permission as well as the script's own consent conditions. SDK-only integrations and legacy analytics adapters use the same dispatcher.
+
+A script loader does not automatically provide a custom event mapping. Analytics vendors with supported event APIs receive these events; support widgets and advertising pixels are not automatically destinations for every Blume event. See the event references for [feedback](/docs/configuration#page-feedback), [search](/docs/configuration/search#search-analytics), [narration](/docs/configuration/narration#analytics), and the [assistant](/docs/configuration/assistant#analytics).
+
+The local `blume:track` browser event remains available to application code even when vendor delivery is denied. It can include raw search queries or assistant text that Blume excludes from vendor metadata. A custom listener must check permissions and select safe fields before forwarding data. Written feedback comments are intentionally sent when that feature is enabled; review their contents and recipients separately.
+
+## Custom scripts and callbacks
+
+For a script without a helper, add a c15t script object with a stable, unique ID and an explicit consent category:
+
+```ts consent.client.ts
+import type { ConsentClientOptions } from "blume/consent";
+
+export default {
+  scripts: import.meta.env.PROD
+    ? [
+        {
+          id: "support-widget",
+          category: "functionality",
+          src: "https://support.example.com/widget.js",
+          onLoad: () => {
+            window.dispatchEvent(new Event("support:ready"));
+          },
+        },
+      ]
+    : [],
+} satisfies ConsentClientOptions;
+```
+
+Replace the example URL with your actual script. Use `textContent` instead of `src` for inline code. Keep functions in the client module: SDK objects and callbacks cannot pass through Blume's serialized config snapshot.
+
+When extending a vendor helper, preserve its returned fields and consent callbacks. Overwriting them can disable the behavior that stops or changes tracking when permission is withdrawn. An `onLoad` callback reports that a script loaded; it is not a general permission to send analytics.
+
+## Verify your setup
+
+1. Run `blume doctor` and `blume build`. Test the production output; the examples intentionally disable vendor scripts during development.
+2. Use fresh browser storage. Check requests and storage before making a choice, then accept and confirm the expected script loads once.
+3. Navigate between docs pages. Check initial and navigation pageviews for missing or duplicate events, including hash-only and query-string changes.
+4. Open **Cookie settings**, withdraw consent, and verify the reload and subsequent denied behavior. For an external CMP, also test it being unavailable.
+5. Confirm your production identifiers, host region, notices, legal links, and translations. A successful loader test does not verify tags inside a container or establish compliance for the site.
+
+If nothing loads in `blume dev`, check the production guard first. If nothing loads in a build, check the entrypoint path, script category, current permissions, vendor ID, network failures, and your Content Security Policy. For duplicate events, check repeated registrations and whether both Blume and the vendor track navigation.
+
+## Migrate an existing configuration
+
+`blume/analytics` is deprecated and frozen until removal in the next major release. Existing nonempty `analytics` lists continue to work with a migration warning. Follow the [complete migration guide](/docs/configuration/analytics-migration) to move one vendor at a time, preserve defaults and navigation events, and roll back if needed.
