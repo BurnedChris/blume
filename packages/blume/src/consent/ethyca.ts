@@ -6,6 +6,12 @@ import { adapterDescriptorSchema } from "../core/adapter.ts";
 
 /** Options for {@link ethyca}. */
 export interface EthycaOptions {
+  /** Browser module exporting c15t scripts and lifecycle callbacks. */
+  clientEntrypoint?: string;
+  /** c15t category to provider consent property/notice mapping. Unmapped categories stay denied. */
+  categories?: Partial<
+    Record<"measurement" | "marketing" | "experience" | "functionality", string>
+  >;
   /**
    * The key of the privacy notice that covers analytics, as you named it in
    * Fides. Defaults to `analytics`.
@@ -18,6 +24,13 @@ export interface EthycaOptions {
 }
 
 export const ethycaOptionsSchema = z.strictObject({
+  categories: z
+    .partialRecord(
+      z.enum(["measurement", "marketing", "experience", "functionality"]),
+      z.string().min(1)
+    )
+    .optional(),
+  clientEntrypoint: z.string().min(1).optional(),
   notice: z.string().min(1).optional(),
   privacyCenter: z.url({ protocol: /^https?$/u }),
   propertyId: z.string().min(1).optional(),
@@ -43,16 +56,7 @@ export const ethyca = (options: EthycaOptions): EthycaAdapter => ({
   runtimeDeps: [],
 });
 
-/**
- * Reports the analytics notice to `window.blumeConsent` when Fides is ready
- * and whenever the reader saves a change, and reopens Fides' modal from the
- * Cookie settings link. The notice key rides in as `data-notice`. It counts
- * as allowed when on (`true`), opted in, or a notice that only asks for
- * acknowledgment.
- */
-export const ETHYCA_BRIDGE = `(()=>{const c=window.blumeConsent;if(!c){return;}const k=document.currentScript?.dataset.notice??"analytics";const sync=(e)=>{const v=(e?.detail?.consent??window.Fides?.consent??{})[k];c.set({analytics:v===true||v==="opt_in"||v==="acknowledge"});};c.open=()=>window.Fides?.showModal();addEventListener("FidesReady",sync);addEventListener("FidesUpdated",sync);if(window.Fides?.initialized){sync();}})();`;
-
-/** Fides' script from the privacy center, then the bridge. */
+/** Fides' synchronous bootstrap; c15t observes its decisions separately. */
 export const ethycaHead = (options: EthycaOptions): HeadScript[] => {
   const src = new URL(
     "fides.js",
@@ -61,11 +65,5 @@ export const ethycaHead = (options: EthycaOptions): HeadScript[] => {
   if (options.propertyId) {
     src.searchParams.set("property_id", options.propertyId);
   }
-  return [
-    { attributes: { src: src.href }, content: null },
-    {
-      attributes: { "data-notice": options.notice ?? "analytics" },
-      content: ETHYCA_BRIDGE,
-    },
-  ];
+  return [{ attributes: { src: src.href }, content: null }];
 };

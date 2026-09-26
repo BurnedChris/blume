@@ -13,7 +13,7 @@
  * rebuilds the widget from server-rendered markup, so the handlers always
  * bind to the freshly swapped-in elements.
  */
-import type { BlumeConsent } from "../../consent/client.ts";
+import type { BlumeConsent } from "../../consent/runtime.ts";
 import { track } from "./analytics-client.ts";
 
 /** The longest comment the box takes. */
@@ -24,7 +24,7 @@ export const COMMENT_MAX_LENGTH = 1000;
  * the reader has allowed analytics.
  */
 const answersReachAnalytics = (): boolean => {
-  // SAFETY: the consent init script (`consent/init.ts`) is the only writer of
+  // SAFETY: the c15t compatibility bridge is the only writer of
   // `window.blumeConsent`; without a consent layer it's absent.
   const { blumeConsent } = window as Window & { blumeConsent?: BlumeConsent };
   return blumeConsent === undefined || blumeConsent.analytics === true;

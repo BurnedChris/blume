@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import type { AdapterDescriptor } from "../core/adapter.ts";
 import { adapterDescriptorSchema } from "../core/adapter.ts";
-import type { HeadScript } from "./head.ts";
 
 /** Plausible Cloud, the origin `plausible()` loads the script from when `host` is unset. */
 export const PLAUSIBLE_DEFAULT_HOST = "https://plausible.io";
@@ -51,33 +50,3 @@ export const plausible = (options: PlausibleOptions): PlausibleAdapter => ({
   requiredSecrets: [],
   runtimeDeps: [],
 });
-
-/**
- * The queue stub from Plausible's custom-events guide: `plausible()` calls
- * made before the deferred script lands are buffered on `plausible.q` and
- * replayed once it loads, so an early `track()` isn't lost.
- */
-export const PLAUSIBLE_QUEUE =
-  "window.plausible=window.plausible||function(){(window.plausible.q=window.plausible.q||[]).push(arguments)}";
-
-/**
- * The deferred tag from the site's install instructions, with `domain` as
- * `data-domain`, `host` as the script origin, and every other option as its
- * own `data-` attribute, followed by the custom-event queue stub. Plausible's
- * script tracks history changes on its own, so client-router navigations
- * need no extra hook.
- */
-export const plausibleHead = (options: PlausibleOptions): HeadScript[] => {
-  const { domain, host, ...settings } = options;
-  const attributes: HeadScript["attributes"] = {};
-  for (const [setting, value] of Object.entries(settings)) {
-    attributes[`data-${setting}`] = value;
-  }
-  attributes["data-domain"] = domain;
-  attributes.defer = true;
-  attributes.src = `${(host ?? PLAUSIBLE_DEFAULT_HOST).replace(/\/+$/u, "")}/js/script.js`;
-  return [
-    { attributes, content: null },
-    { attributes: {}, content: PLAUSIBLE_QUEUE },
-  ];
-};

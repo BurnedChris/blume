@@ -19,7 +19,7 @@ export default defineConfig({
 });
 ```
 
-Adapters emit into `<head>` in the order you list them, and you can combine as many as you like. Every adapter is plain data: what it returns is validated with the rest of your config and inlined into the built site, so it can carry any JSON value but never a function. A passthrough option that JSON can't carry (a function, `undefined`, a bigint) fails validation with its path rather than disappearing from the build.
+Adapters are translated into c15t SDK scripts. c15t owns their loading order, consent callbacks, and lifecycle across navigation. Every adapter is plain data: what it returns is validated with the rest of your config and inlined into the built site, so it can carry any JSON value but never a function. A passthrough option that JSON can't carry (a function, `undefined`, a bigint) fails validation with its path rather than disappearing from the build.
 
 Analytics loads in **production builds only**. The scripts are emitted by `blume build`, never by `blume dev`, so local traffic never reaches your dashboards and you don't need a separate "development" project.
 
@@ -27,9 +27,9 @@ Analytics loads in **production builds only**. The scripts are emitted by `blume
 Analytics is opt-in. With no `analytics` list (or an empty one), Blume injects nothing.
 :::
 
-To ask readers first, set [`consent`](/docs/configuration/consent): every adapter here then waits until the reader allows analytics.
+An analytics list automatically enables an offline c15t banner. Configure [`consent`](/docs/configuration/consent) for a backend or an external CMP. SDK helpers may load before consent with denied-state behavior; each helper defines its loading policy.
 
-Every identifier below — a project key, a measurement ID, a site token — is the public, browser-side one from the provider's own install snippet. Each adapter renders that snippet, so it's safe to commit to your docs repository; Blume never asks for a secret.
+Every identifier below — a project key, a measurement ID, a site token — is the public, browser-side one from the provider's own install snippet. These are browser-side configuration values; do not put secret API credentials into analytics options.
 
 ## Adapters
 
@@ -78,7 +78,7 @@ Blume sends a `$pageview` for each client-router navigation only while PostHog c
 
 ## Vercel Web Analytics
 
-Add `vercel()` to include [Vercel Web Analytics](https://vercel.com/docs/analytics). Blume renders Vercel's official Astro component, which injects the first-party script served from your own domain once Web Analytics is enabled for the project in the Vercel dashboard.
+Add `vercel()` to include [Vercel Web Analytics](https://vercel.com/docs/analytics). c15t loads the first-party script served from your own domain once Web Analytics is enabled for the project in the Vercel dashboard.
 
 ```ts blume.config.ts lineNumbers
 analytics: [vercel()],
@@ -132,7 +132,7 @@ analytics: [
 ],
 ```
 
-Which tags fire, and on what, is the container's configuration. Client-side navigations reach the container as history changes, so fire pageview tags from a **History Change** trigger rather than the page-load one. Cookie consent banners are yours to set up in the container too.
+Which tags fire, and on what, is the container's configuration. Client-side navigations reach the container as history changes, so fire pageview tags from a **History Change** trigger rather than the page-load one. Blume automatically shows the offline c15t banner. Configure consent requirements on tags inside GTM; loading a container is not permission for every tag to run.
 
 ## Plausible
 
@@ -253,7 +253,7 @@ analytics: [
 ],
 ```
 
-`key` and `cdn` are the options Blume maps: the snippet loads the library from `cdn` and tells it to fetch its integrations from there too. Anything else you pass is forwarded as the `analytics.load` options verbatim (`integrations`, …).
+`key` and `cdn` are the options Blume maps: the library loads from `cdn`. Anything else you pass is passed as the SDK load options (`integrations`, …).
 
 ## Hightouch
 
@@ -423,7 +423,7 @@ analytics: [
 | `segment()` | `key` | — | Segment source write key. Required. |
 | `segment()` | `cdn` | `https://cdn.segment.com` | Origin of a custom domain proxying Segment's CDN. |
 | `segment()` | anything else | — | Forwarded as the `analytics.load` options verbatim. |
-| `vercel()` | `mode`, `debug`, … | — | Forwarded to the official Astro component as props. |
+| `vercel()` | `mode`, `debug`, … | — | Mapped to c15t Vercel SDK options; use clientEntrypoint for callbacks. |
 | `script()` | `src` | — | External script URL. Mutually exclusive with `content`. |
 | `script()` | `content` | — | Inline script body. Mutually exclusive with `src`. |
 | `script()` | `strategy` | — | `async` or `defer` for an external script. |

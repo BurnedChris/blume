@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import type { AdapterDescriptor } from "../core/adapter.ts";
 import { adapterDescriptorSchema } from "../core/adapter.ts";
-import type { HeadScript } from "./head.ts";
 
 /** Options for {@link clearbit}. */
 export interface ClearbitOptions {
@@ -31,17 +30,3 @@ export const clearbit = (options: ClearbitOptions): ClearbitAdapter => ({
   requiredSecrets: [],
   runtimeDeps: [],
 });
-
-/** The tag origin; the key picks the tags bundle. */
-export const CLEARBIT_TAG_ORIGIN = "https://tag.clearbitscripts.com/v1/";
-
-/** The tag as Clearbit's install snippet renders it. */
-export const clearbitHead = (options: ClearbitOptions): HeadScript[] => [
-  {
-    attributes: {
-      referrerpolicy: "strict-origin-when-cross-origin",
-      src: `${CLEARBIT_TAG_ORIGIN}${encodeURIComponent(options.key)}/tags.js`,
-    },
-    content: null,
-  },
-];

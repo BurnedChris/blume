@@ -175,7 +175,10 @@ export const runtimeDependencies = (options: {
 }): string[] => {
   const { config, needsReact, needsSvelte, needsVue } = options;
   const deps = ["@astrojs/mdx"];
-  if (needsReact) {
+  if (config.consent) {
+    deps.push("@c15t/astro", "@c15t/core", "@c15t/scripts", "@c15t/react");
+  }
+  if (needsReact || config.consent) {
     deps.push("@astrojs/react");
   }
   if (needsVue) {
@@ -581,6 +584,7 @@ const blumeIntegrationOptions = (options: {
     : shared;
 };
 
+// oxlint-disable-next-line complexity -- The generated Astro config keeps optional integrations explicit.
 export const astroConfigTemplate = (options: {
   context: ProjectContext;
   config: ResolvedConfig;
@@ -623,7 +627,8 @@ export const astroConfigTemplate = (options: {
   /** Bridge used to load configured integrations without serializing them. */
   integrationBridge?: IntegrationBridgeOptions;
 }): string => {
-  const { context, config, needsReact, pages, themePath } = options;
+  const { context, config, pages, themePath } = options;
+  const needsReact = options.needsReact || config.consent !== null;
 
   const { astro: cacheOptions, vite: viteCacheOption } = runtimeCacheOptions(
     context,
@@ -774,6 +779,9 @@ export const astroConfigTemplate = (options: {
 
   // Framework renderers are only wired in when an island (or the assistant, for React)
   // needs them. The core theme is Astro-first and ships no client JS.
+  const consentImport = config.consent
+    ? `import { blumeConsentIntegrations } from "blume/consent/integration";\n`
+    : "";
   const reactImport = needsReact ? `import react from "@astrojs/react";\n` : "";
   const vueImport = needsVue ? `import vue from "@astrojs/vue";\n` : "";
   const svelteImport = needsSvelte
@@ -840,6 +848,11 @@ export const astroConfigTemplate = (options: {
   if (needsSvelte) {
     integrations.push("svelte()");
   }
+  if (config.consent) {
+    integrations.push(
+      `...blumeConsentIntegrations({ basePath: ${JSON.stringify(`${deployBase}${config.basePath}`)}, consent: ${JSON.stringify(config.consent)}, analytics: ${JSON.stringify(config.analytics)}, root: ${ejected ? 'fileURLToPath(new URL(".", import.meta.url))' : JSON.stringify(context.root)} })`
+    );
+  }
   // Always mounted: injects user pages (a no-op when there are none) and wires
   // up dev-server `Accept: text/markdown` negotiation over the content routes,
   // plus the homepage agent-discovery `Link` header.
@@ -872,7 +885,7 @@ ${fileUrlImport}${defineConfigImport}
 import mdx from "@astrojs/mdx";
 import tailwindcss from "@tailwindcss/vite";
 import { blumeMarkdownProcessor, blumeMdxProcessor, blumeShikiTransformers, blumeTwoslashTransformer } from "blume/markdown";
-${reactImport}${vueImport}${svelteImport}${blumeImport}${adapterImport}
+${consentImport}${reactImport}${vueImport}${svelteImport}${blumeImport}${adapterImport}
 ${userConfigSetup}export default defineConfig({
   root: ${JSON.stringify(context.outDir)},
   srcDir: ${JSON.stringify(`${context.outDir}/src`)},
@@ -972,6 +985,7 @@ ${userConfigSetup}export default defineConfig({
     },
     resolve: {
       alias: {
+        "blume:consent-ui": "blume/components/layout/${config.consent ? "ConsentBanner" : "NoConsent"}.astro",
         "blume:ask": ${configPath(askPath, ejected)},
         "blume:examples": ${configPath(examplesPath, ejected)},
         "blume:examples-theme": ${configPath(examplesThemePath, ejected)},

@@ -126,8 +126,8 @@ interface Tracked {
 }
 
 /**
- * Analytics events the hooks report, captured through the PostHog global the
- * real `track()` helper fans out to (module-mocking the helper would leak into
+ * Analytics events the hooks report, captured through the c15t dispatcher the
+ * real `track()` helper delegates to (module-mocking the helper would leak into
  * its own test file, since Bun shares module mocks across a run).
  */
 const tracked: Tracked[] = [];
@@ -136,9 +136,12 @@ const tracked: Tracked[] = [];
 const dispatched: Tracked[] = [];
 
 // `currentPath()` reads window.location; give the hooks a page to ground on,
-// and `track()` a PostHog stub plus the `dispatchEvent` its universal hook
+// and `track()` a dispatcher stub plus the `dispatchEvent` its universal hook
 // needs.
 const windowStub = {
+  __blumeTrack: (event: string, props: TrackProps): void => {
+    tracked.push({ event, props });
+  },
   dispatchEvent: (event: CustomEvent): boolean => {
     // SAFETY: `track()` is the only dispatcher here, and its detail is always
     // `{ event, props }`.
@@ -146,11 +149,6 @@ const windowStub = {
     return true;
   },
   location: { pathname: "/guide" },
-  posthog: {
-    capture: (event: string, props: TrackProps): void => {
-      tracked.push({ event, props });
-    },
-  },
 };
 // SAFETY: installs a test-only window stub on the global; the hooks read only
 // `location.pathname` from it and the analytics helper only the stubs above.

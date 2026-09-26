@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import type { AdapterDescriptor, JsonValue } from "../core/adapter.ts";
 import { adapterDescriptorSchema } from "../core/adapter.ts";
-import type { HeadScript } from "./head.ts";
 
 /** The beacon script Cloudflare's dashboard snippet loads. */
 export const CLOUDFLARE_BEACON_SRC =
@@ -49,19 +48,3 @@ export const cloudflare = (options: CloudflareOptions): CloudflareAdapter => ({
   requiredSecrets: [],
   runtimeDeps: [],
 });
-
-/**
- * The beacon tag exactly as the dashboard's snippet renders it, with the whole
- * option object as its `data-cf-beacon` JSON. The beacon tracks history
- * changes itself, so client-router navigations need no extra hook.
- */
-export const cloudflareHead = (options: CloudflareOptions): HeadScript[] => [
-  {
-    attributes: {
-      "data-cf-beacon": JSON.stringify(options),
-      defer: true,
-      src: CLOUDFLARE_BEACON_SRC,
-    },
-    content: null,
-  },
-];

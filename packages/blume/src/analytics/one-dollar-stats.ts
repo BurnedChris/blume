@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import type { AdapterDescriptor } from "../core/adapter.ts";
 import { adapterDescriptorSchema } from "../core/adapter.ts";
-import type { HeadScript } from "./head.ts";
 
 /** The script OneDollarStats' install snippet loads. */
 export const ONE_DOLLAR_STATS_SCRIPT_SRC =
@@ -60,27 +59,3 @@ export const oneDollarStats = (
   requiredSecrets: [],
   runtimeDeps: [],
 });
-
-/**
- * The deferred tag from the install instructions, with every option as its
- * own `data-` attribute. The tracker reads them from `document.currentScript`,
- * so the tag stays a classic external script. It hooks `pushState` and
- * `popstate` itself, so client-router navigations need no extra hook.
- *
- * The tracker turns hash routing on whenever `data-hash-routing` is present,
- * whatever its value, so `"hash-routing": "false"` leaves the attribute off.
- */
-export const oneDollarStatsHead = (
-  options: OneDollarStatsOptions
-): HeadScript[] => {
-  const attributes: HeadScript["attributes"] = {};
-  for (const [setting, value] of Object.entries(options)) {
-    if (setting === "hash-routing" && value === "false") {
-      continue;
-    }
-    attributes[`data-${setting}`] = value;
-  }
-  attributes.defer = true;
-  attributes.src = ONE_DOLLAR_STATS_SCRIPT_SRC;
-  return [{ attributes, content: null }];
-};

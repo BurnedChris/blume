@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import type { AdapterDescriptor } from "../core/adapter.ts";
 import { adapterDescriptorSchema } from "../core/adapter.ts";
-import type { HeadScript } from "./head.ts";
 
 /** The script Databuddy's install snippet loads. */
 export const DATABUDDY_SCRIPT_SRC = "https://cdn.databuddy.cc/databuddy.js";
@@ -45,23 +44,3 @@ export const databuddy = (options: DatabuddyOptions): DatabuddyAdapter => ({
   requiredSecrets: [],
   runtimeDeps: [],
 });
-
-/**
- * The async tag from the install instructions, with `clientId` as
- * `data-client-id` and every other option as its own `data-` attribute. The
- * tracker skips setup when `window.databuddy` already exists, so there is no
- * queue stub. Databuddy's script tracks history changes on its own, so
- * client-router navigations need no extra hook.
- */
-export const databuddyHead = (options: DatabuddyOptions): HeadScript[] => {
-  const { clientId, ...settings } = options;
-  const attributes: HeadScript["attributes"] = {};
-  for (const [setting, value] of Object.entries(settings)) {
-    attributes[`data-${setting}`] = value;
-  }
-  attributes["data-client-id"] = clientId;
-  attributes.async = true;
-  attributes.crossorigin = "anonymous";
-  attributes.src = DATABUDDY_SCRIPT_SRC;
-  return [{ attributes, content: null }];
-};

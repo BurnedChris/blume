@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { AdapterDescriptor, JsonValue } from "../core/adapter.ts";
 import { adapterDescriptorSchema } from "../core/adapter.ts";
 
-/** The props of `@vercel/analytics/astro` that {@link vercel} documents. */
+/** The c15t Vercel SDK options that {@link vercel} documents. */
 export interface VercelNamedOptions {
   /** Log every event to the console. Defaults to the component's own rule (on outside production). */
   debug?: boolean;
@@ -12,11 +12,9 @@ export interface VercelNamedOptions {
 }
 
 /**
- * Options for {@link vercel}: the documented props plus any other prop of the
- * official component, forwarded verbatim (`endpoint`, `scriptSrc`, `dsn`, …).
- * JSON values only; `beforeSend` is a function and can't travel through
- * config — assign `window.webAnalyticsBeforeSend` from a `script()` adapter
- * listed before `vercel()` instead.
+ * Options for {@link vercel}. Supported c15t SDK settings include mode, debug,
+ * endpoint, dsn and disableAutoTrack. scriptSrc aliases the SDK's scriptUrl.
+ * Use a clientEntrypoint for callbacks and advanced script options.
  */
 export type VercelOptions = VercelNamedOptions & {
   [option: string]: JsonValue;
@@ -37,10 +35,8 @@ export const vercelAdapterSchema = adapterDescriptorSchema(
 );
 
 /**
- * Vercel Web Analytics, rendered through the official Astro component, which
- * injects the first-party script Vercel serves at `/_vercel/insights` once Web
- * Analytics is enabled for the project. Needs no keys. `@vercel/analytics` is
- * one of Blume's own dependencies, so the adapter declares no runtime dep.
+ * Vercel Web Analytics through c15t, using the first-party tracker by default.
+ * Enable Web Analytics for the Vercel project before deploying.
  */
 export const vercel = (options: VercelOptions = {}): VercelAdapter => ({
   kind: "vercel",

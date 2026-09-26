@@ -4,5 +4,10 @@
 # and pollutes the coverage table with non-source paths, so drop anything that
 # lives in such a temp dir. `**/test/**` keeps the suites themselves out of the
 # report. No real source path has a `blume-` segment, so the glob is safe.
-coveragePathIgnorePatterns = ["**/test/**", "**/blume-*/**"]
+# .c15t-local contains compiled external dependencies, tested in the c15t repo.
+coveragePathIgnorePatterns = [
+  "**/test/**",
+  "**/blume-*/**",
+  "**/.c15t-local/**",
+]
 coverageThreshold = { lines = 1.0, functions = 1.0 }
