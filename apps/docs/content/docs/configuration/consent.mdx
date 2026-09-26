@@ -44,17 +44,17 @@ Every named public `@c15t/scripts` subpath is available under `blume/scripts` wi
 ```ts consent.client.ts
 import { googleTagManager } from "blume/scripts/google-tag-manager";
 import { metaPixel } from "blume/scripts/meta-pixel";
-import type { C15tClientOptionsExtension } from "@c15t/astro";
+import type { ConsentClientOptions } from "blume/consent";
 
 export default {
   scripts: [
     googleTagManager({ id: "GTM-EXAMPLE" }),
     metaPixel({ pixelId: "123456789" }),
   ],
-} satisfies C15tClientOptionsExtension;
+} satisfies ConsentClientOptions;
 ```
 
-Point `consent.clientEntrypoint` at this module. Use the SDK's `registry` export to discover integrations. Existing `blume/analytics` factories remain supported and are translated into c15t SDK calls.
+Point `consent.clientEntrypoint` at this module. Use the SDK's `registry` export to discover integrations. Existing `blume/analytics` factories remain supported and are translated into c15t SDK calls. The [analytics migration guide](/docs/configuration/analytics-migration) covers every adapter, option mapping, mixed configurations, and `pageviews` for SDKs that need explicit router events.
 
 Legacy `analytics` adapters are disabled in `blume dev`. Scripts explicitly supplied in a client entrypoint are under your control and run in development too; use `import.meta.env.PROD` if you want to disable them locally.
 

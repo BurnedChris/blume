@@ -81,7 +81,7 @@ export const blumeConsentIntegrations = (input: {
                     return `${userImport}
 ${analyticsClientModule(command === "dev" ? [] : input.analytics)}
 import { externalConsentSource } from "blume/consent/runtime";
-export default { ...extension, scripts: [...scripts, ...(extension.scripts ?? [])], consentSource: externalConsentSource(${JSON.stringify(consent)}) ?? extension.consentSource };`;
+export default { ...extension, pageviews: [...pageviews, ...(extension.pageviews ?? [])], scripts: [...scripts, ...(extension.scripts ?? [])], consentSource: externalConsentSource(${JSON.stringify(consent)}) ?? extension.consentSource };`;
                   },
                   name: "blume:consent-client",
                   resolveId(id) {
@@ -93,7 +93,7 @@ export default { ...extension, scripts: [...scripts, ...(extension.scripts ?? []
           });
           injectScript(
             "page",
-            `import { startConsentRuntime } from "blume/consent/runtime"; import extension, { pageviews } from "virtual:blume/consent-client"; startConsentRuntime(extension.scripts, pageviews);`
+            `import { startConsentRuntime } from "blume/consent/runtime"; import extension from "virtual:blume/consent-client"; startConsentRuntime(extension.scripts, extension.pageviews);`
           );
         },
       },

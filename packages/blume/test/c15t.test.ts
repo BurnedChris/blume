@@ -15,6 +15,7 @@ import {
   vercel,
 } from "../src/analytics/index.ts";
 import { c15t, ethyca, native, osano } from "../src/consent/index.ts";
+import type { ConsentClientOptions } from "../src/consent/index.ts";
 import { blumeConsentIntegrations } from "../src/consent/integration.ts";
 import { blumeConfigSchema } from "../src/core/schema.ts";
 
@@ -208,3 +209,61 @@ it("preserves Vercel's debug loader and custom script URL", () => {
     ])
   ).toContain('"scriptUrl":"https://proxy.example.com/insights.js"');
 });
+
+it.each([
+  { command: "build", legacy: true },
+  { command: "build", legacy: false },
+  { command: "dev", legacy: true },
+] as const)(
+  "preserves client scripts, callbacks and pageview ownership during migration: %j",
+  async ({ command, legacy }) => {
+    const root = await mkdtemp(path.join(tmpdir(), "blume-sdk-migration-"));
+    try {
+      await writeFile(
+        path.join(root, "consent.client.mjs"),
+        `import { segment } from ${JSON.stringify(new URL("../src/scripts/segment.ts", import.meta.url).href)};
+export default { scripts: [segment({ writeKey: "seg" })], pageviews: ["segment"], callbacks: { onError: () => "preserved" } };`
+      );
+      const integration = blumeConsentIntegrations({
+        analytics: legacy ? [posthog({ key: "ph" })] : [],
+        consent: c15t({ clientEntrypoint: "./consent.client.mjs" }),
+        root,
+      }).find((entry) => entry.name === "blume:consent");
+      const updateConfig = mock();
+      const injectScript = mock();
+      // SAFETY: these are the only Astro setup fields consumed by this hook.
+      await integration?.hooks["astro:config:setup"]?.({
+        command,
+        injectScript,
+        updateConfig,
+      } as never);
+      const plugin = updateConfig.mock.calls[0]?.[0].vite.plugins[0];
+      const source: string = plugin.load(
+        plugin.resolveId("virtual:blume/consent-client")
+      );
+      const modulePath = path.join(root, "generated.mjs");
+      await writeFile(
+        modulePath,
+        source.replaceAll(/"blume\/(?<entry>[^"\n]+)"/gu, (_, entry: string) =>
+          JSON.stringify(new URL(`../src/${entry}.ts`, import.meta.url).href)
+        )
+      );
+      // SAFETY: evaluate our generated browser module against the actual SDK.
+      const { default: client } = (await import(modulePath)) as {
+        default: ConsentClientOptions;
+      };
+      expect(client.scripts?.map((entry) => entry.vendor)).toEqual(
+        legacy && command === "build" ? ["posthog", "segment"] : ["segment"]
+      );
+      expect(client.pageviews).toEqual(
+        legacy && command === "build" ? ["posthog", "segment"] : ["segment"]
+      );
+      expect(client.callbacks?.onError).toEqual(expect.any(Function));
+      expect(injectScript.mock.calls[0]?.[1]).toContain(
+        "startConsentRuntime(extension.scripts, extension.pageviews)"
+      );
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }
+);

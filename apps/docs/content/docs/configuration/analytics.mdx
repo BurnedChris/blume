@@ -5,6 +5,8 @@ description: First-party web analytics — PostHog, Google Analytics, Plausible,
 
 Blume injects analytics for you from an `analytics` list in `blume.config.ts`. Each entry is an adapter imported from `blume/analytics`: one per provider, plus `script()` for anything without one.
 
+This API remains supported with c15t. For additional integrations or callbacks, follow the [migration to `blume/scripts/*`](/docs/configuration/analytics-migration). You can move one vendor at a time; changing the import alone is not sufficient.
+
 ```ts blume.config.ts lineNumbers
 import { defineConfig } from "blume";
 import { googleAnalytics, plausible, posthog, vercel } from "blume/analytics";
@@ -21,10 +23,10 @@ export default defineConfig({
 
 Adapters are translated into c15t SDK scripts. c15t owns their loading order, consent callbacks, and lifecycle across navigation. Every adapter is plain data: what it returns is validated with the rest of your config and inlined into the built site, so it can carry any JSON value but never a function. A passthrough option that JSON can't carry (a function, `undefined`, a bigint) fails validation with its path rather than disappearing from the build.
 
-Analytics loads in **production builds only**. The scripts are emitted by `blume build`, never by `blume dev`, so local traffic never reaches your dashboards and you don't need a separate "development" project.
+Adapters in the `analytics` list load in **production builds only**. The scripts are emitted by `blume build`, never by `blume dev`, so local traffic never reaches your dashboards and you don't need a separate "development" project.
 
 :::note
-Analytics is opt-in. With no `analytics` list (or an empty one), Blume injects nothing.
+With no `analytics` list and no explicit `consent` configuration, Blume injects no consent runtime or analytics. Scripts registered in a consent client entrypoint are independent of the `analytics` list.
 :::
 
 An analytics list automatically enables an offline c15t banner. Configure [`consent`](/docs/configuration/consent) for a backend or an external CMP. SDK helpers may load before consent with denied-state behavior; each helper defines its loading policy.
@@ -84,7 +86,7 @@ Add `vercel()` to include [Vercel Web Analytics](https://vercel.com/docs/analyti
 analytics: [vercel()],
 ```
 
-No keys are needed — the script reports to the project it's deployed under. This only collects data on Vercel deployments, where the `/_vercel/insights` endpoint exists. Any option you pass is forwarded to the component as a prop (`mode`, `debug`, `endpoint`, `scriptSrc`, …); `beforeSend` is a function and can't travel through config, so assign `window.webAnalyticsBeforeSend` from a `script()` adapter instead.
+No keys are needed for the default Vercel deployment, where the `/_vercel/insights` endpoint exists. Options are mapped to c15t's script helper: `scriptSrc` becomes `scriptUrl`, with supported options including `mode`, `debug`, `endpoint`, `dsn`, and `disableAutoTrack`. This no longer mounts the Vercel Astro component or forwards arbitrary component props. Function-valued options cannot travel through the `analytics` configuration; use a [client entrypoint](/docs/configuration/analytics-migration) for custom browser code, and check the helper's supported options.
 
 ## Cloudflare Web Analytics
 

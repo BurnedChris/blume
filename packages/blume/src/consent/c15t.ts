@@ -1,4 +1,4 @@
-import type { C15tAstroOptions } from "@c15t/astro";
+import type { C15tAstroOptions, C15tClientOptionsExtension } from "@c15t/astro";
 import { z } from "zod";
 
 import type { AdapterDescriptor } from "../core/adapter.ts";
@@ -9,6 +9,12 @@ export type C15tOptions = Omit<
   C15tAstroOptions,
   "scripts" | "ui" | "requireUIIntegration"
 >;
+
+/** Browser configuration for consent.clientEntrypoint, including SDK callbacks. */
+export interface ConsentClientOptions extends C15tClientOptionsExtension {
+  /** Forward router pageviews through c15t for SDKs without history tracking. */
+  pageviews?: ("posthog" | "segment" | "hightouch")[];
+}
 
 // c15t owns its option vocabulary. Validate JSON at the snapshot boundary,
 // rather than copying its schema and drifting whenever the SDK adds an option.
