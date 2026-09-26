@@ -4,7 +4,7 @@ This draft replaces Blume's consent state machine and vendor loaders with c15t's
 
 ## Prepare the unpublished dependency
 
-Use the companion `christopher/blume-runtime` branch of `c15t/c15t`, based on `v3`. An existing alpha without that branch does not contain the external consent source and event dispatcher APIs used here.
+Use [c15t/c15t#1204](https://github.com/c15t/c15t/pull/1204), the companion `christopher/blume-runtime` branch based on `v3`. An existing alpha without that branch does not contain the external consent source and event dispatcher APIs used here.
 
 In the c15t checkout:
 
@@ -61,3 +61,9 @@ Also test external Osano/Fides initialization, category changes, unavailable pro
 - Blume enables c15t's `reloadOnRevocation` by default because many executed SDKs cannot unload. The reload follows synchronous consent callbacks and local persistence. Custom c15t options can override it.
 - Legacy Blume native storage is not imported as a new receipt. Existing readers are asked again. Configure c15t translation messages for the site's languages; old Blume banner strings are not a c15t message pack.
 - c15t reduces duplicated consent-sensitive code and gives Blume one tested lifecycle to maintain. It does not establish legal compliance by itself; policy configuration, category mapping, tag behavior and backend deployment remain application responsibilities.
+
+## Validation of this draft
+
+The Blume branch is based on the fork's `main`, including its newer search analytics and translated UI changes. The generated GTM-only site, custom client scripts with Fides and Osano, and an ejected Astro app were exercised in Chromium with third-party requests intercepted. Verified: denial, acceptance, preferences, one runtime across navigation, external authority without a c15t receipt/banner, and withdrawal/reload. A no-integration build was checked for absence of c15t assets. The ejected fixture includes a package.json before eject so Astro can discover its declared renderer dependencies.
+
+The companion c15t implementation is published in [c15t/c15t#1204](https://github.com/c15t/c15t/pull/1204), commit `1f4d22e9` on `christopher/blume-runtime`. Its targeted checks pass: core (1,296 tests), Astro (319), scripts (434), and build/types/lint for those packages. Package documentation was regenerated from the canonical Astro guide. Check out that branch before preparing the local dependencies.

@@ -213,11 +213,14 @@ export const analyticsClientModule = (adapters: AnalyticsAdapter[]): string => {
           break;
         }
         vercel = true;
-        const { scriptSrc = "/_vercel/insights/script.js", ...options } =
-          adapter.options;
+        const { scriptSrc, ...options } = adapter.options;
         add("vercel-analytics", "vercelAnalytics", {
           ...options,
-          scriptUrl: scriptSrc,
+          scriptUrl:
+            scriptSrc ??
+            (options.debug === true || options.mode === "development"
+              ? undefined
+              : "/_vercel/insights/script.js"),
         });
         break;
       }

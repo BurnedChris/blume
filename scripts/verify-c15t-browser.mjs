@@ -14,7 +14,9 @@ await page.route("https://www.googletagmanager.com/**", (route) =>
     contentType: "application/javascript",
   })
 );
-await page.goto("http://127.0.0.1:4317/", { waitUntil: "networkidle" });
+await page.goto(process.argv[3] ?? "http://127.0.0.1:4317/", {
+  waitUntil: "networkidle",
+});
 await page
   .locator('[data-testid="consent-banner-root"]')
   .waitFor({ state: "visible" });
@@ -54,11 +56,6 @@ assert.equal(
 assert.equal(await page.evaluate(() => window.__gtmLoaded), 1);
 await page.locator("[data-blume-consent-open]").first().click();
 await page.getByRole("dialog").waitFor({ state: "visible" });
-console.log("dialog opened", await page.getByRole("dialog").textContent());
-await page.screenshot({
-  fullPage: true,
-  path: "/private/tmp/blume-consent-dialog.png",
-});
 const reloaded = page.waitForEvent("load");
 await page.evaluate(() => window.__c15tAstro.rejectAll());
 await reloaded;

@@ -12,6 +12,7 @@ import type { SettleTimer } from "../src/components/layout/search/analytics.ts";
 interface Sent {
   event: string;
   props: TrackProps;
+  local?: TrackProps;
 }
 
 let sent: Sent[] = [];
@@ -45,8 +46,8 @@ const manualTimer = () => {
 };
 
 const tracker = (clock: ReturnType<typeof manualTimer>) =>
-  createSearchTracker((event, props) => {
-    sent.push({ event, props });
+  createSearchTracker((event, props, local) => {
+    sent.push({ event, local, props });
   }, clock.timer);
 
 beforeEach(() => {
@@ -70,7 +71,8 @@ describe(createSearchTracker, () => {
     expect(sent).toStrictEqual([
       {
         event: "search",
-        props: { path: "/docs/install", query: "deploy", results: 2 },
+        local: { query: "deploy" },
+        props: { length: 6, path: "/docs/install", results: 2 },
       },
     ]);
   });
@@ -85,9 +87,9 @@ describe(createSearchTracker, () => {
       "search_select",
     ]);
     expect(sent[1]?.props).toStrictEqual({
+      length: 7,
       path: "/docs/install",
       position: 2,
-      query: "sidebar",
       url: "/docs/navigation",
     });
     expect(clock.pending()).toBe(0);
@@ -116,19 +118,19 @@ describe(createSearchTracker, () => {
     const long = "x".repeat(MAX_QUERY_CHARS + 20);
     search.settled(long, 1);
     search.selected(long, 1, "/docs");
-    expect(sent.map((entry) => String(entry.props.query).length)).toStrictEqual(
-      [MAX_QUERY_CHARS, MAX_QUERY_CHARS]
-    );
+    expect(
+      sent.map((entry) => String(entry.local?.query).length)
+    ).toStrictEqual([MAX_QUERY_CHARS, MAX_QUERY_CHARS]);
   });
 
   it("waits on the browser's timer by default", async () => {
-    const search = createSearchTracker((event, props) => {
-      sent.push({ event, props });
+    const search = createSearchTracker((event, props, local) => {
+      sent.push({ event, local, props });
     });
     search.settled("default", 3);
     search.settled("default timer", 3);
     await Bun.sleep(SETTLE_MS + 50);
-    expect(sent.map((entry) => entry.props.query)).toStrictEqual([
+    expect(sent.map((entry) => entry.local?.query)).toStrictEqual([
       "default timer",
     ]);
   });

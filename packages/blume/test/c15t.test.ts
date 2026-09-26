@@ -194,3 +194,17 @@ it("wires the Astro client module, preserves callbacks, and suppresses legacy tr
     }
   }
 });
+
+it("preserves Vercel's debug loader and custom script URL", () => {
+  expect(analyticsClientModule([vercel({ debug: true })])).not.toContain(
+    '"scriptUrl"'
+  );
+  expect(
+    analyticsClientModule([vercel({ mode: "development" })])
+  ).not.toContain('"scriptUrl"');
+  expect(
+    analyticsClientModule([
+      vercel({ scriptSrc: "https://proxy.example.com/insights.js" }),
+    ])
+  ).toContain('"scriptUrl":"https://proxy.example.com/insights.js"');
+});
