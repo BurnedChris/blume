@@ -28,6 +28,12 @@ The preparation script copies the packages' distribution files into ignored `.c1
 
 Before merging or publishing, replace the file dependencies with the released alpha versions, remove the temporary workspaces and linking script, regenerate the lockfile, and verify a clean install and packed consumer build. Until that change, a clean checkout and ordinary CI install require the preparation step above. Do not publish Blume with these file dependencies.
 
+## Framework boundary
+
+Consent-source synchronization, preference delegation, revocation handling, script loading, and event dispatch belong to c15t's shared core and scripts SDK. The companion PR exposes these controls through React (including Next.js and TanStack Start), Vue/Nuxt, Svelte/SvelteKit, the browser client, and Astro. Solid uses the same headless runtime with its lifecycle hooks; its package currently provides UI primitives.
+
+Blume uses the Astro adapter because its generated site is Astro. Other c15t frameworks do not depend on that adapter. React keeps its script loader lazy, and external preference controls remain accessible while c15t's own choice forms stay hidden.
+
 ## Browser verification
 
 Create a small fixture with `docs/index.md`, `docs/next.md`, and a link from the first page to `/next`. Link its `node_modules/blume` to this checkout's `packages/blume`. Configure:
