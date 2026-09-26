@@ -38,7 +38,7 @@ export const vercelAdapterSchema = adapterDescriptorSchema(
  * Vercel Web Analytics through c15t, using the first-party tracker by default.
  * Enable Web Analytics for the Vercel project before deploying.
  *
- * @deprecated Use blume/scripts/* in a consent client entrypoint. Removed in the next major release.
+ * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
  */
 export const vercel = (options: VercelOptions = {}): VercelAdapter => ({
   kind: "vercel",

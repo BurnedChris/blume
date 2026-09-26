@@ -41,7 +41,7 @@ export const posthogAdapterSchema = adapterDescriptorSchema(
  * PostHog product analytics. The project API key is public and write-only, so
  * it is safe to ship to the browser.
  *
- * @deprecated Use blume/scripts/* in a consent client entrypoint. Removed in the next major release.
+ * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
  */
 export const posthog = (options: PosthogOptions): PosthogAdapter => ({
   kind: "posthog",

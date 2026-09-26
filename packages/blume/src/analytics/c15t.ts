@@ -26,7 +26,7 @@ export const analyticsClientModule = (adapters: AnalyticsAdapter[]): string => {
   ) => {
     const alias = `sdk${entries.length}`;
     imports.push(
-      `import { ${name} as ${alias} } from "blume/scripts/${subpath}";`
+      `import { ${name} as ${alias} } from "blume/integrations/${subpath}";`
     );
     const expression = `${alias}(${JSON.stringify(options)})`;
     entries.push(

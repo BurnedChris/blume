@@ -10,7 +10,7 @@ it("generates added exports, removes stale ones, and detects drift without chang
   const manifestPath = path.join(packageRoot, "package.json");
   const entry = path.resolve(
     import.meta.dirname,
-    "../../../scripts/sync-c15t-scripts.ts"
+    "../../../scripts/sync-c15t-integrations.ts"
   );
   const run = async (check = false) => {
     const child = Bun.spawn(
@@ -41,54 +41,63 @@ it("generates added exports, removes stale ones, and detects drift without chang
       })
     );
     const original = JSON.stringify({
-      exports: { ".": "./index.js", "./scripts/removed": "./old.js" },
+      exports: { ".": "./index.js", "./integrations/removed": "./old.js" },
       name: "blume",
     });
     await writeFile(manifestPath, original);
-    await mkdir(path.join(packageRoot, "src/scripts"), { recursive: true });
-    await writeFile(path.join(packageRoot, "src/scripts/removed.ts"), "old\n");
+    await mkdir(path.join(packageRoot, "src/integrations"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(packageRoot, "src/integrations/removed.ts"),
+      "old\n"
+    );
     await expect(run(true)).resolves.toMatchObject({ code: 1 });
     expect(await readFile(manifestPath, "utf-8")).toBe(original);
     expect(
-      await readFile(path.join(packageRoot, "src/scripts/removed.ts"), "utf-8")
+      await readFile(
+        path.join(packageRoot, "src/integrations/removed.ts"),
+        "utf-8"
+      )
     ).toBe("old\n");
     await expect(run()).resolves.toMatchObject({ code: 0 });
     const generated = JSON.parse(await readFile(manifestPath, "utf-8"));
     expect(Object.keys(generated.exports)).toEqual([
       ".",
-      "./scripts/nested/vendor",
-      "./scripts/new-vendor",
-      "./scripts/registry",
+      "./integrations/nested/vendor",
+      "./integrations/new-vendor",
+      "./integrations/registry",
     ]);
-    expect(Object.keys(generated.exports["./scripts/new-vendor"])).toEqual([
-      "types",
-      "default",
-    ]);
-    expect(generated.exports["./scripts/new-vendor"]).toEqual({
-      default: "./src/scripts/new-vendor.ts",
-      types: "./dist/types/scripts/new-vendor.d.ts",
+    expect(Object.keys(generated.exports["./integrations/new-vendor"])).toEqual(
+      ["types", "default"]
+    );
+    expect(generated.exports["./integrations/new-vendor"]).toEqual({
+      default: "./src/integrations/new-vendor.ts",
+      types: "./dist/types/integrations/new-vendor.d.ts",
     });
     expect(
-      await Bun.file(path.join(packageRoot, "src/scripts/removed.ts")).exists()
+      await Bun.file(
+        path.join(packageRoot, "src/integrations/removed.ts")
+      ).exists()
     ).toBe(false);
     expect(
       await readFile(
-        path.join(packageRoot, "src/scripts/new-vendor.ts"),
+        path.join(packageRoot, "src/integrations/new-vendor.ts"),
         "utf-8"
       )
     ).toContain('export * from "@c15t/scripts/new-vendor";');
     await expect(run(true)).resolves.toMatchObject({ code: 0 });
     await writeFile(
-      path.join(packageRoot, "src/scripts/new-vendor.ts"),
+      path.join(packageRoot, "src/integrations/new-vendor.ts"),
       "edited\n"
     );
     expect(await run(true)).toEqual({
       code: 1,
-      stderr: expect.stringContaining("bun run sync:c15t-scripts"),
+      stderr: expect.stringContaining("bun run sync:c15t-integrations"),
     });
     expect(
       await readFile(
-        path.join(packageRoot, "src/scripts/new-vendor.ts"),
+        path.join(packageRoot, "src/integrations/new-vendor.ts"),
         "utf-8"
       )
     ).toBe("edited\n");
@@ -117,7 +126,7 @@ it("generates added exports, removes stale ones, and detects drift without chang
     expect(guide).toStartWith("Before\n");
     expect(guide).toEndWith("After\n");
     expect(guide).toContain(
-      "| New Vendor | `blume/scripts/new-vendor` | `measurement` |"
+      "| New Vendor | `blume/integrations/new-vendor` | `measurement` |"
     );
     expect(guide).not.toContain("Stale table");
     await expect(run(true)).resolves.toMatchObject({ code: 0 });

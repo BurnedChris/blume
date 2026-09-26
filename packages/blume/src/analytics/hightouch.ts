@@ -40,7 +40,7 @@ export const hightouchAdapterSchema = adapterDescriptorSchema(
  * Hightouch Events. The write key is meant for the browser — it identifies
  * the event source the SDK reports to.
  *
- * @deprecated Use blume/scripts/* in a consent client entrypoint. Removed in the next major release.
+ * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
  */
 export const hightouch = (options: HightouchOptions): HightouchAdapter => ({
   kind: "hightouch",

@@ -3,7 +3,7 @@ title: Analytics
 description: Configure analytics with direct c15t SDK exports and migrate deprecated Blume adapters.
 ---
 
-See [Integrations](/docs/configuration/integrations) for the SDK catalog, setup, consent, and verification. Use `blume/scripts/*` to import c15t integrations directly. The SDK owns the vendor options, loading, and consent lifecycle. Put scripts in a browser entrypoint so their callbacks remain intact.
+See [Integrations](/docs/configuration/integrations) for the SDK catalog, setup, consent, and verification. Use `blume/integrations/*` to import c15t integrations directly. The SDK owns the vendor options, loading, and consent lifecycle. Put scripts in a browser entrypoint so their callbacks remain intact.
 
 ```ts blume.config.ts
 import { defineConfig } from "blume";
@@ -16,7 +16,7 @@ export default defineConfig({
 
 ```ts consent.client.ts
 import type { ConsentClientOptions } from "blume/consent";
-import { segment } from "blume/scripts/segment";
+import { segment } from "blume/integrations/segment";
 
 export default {
   scripts: import.meta.env.PROD
@@ -36,7 +36,7 @@ The production guard keeps local development traffic out of your dashboards. The
 
 Blume injects analytics for you from an `analytics` list in `blume.config.ts`. Each entry is an adapter imported from `blume/analytics`: one per provider, plus `script()` for anything without one.
 
-To move an existing configuration, follow the [migration to `blume/scripts/*`](/docs/configuration/analytics-migration). You can move one vendor at a time; changing the import alone is not sufficient.
+To move an existing configuration, follow the [migration to `blume/integrations/*`](/docs/configuration/analytics-migration). You can move one vendor at a time; changing the import alone is not sufficient.
 
 ```ts blume.config.ts lineNumbers
 import { defineConfig } from "blume";

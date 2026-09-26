@@ -16,7 +16,7 @@ export default defineConfig({
 
 ```ts consent.client.ts
 import type { ConsentClientOptions } from "blume/consent";
-import { googleTagManager } from "blume/scripts/google-tag-manager";
+import { googleTagManager } from "blume/integrations/google-tag-manager";
 
 export default {
   scripts: import.meta.env.PROD
@@ -54,11 +54,11 @@ The c15t banner and preferences use c15t's copy and translations. Configure `i18
 
 The [integrations guide](/docs/configuration/integrations) lists the available vendors and covers setup, navigation pageviews, custom scripts, and verification.
 
-Every named public `@c15t/scripts` subpath is available under `blume/scripts` with the same exports and types. Scripts contain lifecycle callbacks, so put them in a browser module instead of the JSON configuration snapshot.
+Every named public `@c15t/scripts` subpath is available under `blume/integrations` with the same exports and types. Scripts contain lifecycle callbacks, so put them in a browser module instead of the JSON configuration snapshot.
 
 ```ts consent.client.ts
-import { googleTagManager } from "blume/scripts/google-tag-manager";
-import { metaPixel } from "blume/scripts/meta-pixel";
+import { googleTagManager } from "blume/integrations/google-tag-manager";
+import { metaPixel } from "blume/integrations/meta-pixel";
 import type { ConsentClientOptions } from "blume/consent";
 
 export default {

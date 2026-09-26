@@ -3,9 +3,9 @@ title: Migrate analytics to c15t scripts
 description: Keep existing analytics adapters working, or move integrations one at a time to the full c15t script SDK without losing configuration or navigation events.
 ---
 
-`blume/analytics` and the `analytics` configuration list are deprecated. They remain supported in this release as a frozen compatibility layer, with removal planned for the next major release. No new integrations or options will be added to the legacy adapters; necessary compatibility and bug fixes can still be made. Move new and existing integrations to `blume/scripts/*`.
+`blume/analytics` and the `analytics` configuration list are deprecated. They remain supported in this release as a frozen compatibility layer, with removal planned for the next major release. No new integrations or options will be added to the legacy adapters; necessary compatibility and bug fixes can still be made. Move new and existing integrations to `blume/integrations/*`.
 
-`blume/scripts/*` is the supported path to the full c15t SDK, including additional integrations and lifecycle callbacks. There is no bare `blume/scripts` barrel: import each vendor's subpath. Blume reports `BLUME_ANALYTICS_DEPRECATED` once per configuration load when the analytics list is nonempty. Build, dev, and doctor diagnostics link to this guide; the warning does not invalidate your config. Editors also mark the legacy factories as deprecated. Empty analytics lists and SDK-only configurations do not trigger it.
+`blume/integrations/*` is the supported path to the full c15t SDK, including additional integrations and lifecycle callbacks. There is no bare `blume/integrations` barrel: import each vendor's subpath. Blume reports `BLUME_ANALYTICS_DEPRECATED` once per configuration load when the analytics list is nonempty. Build, dev, and doctor diagnostics link to this guide; the warning does not invalidate your config. Editors also mark the legacy factories as deprecated. Empty analytics lists and SDK-only configurations do not trigger it.
 
 ## Choose the scope of your upgrade
 
@@ -48,7 +48,7 @@ export default defineConfig({
 
 ```ts consent.client.ts
 import type { ConsentClientOptions } from "blume/consent";
-import { adobeAnalytics } from "blume/scripts/adobe-analytics";
+import { adobeAnalytics } from "blume/integrations/adobe-analytics";
 
 export default {
   scripts: import.meta.env.PROD
@@ -73,8 +73,8 @@ Blume uses a client router. Segment and Hightouch need explicit navigation pagev
 
 ```ts consent.client.ts
 import type { ConsentClientOptions } from "blume/consent";
-import { posthog } from "blume/scripts/posthog";
-import { segment } from "blume/scripts/segment";
+import { posthog } from "blume/integrations/posthog";
+import { segment } from "blume/integrations/segment";
 
 export default {
   scripts: import.meta.env.PROD
@@ -110,7 +110,7 @@ c15t delivers these pageviews only to configured scripts whose consent gates all
 
 ## Map every existing adapter
 
-All subpaths below begin with `blume/scripts/`. These mappings preserve the compatibility adapter's current behavior; review the native helper's types before adopting different defaults. Move remaining vendor initialization options into the indicated nested object instead of spreading them at the top level.
+All subpaths below begin with `blume/integrations/`. These mappings preserve the compatibility adapter's current behavior; review the native helper's types before adopting different defaults. Move remaining vendor initialization options into the indicated nested object instead of spreading them at the top level.
 
 | Existing factory | SDK subpath and factory | Option migration |
 | --- | --- | --- |
@@ -143,7 +143,7 @@ For Segment's custom CDN, use `${cdn.replace(/\/+$/, "")}/analytics.js/v1/${enco
 Legacy script-attribute adapters turn each remaining option into `data-${key}` with `String(value)`. Preserve the exact names, including underscores. Merge with the helper's own attributes rather than replacing them:
 
 ```ts
-import { fathomAnalytics } from "blume/scripts/fathom-analytics";
+import { fathomAnalytics } from "blume/integrations/fathom-analytics";
 
 const fathom = fathomAnalytics({ site: "YOUR_SITE_ID", spa: "auto" });
 const fathomWithOptions = {

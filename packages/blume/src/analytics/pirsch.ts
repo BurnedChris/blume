@@ -38,7 +38,7 @@ export const pirschAdapterSchema = adapterDescriptorSchema(
  * Pirsch Analytics. The identification code is public — it's in the tag on
  * every page.
  *
- * @deprecated Use blume/scripts/* in a consent client entrypoint. Removed in the next major release.
+ * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
  */
 export const pirsch = (options: PirschOptions): PirschAdapter => ({
   kind: "pirsch",

@@ -74,13 +74,13 @@ it("compiles selected SDK imports, custom script content and pageview ownership"
     vercel(),
     vercel(),
   ]);
-  expect(source).toContain('from "blume/scripts/google-tag-manager"');
+  expect(source).toContain('from "blume/integrations/google-tag-manager"');
   expect(source).toContain('"dataLayer":"customLayer"');
   expect(source).toContain('"apiHost":"https://us.i.posthog.com"');
   expect(source).toContain('"textContent":"window.custom = true"');
   expect(source).toContain('export const pageviews = ["segment"]');
   expect(
-    source.match(/from "blume\/scripts\/vercel-analytics"/gu)
+    source.match(/from "blume\/integrations\/vercel-analytics"/gu)
   ).toHaveLength(1);
 });
 
@@ -116,9 +116,11 @@ it("runs every legacy adapter through the actual c15t SDK and preserves loader o
     analytics.script({ src: "https://custom.example.com/script.js" }),
   ];
   const source = analyticsClientModule(adapters).replaceAll(
-    /"blume\/scripts\/(?<subpath>[^"\n]+)"/gu,
+    /"blume\/integrations\/(?<subpath>[^"\n]+)"/gu,
     (_, name: string) =>
-      JSON.stringify(new URL(`../src/scripts/${name}.ts`, import.meta.url).href)
+      JSON.stringify(
+        new URL(`../src/integrations/${name}.ts`, import.meta.url).href
+      )
   );
   // SAFETY: this is our generated module. Executing it checks real SDK option
   // contracts and subpath exports without executing third-party network code.
@@ -182,7 +184,7 @@ it("wires the Astro client module, preserves callbacks, and suppresses legacy tr
       const source = plugin.load(id);
       expect(source).toContain("...extension");
       expect(source).toContain("extension.scripts ?? []");
-      expect(source.includes("blume/scripts/vercel-analytics")).toBe(
+      expect(source.includes("blume/integrations/vercel-analytics")).toBe(
         command === "build"
       );
       expect(source).toContain(
@@ -221,7 +223,7 @@ it.each([
     try {
       await writeFile(
         path.join(root, "consent.client.mjs"),
-        `import { segment } from ${JSON.stringify(new URL("../src/scripts/segment.ts", import.meta.url).href)};
+        `import { segment } from ${JSON.stringify(new URL("../src/integrations/segment.ts", import.meta.url).href)};
 export default { scripts: [segment({ writeKey: "seg" })], pageviews: ["segment"], callbacks: { onError: () => "preserved" } };`
       );
       const integration = blumeConsentIntegrations({

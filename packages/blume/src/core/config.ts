@@ -374,7 +374,7 @@ export const loadConfig = async (
                 "blume/analytics is deprecated and will be removed in the next major release. Existing adapters remain supported in this release but will receive no new integrations.",
               severity: "warning",
               suggestion:
-                "Move integrations to blume/scripts/* in a consent client entrypoint. See https://useblume.dev/docs/configuration/analytics-migration.",
+                "Move integrations to blume/integrations/* in a consent client entrypoint. See https://useblume.dev/docs/configuration/analytics-migration.",
             },
           ]
         : [],

@@ -102,157 +102,157 @@
     "./package.json": "./package.json",
     "./consent/integration": "./src/consent/integration.ts",
     "./consent/runtime": "./src/consent/runtime.ts",
-    "./scripts/adobe-analytics": {
-      "types": "./dist/types/scripts/adobe-analytics.d.ts",
-      "default": "./src/scripts/adobe-analytics.ts"
+    "./integrations/adobe-analytics": {
+      "types": "./dist/types/integrations/adobe-analytics.d.ts",
+      "default": "./src/integrations/adobe-analytics.ts"
     },
-    "./scripts/ahrefs-analytics": {
-      "types": "./dist/types/scripts/ahrefs-analytics.d.ts",
-      "default": "./src/scripts/ahrefs-analytics.ts"
+    "./integrations/ahrefs-analytics": {
+      "types": "./dist/types/integrations/ahrefs-analytics.d.ts",
+      "default": "./src/integrations/ahrefs-analytics.ts"
     },
-    "./scripts/amplitude": {
-      "types": "./dist/types/scripts/amplitude.d.ts",
-      "default": "./src/scripts/amplitude.ts"
+    "./integrations/amplitude": {
+      "types": "./dist/types/integrations/amplitude.d.ts",
+      "default": "./src/integrations/amplitude.ts"
     },
-    "./scripts/clearbit": {
-      "types": "./dist/types/scripts/clearbit.d.ts",
-      "default": "./src/scripts/clearbit.ts"
+    "./integrations/clearbit": {
+      "types": "./dist/types/integrations/clearbit.d.ts",
+      "default": "./src/integrations/clearbit.ts"
     },
-    "./scripts/cloudflare-web-analytics": {
-      "types": "./dist/types/scripts/cloudflare-web-analytics.d.ts",
-      "default": "./src/scripts/cloudflare-web-analytics.ts"
+    "./integrations/cloudflare-web-analytics": {
+      "types": "./dist/types/integrations/cloudflare-web-analytics.d.ts",
+      "default": "./src/integrations/cloudflare-web-analytics.ts"
     },
-    "./scripts/cloudflare-zaraz": {
-      "types": "./dist/types/scripts/cloudflare-zaraz.d.ts",
-      "default": "./src/scripts/cloudflare-zaraz.ts"
+    "./integrations/cloudflare-zaraz": {
+      "types": "./dist/types/integrations/cloudflare-zaraz.d.ts",
+      "default": "./src/integrations/cloudflare-zaraz.ts"
     },
-    "./scripts/crisp": {
-      "types": "./dist/types/scripts/crisp.d.ts",
-      "default": "./src/scripts/crisp.ts"
+    "./integrations/crisp": {
+      "types": "./dist/types/integrations/crisp.d.ts",
+      "default": "./src/integrations/crisp.ts"
     },
-    "./scripts/databuddy": {
-      "types": "./dist/types/scripts/databuddy.d.ts",
-      "default": "./src/scripts/databuddy.ts"
+    "./integrations/databuddy": {
+      "types": "./dist/types/integrations/databuddy.d.ts",
+      "default": "./src/integrations/databuddy.ts"
     },
-    "./scripts/events": {
-      "types": "./dist/types/scripts/events.d.ts",
-      "default": "./src/scripts/events.ts"
+    "./integrations/events": {
+      "types": "./dist/types/integrations/events.d.ts",
+      "default": "./src/integrations/events.ts"
     },
-    "./scripts/fathom-analytics": {
-      "types": "./dist/types/scripts/fathom-analytics.d.ts",
-      "default": "./src/scripts/fathom-analytics.ts"
+    "./integrations/fathom-analytics": {
+      "types": "./dist/types/integrations/fathom-analytics.d.ts",
+      "default": "./src/integrations/fathom-analytics.ts"
     },
-    "./scripts/google-tag": {
-      "types": "./dist/types/scripts/google-tag.d.ts",
-      "default": "./src/scripts/google-tag.ts"
+    "./integrations/google-tag": {
+      "types": "./dist/types/integrations/google-tag.d.ts",
+      "default": "./src/integrations/google-tag.ts"
     },
-    "./scripts/google-tag-manager": {
-      "types": "./dist/types/scripts/google-tag-manager.d.ts",
-      "default": "./src/scripts/google-tag-manager.ts"
+    "./integrations/google-tag-manager": {
+      "types": "./dist/types/integrations/google-tag-manager.d.ts",
+      "default": "./src/integrations/google-tag-manager.ts"
     },
-    "./scripts/heap": {
-      "types": "./dist/types/scripts/heap.d.ts",
-      "default": "./src/scripts/heap.ts"
+    "./integrations/heap": {
+      "types": "./dist/types/integrations/heap.d.ts",
+      "default": "./src/integrations/heap.ts"
     },
-    "./scripts/hightouch": {
-      "types": "./dist/types/scripts/hightouch.d.ts",
-      "default": "./src/scripts/hightouch.ts"
+    "./integrations/hightouch": {
+      "types": "./dist/types/integrations/hightouch.d.ts",
+      "default": "./src/integrations/hightouch.ts"
     },
-    "./scripts/hotjar": {
-      "types": "./dist/types/scripts/hotjar.d.ts",
-      "default": "./src/scripts/hotjar.ts"
+    "./integrations/hotjar": {
+      "types": "./dist/types/integrations/hotjar.d.ts",
+      "default": "./src/integrations/hotjar.ts"
     },
-    "./scripts/intercom": {
-      "types": "./dist/types/scripts/intercom.d.ts",
-      "default": "./src/scripts/intercom.ts"
+    "./integrations/intercom": {
+      "types": "./dist/types/integrations/intercom.d.ts",
+      "default": "./src/integrations/intercom.ts"
     },
-    "./scripts/linkedin-insights": {
-      "types": "./dist/types/scripts/linkedin-insights.d.ts",
-      "default": "./src/scripts/linkedin-insights.ts"
+    "./integrations/linkedin-insights": {
+      "types": "./dist/types/integrations/linkedin-insights.d.ts",
+      "default": "./src/integrations/linkedin-insights.ts"
     },
-    "./scripts/logrocket": {
-      "types": "./dist/types/scripts/logrocket.d.ts",
-      "default": "./src/scripts/logrocket.ts"
+    "./integrations/logrocket": {
+      "types": "./dist/types/integrations/logrocket.d.ts",
+      "default": "./src/integrations/logrocket.ts"
     },
-    "./scripts/matomo-analytics": {
-      "types": "./dist/types/scripts/matomo-analytics.d.ts",
-      "default": "./src/scripts/matomo-analytics.ts"
+    "./integrations/matomo-analytics": {
+      "types": "./dist/types/integrations/matomo-analytics.d.ts",
+      "default": "./src/integrations/matomo-analytics.ts"
     },
-    "./scripts/meta-pixel": {
-      "types": "./dist/types/scripts/meta-pixel.d.ts",
-      "default": "./src/scripts/meta-pixel.ts"
+    "./integrations/meta-pixel": {
+      "types": "./dist/types/integrations/meta-pixel.d.ts",
+      "default": "./src/integrations/meta-pixel.ts"
     },
-    "./scripts/microsoft-clarity": {
-      "types": "./dist/types/scripts/microsoft-clarity.d.ts",
-      "default": "./src/scripts/microsoft-clarity.ts"
+    "./integrations/microsoft-clarity": {
+      "types": "./dist/types/integrations/microsoft-clarity.d.ts",
+      "default": "./src/integrations/microsoft-clarity.ts"
     },
-    "./scripts/microsoft-uet": {
-      "types": "./dist/types/scripts/microsoft-uet.d.ts",
-      "default": "./src/scripts/microsoft-uet.ts"
+    "./integrations/microsoft-uet": {
+      "types": "./dist/types/integrations/microsoft-uet.d.ts",
+      "default": "./src/integrations/microsoft-uet.ts"
     },
-    "./scripts/mixpanel-analytics": {
-      "types": "./dist/types/scripts/mixpanel-analytics.d.ts",
-      "default": "./src/scripts/mixpanel-analytics.ts"
+    "./integrations/mixpanel-analytics": {
+      "types": "./dist/types/integrations/mixpanel-analytics.d.ts",
+      "default": "./src/integrations/mixpanel-analytics.ts"
     },
-    "./scripts/openai-pixel": {
-      "types": "./dist/types/scripts/openai-pixel.d.ts",
-      "default": "./src/scripts/openai-pixel.ts"
+    "./integrations/openai-pixel": {
+      "types": "./dist/types/integrations/openai-pixel.d.ts",
+      "default": "./src/integrations/openai-pixel.ts"
     },
-    "./scripts/pirsch": {
-      "types": "./dist/types/scripts/pirsch.d.ts",
-      "default": "./src/scripts/pirsch.ts"
+    "./integrations/pirsch": {
+      "types": "./dist/types/integrations/pirsch.d.ts",
+      "default": "./src/integrations/pirsch.ts"
     },
-    "./scripts/plausible-analytics": {
-      "types": "./dist/types/scripts/plausible-analytics.d.ts",
-      "default": "./src/scripts/plausible-analytics.ts"
+    "./integrations/plausible-analytics": {
+      "types": "./dist/types/integrations/plausible-analytics.d.ts",
+      "default": "./src/integrations/plausible-analytics.ts"
     },
-    "./scripts/posthog": {
-      "types": "./dist/types/scripts/posthog.d.ts",
-      "default": "./src/scripts/posthog.ts"
+    "./integrations/posthog": {
+      "types": "./dist/types/integrations/posthog.d.ts",
+      "default": "./src/integrations/posthog.ts"
     },
-    "./scripts/promptwatch": {
-      "types": "./dist/types/scripts/promptwatch.d.ts",
-      "default": "./src/scripts/promptwatch.ts"
+    "./integrations/promptwatch": {
+      "types": "./dist/types/integrations/promptwatch.d.ts",
+      "default": "./src/integrations/promptwatch.ts"
     },
-    "./scripts/reddit-pixel": {
-      "types": "./dist/types/scripts/reddit-pixel.d.ts",
-      "default": "./src/scripts/reddit-pixel.ts"
+    "./integrations/reddit-pixel": {
+      "types": "./dist/types/integrations/reddit-pixel.d.ts",
+      "default": "./src/integrations/reddit-pixel.ts"
     },
-    "./scripts/registry": {
-      "types": "./dist/types/scripts/registry.d.ts",
-      "default": "./src/scripts/registry.ts"
+    "./integrations/registry": {
+      "types": "./dist/types/integrations/registry.d.ts",
+      "default": "./src/integrations/registry.ts"
     },
-    "./scripts/rudderstack": {
-      "types": "./dist/types/scripts/rudderstack.d.ts",
-      "default": "./src/scripts/rudderstack.ts"
+    "./integrations/rudderstack": {
+      "types": "./dist/types/integrations/rudderstack.d.ts",
+      "default": "./src/integrations/rudderstack.ts"
     },
-    "./scripts/rybbit-analytics": {
-      "types": "./dist/types/scripts/rybbit-analytics.d.ts",
-      "default": "./src/scripts/rybbit-analytics.ts"
+    "./integrations/rybbit-analytics": {
+      "types": "./dist/types/integrations/rybbit-analytics.d.ts",
+      "default": "./src/integrations/rybbit-analytics.ts"
     },
-    "./scripts/segment": {
-      "types": "./dist/types/scripts/segment.d.ts",
-      "default": "./src/scripts/segment.ts"
+    "./integrations/segment": {
+      "types": "./dist/types/integrations/segment.d.ts",
+      "default": "./src/integrations/segment.ts"
     },
-    "./scripts/snapchat-pixel": {
-      "types": "./dist/types/scripts/snapchat-pixel.d.ts",
-      "default": "./src/scripts/snapchat-pixel.ts"
+    "./integrations/snapchat-pixel": {
+      "types": "./dist/types/integrations/snapchat-pixel.d.ts",
+      "default": "./src/integrations/snapchat-pixel.ts"
     },
-    "./scripts/tiktok-pixel": {
-      "types": "./dist/types/scripts/tiktok-pixel.d.ts",
-      "default": "./src/scripts/tiktok-pixel.ts"
+    "./integrations/tiktok-pixel": {
+      "types": "./dist/types/integrations/tiktok-pixel.d.ts",
+      "default": "./src/integrations/tiktok-pixel.ts"
     },
-    "./scripts/umami-analytics": {
-      "types": "./dist/types/scripts/umami-analytics.d.ts",
-      "default": "./src/scripts/umami-analytics.ts"
+    "./integrations/umami-analytics": {
+      "types": "./dist/types/integrations/umami-analytics.d.ts",
+      "default": "./src/integrations/umami-analytics.ts"
     },
-    "./scripts/vercel-analytics": {
-      "types": "./dist/types/scripts/vercel-analytics.d.ts",
-      "default": "./src/scripts/vercel-analytics.ts"
+    "./integrations/vercel-analytics": {
+      "types": "./dist/types/integrations/vercel-analytics.d.ts",
+      "default": "./src/integrations/vercel-analytics.ts"
     },
-    "./scripts/x-pixel": {
-      "types": "./dist/types/scripts/x-pixel.d.ts",
-      "default": "./src/scripts/x-pixel.ts"
+    "./integrations/x-pixel": {
+      "types": "./dist/types/integrations/x-pixel.d.ts",
+      "default": "./src/integrations/x-pixel.ts"
     }
   },
   "scripts": {

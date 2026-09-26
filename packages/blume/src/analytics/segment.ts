@@ -44,7 +44,7 @@ export const segmentAdapterSchema = adapterDescriptorSchema(
  * Segment (Twilio Segment) analytics.js. The write key is meant for the
  * browser — it identifies the source the SDK reports to.
  *
- * @deprecated Use blume/scripts/* in a consent client entrypoint. Removed in the next major release.
+ * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
  */
 export const segment = (options: SegmentOptions): SegmentAdapter => ({
   kind: "segment",

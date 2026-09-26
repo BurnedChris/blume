@@ -39,7 +39,7 @@ export const logrocketAdapterSchema = adapterDescriptorSchema(
  * LogRocket session replay. The app ID is public — it's what the SDK reports
  * under.
  *
- * @deprecated Use blume/scripts/* in a consent client entrypoint. Removed in the next major release.
+ * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
  */
 export const logrocket = (options: LogrocketOptions): LogrocketAdapter => ({
   kind: "logrocket",
