@@ -1459,6 +1459,7 @@ export interface BlumeConfig {
    * Analytics adapters from `blume/analytics`, emitted into `<head>` of every
    * production page in this order: `[posthog({ key }), vercel(),
    * cloudflare({ token }), script({ src })]`. Unset or empty injects nothing.
+   * @deprecated Use blume/scripts/* in a consent client entrypoint. Removed in the next major release.
    */
   analytics?: AnalyticsAdapter[];
   /** Site-wide announcement banner shown above the header. */

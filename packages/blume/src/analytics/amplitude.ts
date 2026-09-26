@@ -34,6 +34,8 @@ export const amplitudeAdapterSchema = adapterDescriptorSchema(
 /**
  * Amplitude product analytics through the Browser SDK's script loader. The
  * project API key is public — it's what every browser event carries.
+ *
+ * @deprecated Use blume/scripts/* in a consent client entrypoint. Removed in the next major release.
  */
 export const amplitude = (options: AmplitudeOptions): AmplitudeAdapter => ({
   kind: "amplitude",

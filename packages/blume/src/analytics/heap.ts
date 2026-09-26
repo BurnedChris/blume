@@ -34,6 +34,8 @@ export const heapAdapterSchema = adapterDescriptorSchema(
 /**
  * Heap autocapture analytics. The app ID is public — the tag carries it on
  * every page.
+ *
+ * @deprecated Use blume/scripts/* in a consent client entrypoint. Removed in the next major release.
  */
 export const heap = (options: HeapOptions): HeapAdapter => ({
   kind: "heap",

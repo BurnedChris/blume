@@ -46,6 +46,8 @@ export const mixpanelAdapterSchema = adapterDescriptorSchema(
 /**
  * Mixpanel product analytics. The project token is public — it's what every
  * browser event carries.
+ *
+ * @deprecated Use blume/scripts/* in a consent client entrypoint. Removed in the next major release.
  */
 export const mixpanel = (options: MixpanelOptions): MixpanelAdapter => ({
   kind: "mixpanel",

@@ -3,16 +3,29 @@ title: Cookie consent
 description: Use c15t for script loading and consent, with an offline banner, a c15t backend, or an existing Osano or Fides installation.
 ---
 
-Blume uses c15t to manage scripts, consent changes, and analytics event delivery. Adding an [analytics adapter](/docs/configuration/analytics) automatically enables a c15t banner in offline mode. No account or backend is required for local testing. Sites with no analytics and no consent configuration load no c15t runtime or UI.
+Blume uses c15t to manage scripts, consent changes, and analytics event delivery. Use direct SDK exports in a client entrypoint and connect it with `c15t()`. Offline mode requires no account or backend for local testing. Sites with no analytics and no consent configuration load no c15t runtime or UI.
 
 ```ts blume.config.ts
 import { defineConfig } from "blume";
-import { googleTagManager } from "blume/analytics";
+import { c15t } from "blume/consent";
 
 export default defineConfig({
-  analytics: [googleTagManager({ id: "GTM-EXAMPLE" })],
+  consent: c15t({ clientEntrypoint: "./consent.client.ts" }),
 });
 ```
+
+```ts consent.client.ts
+import type { ConsentClientOptions } from "blume/consent";
+import { googleTagManager } from "blume/scripts/google-tag-manager";
+
+export default {
+  scripts: import.meta.env.PROD
+    ? [googleTagManager({ id: "GTM-EXAMPLE" })]
+    : [],
+} satisfies ConsentClientOptions;
+```
+
+Existing `analytics` lists also enable offline consent automatically, but that API is deprecated and will be removed in the next major release. Follow the [migration guide](/docs/configuration/analytics-migration).
 
 GTM starts with c15t's Google Consent Mode defaults before its container loads. The banner asks for a choice and c15t sends updates afterward. Tags inside the container must honor those signals; Blume cannot inspect or correct your GTM configuration.
 
@@ -54,7 +67,7 @@ export default {
 } satisfies ConsentClientOptions;
 ```
 
-Point `consent.clientEntrypoint` at this module. Use the SDK's `registry` export to discover integrations. Existing `blume/analytics` factories remain supported and are translated into c15t SDK calls. The [analytics migration guide](/docs/configuration/analytics-migration) covers every adapter, option mapping, mixed configurations, and `pageviews` for SDKs that need explicit router events.
+Point `consent.clientEntrypoint` at this module. Use the SDK's `registry` export to discover integrations. Deprecated `blume/analytics` factories are translated into c15t SDK calls for this release and will be removed in the next major release. The [analytics migration guide](/docs/configuration/analytics-migration) covers every adapter, option mapping, mixed configurations, and `pageviews` for SDKs that need explicit router events.
 
 Legacy `analytics` adapters are disabled in `blume dev`. Scripts explicitly supplied in a client entrypoint are under your control and run in development too; use `import.meta.env.PROD` if you want to disable them locally.
 

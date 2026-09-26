@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 import type { AstroIntegration } from "astro";
@@ -11,6 +11,7 @@ import {
   loadConfig,
 } from "../src/core/config.ts";
 import { BlumeError } from "../src/core/diagnostics.ts";
+import { scanProject } from "../src/core/project-graph.ts";
 
 const dirs: string[] = [];
 const setup = () => {};
@@ -63,6 +64,44 @@ describe("defineConfig", () => {
 });
 
 describe("loadConfig", () => {
+  it("warns once for legacy analytics without changing adapters, and carries the warning into CLI diagnostics", async () => {
+    const adapter = {
+      kind: "adobe" as const,
+      options: { url: "https://example.com/launch.js" },
+      requiredSecrets: [],
+      runtimeDeps: [],
+    };
+    const dir = await makeDir(
+      `export default { analytics: ${JSON.stringify([adapter, adapter])} };`
+    );
+    await mkdir(join(dir, "docs"));
+    await writeFile(join(dir, "docs/index.md"), "# Home");
+    const result = await loadConfig(dir);
+    expect(result.config.analytics).toEqual([adapter, adapter]);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "BLUME_ANALYTICS_DEPRECATED",
+        file: join(dir, "blume.config.ts"),
+        severity: "warning",
+        suggestion: expect.stringContaining("/analytics-migration"),
+      }),
+    ]);
+    const project = await scanProject(dir);
+    expect(
+      project.diagnostics.filter(
+        (entry) => entry.code === "BLUME_ANALYTICS_DEPRECATED"
+      )
+    ).toEqual(result.diagnostics);
+  });
+
+  it("does not warn for an empty analytics list or SDK client configuration", async () => {
+    const dir = await makeDir(
+      'export default { analytics: [], consent: { kind: "c15t", options: { mode: { type: "offline" }, clientEntrypoint: "./consent.client.ts" }, runtimeDeps: [], requiredSecrets: [] } };'
+    );
+    const result = await loadConfig(dir);
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("falls back to schema defaults when no config file exists", async () => {
     const result = await loadConfig(await makeDir());
     expect(result.configFile).toBeNull();

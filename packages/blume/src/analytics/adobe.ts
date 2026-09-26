@@ -27,6 +27,8 @@ export const adobeAdapterSchema = adapterDescriptorSchema(
  * Adobe Analytics through a Launch property: Blume loads the environment's
  * embed script, and the property's own rules decide what to track. Copy the
  * URL from the environment's install instructions in Data Collection.
+ *
+ * @deprecated Use blume/scripts/* in a consent client entrypoint. Removed in the next major release.
  */
 export const adobe = (options: AdobeOptions): AdobeAdapter => ({
   kind: "adobe",

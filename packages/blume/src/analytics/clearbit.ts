@@ -23,6 +23,8 @@ export const clearbitAdapterSchema = adapterDescriptorSchema(
 /**
  * Clearbit's website tag (Reveal and the Clearbit tags it manages). The
  * publishable key is meant for the browser.
+ *
+ * @deprecated Use blume/scripts/* in a consent client entrypoint. Removed in the next major release.
  */
 export const clearbit = (options: ClearbitOptions): ClearbitAdapter => ({
   kind: "clearbit",

@@ -39,10 +39,20 @@ Blume uses the Astro adapter because its generated site is Astro. Other c15t fra
 Create a small fixture with `docs/index.md`, `docs/next.md`, and a link from the first page to `/next`. Link its `node_modules/blume` to this checkout's `packages/blume`. Configure:
 
 ```ts
-import { googleTagManager } from "blume/analytics";
+import { c15t } from "blume/consent";
 export default {
-  analytics: [googleTagManager({ id: "GTM-TEST" })],
+  consent: c15t({ clientEntrypoint: "./consent.client.ts" }),
 };
+```
+
+Create `consent.client.ts`:
+
+```ts
+import type { ConsentClientOptions } from "blume/consent";
+import { googleTagManager } from "blume/scripts/google-tag-manager";
+export default {
+  scripts: import.meta.env.PROD ? [googleTagManager({ id: "GTM-TEST" })] : [],
+} satisfies ConsentClientOptions;
 ```
 
 Run `blume build` from that fixture (use the checkout's `packages/blume/bin/blume.mjs` with Node), then serve its `dist` directory on port 4317. For network-independent builds, set the theme font roles to a local font file as in `test/configured-integrations.test.ts`.
@@ -61,7 +71,7 @@ Also test external Osano/Fides initialization, category changes, unavailable pro
 
 - No analytics and no consent configuration means no consent UI or client assets.
 - Analytics alone enables offline c15t and an explicit opt-in policy everywhere. `native()` remains an offline compatibility alias; `c15t()` exposes the Astro options and an optional backend.
-- `blume/analytics` stays supported without deprecation. The [user migration guide](../apps/docs/content/docs/configuration/analytics-migration.mdx) covers all adapters, staged adoption, changed defaults, consent behavior, verification, and rollback. Client entrypoints can declare `pageviews` through `ConsentClientOptions` to retain Segment, Hightouch, or legacy-style PostHog router events. Never register a vendor in both APIs.
+- `blume/analytics` is deprecated and frozen, with removal planned for the next major release. Existing configurations produce a migration warning and continue to work. The [user migration guide](../apps/docs/content/docs/configuration/analytics-migration.mdx) covers all adapters, staged adoption, changed defaults, consent behavior, verification, and rollback. Client entrypoints can declare `pageviews` through `ConsentClientOptions` to retain Segment, Hightouch, or legacy-style PostHog router events. Never register a vendor in both APIs.
 - `blume/scripts/*` re-exports named public c15t script SDK entries. New scripts and callbacks belong in `clientEntrypoint`, preserving functions instead of serializing them.
 - A helper's `alwaysLoad` policy can initialize a vendor in its denied mode before a decision. Loading GTM does not make all tags inside its container safe: configure those tags' consent requirements. Custom scripts default to the measurement gate.
 - External CMP grants are volatile permissions, not c15t receipts. The provider owns decisions, records, expiration and privacy signals. Missing or unavailable providers fail closed; c15t does not mount a second banner or persist fabricated records.
@@ -76,3 +86,11 @@ The migration update passed 5,297 Blume tests with 100% line/function coverage, 
 The Blume branch is based on the fork's `main`, including its newer search analytics and translated UI changes. The generated GTM-only site, custom client scripts with Fides and Osano, and an ejected Astro app were exercised in Chromium with third-party requests intercepted. Verified: denial, acceptance, preferences, one runtime across navigation, external authority without a c15t receipt/banner, and withdrawal/reload. A no-integration build was checked for absence of c15t assets. The ejected fixture includes a package.json before eject so Astro can discover its declared renderer dependencies.
 
 The companion c15t implementation is published in [c15t/c15t#1204](https://github.com/c15t/c15t/pull/1204), commit `8c7d0f85` on `christopher/blume-runtime`. Its shared-control checks pass across core and framework packages (4,018 tests), with the scripts suite also verified (434 tests). Build/types/lint passed for affected packages. Package documentation was regenerated from the canonical Astro guide. Check out that branch before preparing the local dependencies.
+
+## Updating SDK re-exports
+
+The installed `@c15t/scripts` package manifest is the source of truth for named public SDK subpaths. After preparing or upgrading c15t, run `bun run sync:c15t-scripts` (also included in `bun run fix`) and commit the generated `src/scripts` files and package exports. The generator adds new entries and removes stale ones while preserving unrelated Blume exports. Root, package metadata, blocked exports, and wildcard deep imports are not mirrored.
+
+`bun run check:c15t-scripts` is read-only and fails on missing, changed, or stale exports. `bun run check` includes it, so the existing lint CI job enforces parity once its dependencies have been prepared. Do not generate during CI installation, since that would hide uncommitted drift.
+
+The export/deprecation update passed 5,300 tests with 100% line/function coverage, uncached typechecks, the production workspace build, and lint/format plus SDK export parity checks. Built CLI `doctor --json` reports one migration warning and no errors for legacy analytics; the SDK-only fixture reports no diagnostics. Generator regression tests cover additions, nested exports, removals, read-only drift detection, and TypeScript condition order.

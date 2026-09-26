@@ -100,6 +100,8 @@
     "./sources/*": "./src/core/sources/*",
     "./theme/*": "./src/theme/*",
     "./package.json": "./package.json",
+    "./consent/integration": "./src/consent/integration.ts",
+    "./consent/runtime": "./src/consent/runtime.ts",
     "./scripts/adobe-analytics": {
       "types": "./dist/types/scripts/adobe-analytics.d.ts",
       "default": "./src/scripts/adobe-analytics.ts"
@@ -112,57 +114,89 @@
       "types": "./dist/types/scripts/amplitude.d.ts",
       "default": "./src/scripts/amplitude.ts"
     },
-    "./scripts/cloudflare-web-analytics": {
-      "types": "./dist/types/scripts/cloudflare-web-analytics.d.ts",
-      "default": "./src/scripts/cloudflare-web-analytics.ts"
-    },
     "./scripts/clearbit": {
       "types": "./dist/types/scripts/clearbit.d.ts",
       "default": "./src/scripts/clearbit.ts"
     },
-    "./scripts/microsoft-clarity": {
-      "types": "./dist/types/scripts/microsoft-clarity.d.ts",
-      "default": "./src/scripts/microsoft-clarity.ts"
+    "./scripts/cloudflare-web-analytics": {
+      "types": "./dist/types/scripts/cloudflare-web-analytics.d.ts",
+      "default": "./src/scripts/cloudflare-web-analytics.ts"
+    },
+    "./scripts/cloudflare-zaraz": {
+      "types": "./dist/types/scripts/cloudflare-zaraz.d.ts",
+      "default": "./src/scripts/cloudflare-zaraz.ts"
+    },
+    "./scripts/crisp": {
+      "types": "./dist/types/scripts/crisp.d.ts",
+      "default": "./src/scripts/crisp.ts"
     },
     "./scripts/databuddy": {
       "types": "./dist/types/scripts/databuddy.d.ts",
       "default": "./src/scripts/databuddy.ts"
     },
+    "./scripts/events": {
+      "types": "./dist/types/scripts/events.d.ts",
+      "default": "./src/scripts/events.ts"
+    },
     "./scripts/fathom-analytics": {
       "types": "./dist/types/scripts/fathom-analytics.d.ts",
       "default": "./src/scripts/fathom-analytics.ts"
-    },
-    "./scripts/heap": {
-      "types": "./dist/types/scripts/heap.d.ts",
-      "default": "./src/scripts/heap.ts"
-    },
-    "./scripts/hotjar": {
-      "types": "./dist/types/scripts/hotjar.d.ts",
-      "default": "./src/scripts/hotjar.ts"
-    },
-    "./scripts/hightouch": {
-      "types": "./dist/types/scripts/hightouch.d.ts",
-      "default": "./src/scripts/hightouch.ts"
-    },
-    "./scripts/rudderstack": {
-      "types": "./dist/types/scripts/rudderstack.d.ts",
-      "default": "./src/scripts/rudderstack.ts"
-    },
-    "./scripts/logrocket": {
-      "types": "./dist/types/scripts/logrocket.d.ts",
-      "default": "./src/scripts/logrocket.ts"
     },
     "./scripts/google-tag": {
       "types": "./dist/types/scripts/google-tag.d.ts",
       "default": "./src/scripts/google-tag.ts"
     },
+    "./scripts/google-tag-manager": {
+      "types": "./dist/types/scripts/google-tag-manager.d.ts",
+      "default": "./src/scripts/google-tag-manager.ts"
+    },
+    "./scripts/heap": {
+      "types": "./dist/types/scripts/heap.d.ts",
+      "default": "./src/scripts/heap.ts"
+    },
+    "./scripts/hightouch": {
+      "types": "./dist/types/scripts/hightouch.d.ts",
+      "default": "./src/scripts/hightouch.ts"
+    },
+    "./scripts/hotjar": {
+      "types": "./dist/types/scripts/hotjar.d.ts",
+      "default": "./src/scripts/hotjar.ts"
+    },
+    "./scripts/intercom": {
+      "types": "./dist/types/scripts/intercom.d.ts",
+      "default": "./src/scripts/intercom.ts"
+    },
+    "./scripts/linkedin-insights": {
+      "types": "./dist/types/scripts/linkedin-insights.d.ts",
+      "default": "./src/scripts/linkedin-insights.ts"
+    },
+    "./scripts/logrocket": {
+      "types": "./dist/types/scripts/logrocket.d.ts",
+      "default": "./src/scripts/logrocket.ts"
+    },
     "./scripts/matomo-analytics": {
       "types": "./dist/types/scripts/matomo-analytics.d.ts",
       "default": "./src/scripts/matomo-analytics.ts"
     },
+    "./scripts/meta-pixel": {
+      "types": "./dist/types/scripts/meta-pixel.d.ts",
+      "default": "./src/scripts/meta-pixel.ts"
+    },
+    "./scripts/microsoft-clarity": {
+      "types": "./dist/types/scripts/microsoft-clarity.d.ts",
+      "default": "./src/scripts/microsoft-clarity.ts"
+    },
+    "./scripts/microsoft-uet": {
+      "types": "./dist/types/scripts/microsoft-uet.d.ts",
+      "default": "./src/scripts/microsoft-uet.ts"
+    },
     "./scripts/mixpanel-analytics": {
       "types": "./dist/types/scripts/mixpanel-analytics.d.ts",
       "default": "./src/scripts/mixpanel-analytics.ts"
+    },
+    "./scripts/openai-pixel": {
+      "types": "./dist/types/scripts/openai-pixel.d.ts",
+      "default": "./src/scripts/openai-pixel.ts"
     },
     "./scripts/pirsch": {
       "types": "./dist/types/scripts/pirsch.d.ts",
@@ -180,57 +214,25 @@
       "types": "./dist/types/scripts/promptwatch.d.ts",
       "default": "./src/scripts/promptwatch.ts"
     },
-    "./scripts/segment": {
-      "types": "./dist/types/scripts/segment.d.ts",
-      "default": "./src/scripts/segment.ts"
+    "./scripts/reddit-pixel": {
+      "types": "./dist/types/scripts/reddit-pixel.d.ts",
+      "default": "./src/scripts/reddit-pixel.ts"
+    },
+    "./scripts/registry": {
+      "types": "./dist/types/scripts/registry.d.ts",
+      "default": "./src/scripts/registry.ts"
+    },
+    "./scripts/rudderstack": {
+      "types": "./dist/types/scripts/rudderstack.d.ts",
+      "default": "./src/scripts/rudderstack.ts"
     },
     "./scripts/rybbit-analytics": {
       "types": "./dist/types/scripts/rybbit-analytics.d.ts",
       "default": "./src/scripts/rybbit-analytics.ts"
     },
-    "./scripts/umami-analytics": {
-      "types": "./dist/types/scripts/umami-analytics.d.ts",
-      "default": "./src/scripts/umami-analytics.ts"
-    },
-    "./scripts/vercel-analytics": {
-      "types": "./dist/types/scripts/vercel-analytics.d.ts",
-      "default": "./src/scripts/vercel-analytics.ts"
-    },
-    "./scripts/crisp": {
-      "types": "./dist/types/scripts/crisp.d.ts",
-      "default": "./src/scripts/crisp.ts"
-    },
-    "./scripts/intercom": {
-      "types": "./dist/types/scripts/intercom.d.ts",
-      "default": "./src/scripts/intercom.ts"
-    },
-    "./scripts/cloudflare-zaraz": {
-      "types": "./dist/types/scripts/cloudflare-zaraz.d.ts",
-      "default": "./src/scripts/cloudflare-zaraz.ts"
-    },
-    "./scripts/google-tag-manager": {
-      "types": "./dist/types/scripts/google-tag-manager.d.ts",
-      "default": "./src/scripts/google-tag-manager.ts"
-    },
-    "./scripts/linkedin-insights": {
-      "types": "./dist/types/scripts/linkedin-insights.d.ts",
-      "default": "./src/scripts/linkedin-insights.ts"
-    },
-    "./scripts/meta-pixel": {
-      "types": "./dist/types/scripts/meta-pixel.d.ts",
-      "default": "./src/scripts/meta-pixel.ts"
-    },
-    "./scripts/openai-pixel": {
-      "types": "./dist/types/scripts/openai-pixel.d.ts",
-      "default": "./src/scripts/openai-pixel.ts"
-    },
-    "./scripts/reddit-pixel": {
-      "types": "./dist/types/scripts/reddit-pixel.d.ts",
-      "default": "./src/scripts/reddit-pixel.ts"
-    },
-    "./scripts/microsoft-uet": {
-      "types": "./dist/types/scripts/microsoft-uet.d.ts",
-      "default": "./src/scripts/microsoft-uet.ts"
+    "./scripts/segment": {
+      "types": "./dist/types/scripts/segment.d.ts",
+      "default": "./src/scripts/segment.ts"
     },
     "./scripts/snapchat-pixel": {
       "types": "./dist/types/scripts/snapchat-pixel.d.ts",
@@ -240,19 +242,17 @@
       "types": "./dist/types/scripts/tiktok-pixel.d.ts",
       "default": "./src/scripts/tiktok-pixel.ts"
     },
+    "./scripts/umami-analytics": {
+      "types": "./dist/types/scripts/umami-analytics.d.ts",
+      "default": "./src/scripts/umami-analytics.ts"
+    },
+    "./scripts/vercel-analytics": {
+      "types": "./dist/types/scripts/vercel-analytics.d.ts",
+      "default": "./src/scripts/vercel-analytics.ts"
+    },
     "./scripts/x-pixel": {
       "types": "./dist/types/scripts/x-pixel.d.ts",
       "default": "./src/scripts/x-pixel.ts"
-    },
-    "./scripts/registry": {
-      "types": "./dist/types/scripts/registry.d.ts",
-      "default": "./src/scripts/registry.ts"
-    },
-    "./consent/integration": "./src/consent/integration.ts",
-    "./consent/runtime": "./src/consent/runtime.ts",
-    "./scripts/events": {
-      "types": "./dist/types/scripts/events.d.ts",
-      "default": "./src/scripts/events.ts"
     }
   },
   "scripts": {

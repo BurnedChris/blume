@@ -1,11 +1,42 @@
 ---
 title: Analytics
-description: First-party web analytics — PostHog, Google Analytics, Plausible, Mixpanel, Segment, and more — as adapters in blume.config.ts.
+description: Configure analytics with direct c15t SDK exports and migrate deprecated Blume adapters.
 ---
+
+Use `blume/scripts/*` to import c15t integrations directly. The SDK owns the vendor options, loading, and consent lifecycle. Put scripts in a browser entrypoint so their callbacks remain intact.
+
+```ts blume.config.ts
+import { defineConfig } from "blume";
+import { c15t } from "blume/consent";
+
+export default defineConfig({
+  consent: c15t({ clientEntrypoint: "./consent.client.ts" }),
+});
+```
+
+```ts consent.client.ts
+import type { ConsentClientOptions } from "blume/consent";
+import { segment } from "blume/scripts/segment";
+
+export default {
+  scripts: import.meta.env.PROD
+    ? [segment({ writeKey: "YOUR_WRITE_KEY" })]
+    : [],
+  pageviews: ["segment"],
+} satisfies ConsentClientOptions;
+```
+
+The production guard keeps local development traffic out of your dashboards. The `pageviews` setting preserves Segment navigation events. See [Cookie consent](/docs/configuration/consent) for backends and external CMPs, and the [migration guide](/docs/configuration/analytics-migration) for every legacy adapter's SDK equivalent.
+
+## Legacy adapter reference
+
+:::warning
+`blume/analytics` is deprecated. It remains available as a frozen compatibility layer in this release and will be removed in the next major release. Nonempty `analytics` lists produce a migration warning. The reference and examples below describe existing configurations; use direct SDK exports for new integrations.
+:::
 
 Blume injects analytics for you from an `analytics` list in `blume.config.ts`. Each entry is an adapter imported from `blume/analytics`: one per provider, plus `script()` for anything without one.
 
-This API remains supported with c15t. For additional integrations or callbacks, follow the [migration to `blume/scripts/*`](/docs/configuration/analytics-migration). You can move one vendor at a time; changing the import alone is not sufficient.
+To move an existing configuration, follow the [migration to `blume/scripts/*`](/docs/configuration/analytics-migration). You can move one vendor at a time; changing the import alone is not sufficient.
 
 ```ts blume.config.ts lineNumbers
 import { defineConfig } from "blume";

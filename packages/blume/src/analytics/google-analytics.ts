@@ -37,6 +37,8 @@ export const googleAnalyticsAdapterSchema = adapterDescriptorSchema(
 /**
  * Google Analytics 4 through the Google tag (`gtag.js`). The measurement ID is
  * public; it names the data stream the tag reports to.
+ *
+ * @deprecated Use blume/scripts/* in a consent client entrypoint. Removed in the next major release.
  */
 export const googleAnalytics = (
   options: GoogleAnalyticsOptions

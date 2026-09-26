@@ -29,6 +29,8 @@ export const googleTagManagerAdapterSchema = adapterDescriptorSchema(
 /**
  * Google Tag Manager. Blume loads the container; which tags fire, and on what,
  * is the container's configuration. The container ID is public.
+ *
+ * @deprecated Use blume/scripts/* in a consent client entrypoint. Removed in the next major release.
  */
 export const googleTagManager = (
   options: GoogleTagManagerOptions

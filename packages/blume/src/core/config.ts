@@ -364,7 +364,20 @@ export const loadConfig = async (
       seo: { ...config.seo, og: { ...config.seo.og, enabled: ogEnabled } },
     },
     configFile,
-    diagnostics: [],
+    diagnostics:
+      config.analytics.length > 0
+        ? [
+            {
+              code: "BLUME_ANALYTICS_DEPRECATED",
+              file: configFile ?? undefined,
+              message:
+                "blume/analytics is deprecated and will be removed in the next major release. Existing adapters remain supported in this release but will receive no new integrations.",
+              severity: "warning",
+              suggestion:
+                "Move integrations to blume/scripts/* in a consent client entrypoint. See https://useblume.dev/docs/configuration/analytics-migration.",
+            },
+          ]
+        : [],
     themeFontsConfigured,
   };
 };

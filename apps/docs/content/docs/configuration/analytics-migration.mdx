@@ -3,15 +3,15 @@ title: Migrate analytics to c15t scripts
 description: Keep existing analytics adapters working, or move integrations one at a time to the full c15t script SDK without losing configuration or navigation events.
 ---
 
-`blume/analytics` remains supported. Its factories and the `analytics` configuration list are not removed or deprecated by the c15t integration. They now use c15t to load scripts and deliver events. You can keep your current imports and options.
+`blume/analytics` and the `analytics` configuration list are deprecated. They remain supported in this release as a frozen compatibility layer, with removal planned for the next major release. No new integrations or options will be added to the legacy adapters; necessary compatibility and bug fixes can still be made. Move new and existing integrations to `blume/scripts/*`.
 
-`blume/scripts/*` is the optional path to the full c15t SDK, including additional integrations and lifecycle callbacks. There is no bare `blume/scripts` barrel: import each vendor's subpath. A future removal of `blume/analytics` would require a separate breaking release and migration announcement.
+`blume/scripts/*` is the supported path to the full c15t SDK, including additional integrations and lifecycle callbacks. There is no bare `blume/scripts` barrel: import each vendor's subpath. Blume reports `BLUME_ANALYTICS_DEPRECATED` once per configuration load when the analytics list is nonempty. Build, dev, and doctor diagnostics link to this guide; the warning does not invalidate your config. Editors also mark the legacy factories as deprecated. Empty analytics lists and SDK-only configurations do not trigger it.
 
 ## Choose the scope of your upgrade
 
 | Path | Required changes |
 | --- | --- |
-| Keep existing analytics | Keep `analytics` and `blume/analytics` imports. Review the consent behavior changes below. |
+| Keep existing analytics | Temporarily keep `analytics` and `blume/analytics` imports, with a migration warning. Migrate before the next major release. |
 | Move one integration | Remove that entry from `analytics`, register its SDK script in a client entrypoint, and keep the remaining adapters. |
 | Move everything | Register all scripts in the client entrypoint, then remove the empty `analytics` list and its imports. Keep the `consent` configuration that connects the entrypoint. |
 
@@ -154,7 +154,7 @@ const fathomWithOptions = {
 
 Put `fathomWithOptions` in the client entrypoint's `scripts` array. The same pattern works for Databuddy, Pirsch, and Plausible legacy attributes.
 
-OneDollarStats can stay as a legacy adapter indefinitely within this release. To move it, use this entry in the client module's `scripts` array:
+OneDollarStats can stay as a legacy adapter during this release, but must migrate before the next major release. To move it, use this entry in the client module's `scripts` array:
 
 ```ts
 {
