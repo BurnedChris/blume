@@ -1459,7 +1459,7 @@ export interface BlumeConfig {
    * Analytics adapters from `blume/analytics`, emitted into `<head>` of every
    * production page in this order: `[posthog({ key }), vercel(),
    * cloudflare({ token }), script({ src })]`. Unset or empty injects nothing.
-   * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
+   * @deprecated Use blume/integrations/* in consent.ts. Removed in the next major release.
    */
   analytics?: AnalyticsAdapter[];
   /** Site-wide announcement banner shown above the header. */
@@ -1475,9 +1475,10 @@ export interface BlumeConfig {
    */
   basePath?: string;
   /**
-   * c15t owns scripts and consent. Defaults to an offline c15t banner when
-   * analytics is configured. Use c15t() for a backend or client entrypoint,
-   * native() as a compatibility alias, or osano()/ethyca() for an external CMP.
+   * c15t owns scripts and consent. Defaults to an offline c15t banner when a
+   * root `consent.ts` or analytics is present. Use c15t() for a backend
+   * (`mode: hosted({ url })`), native() as a compatibility alias, or
+   * osano()/ethyca() for an external CMP. Scripts go in `consent.ts`.
    * Vendor helpers may load before consent and receive denied-state callbacks.
    */
   consent?: ConsentAdapter;

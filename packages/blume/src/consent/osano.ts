@@ -6,8 +6,6 @@ import { adapterDescriptorSchema } from "../core/adapter.ts";
 
 /** Options for {@link osano}. */
 export interface OsanoOptions {
-  /** Browser module exporting c15t scripts and lifecycle callbacks. */
-  clientEntrypoint?: string;
   /** c15t category to provider consent property/notice mapping. Unmapped categories stay denied. */
   categories?: Partial<
     Record<"measurement" | "marketing" | "experience" | "functionality", string>
@@ -25,7 +23,6 @@ export const osanoOptionsSchema = z.strictObject({
       z.string().min(1)
     )
     .optional(),
-  clientEntrypoint: z.string().min(1).optional(),
   configId: z.string().min(1),
   customerId: z.string().min(1),
 });

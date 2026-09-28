@@ -14,7 +14,7 @@ export interface VercelNamedOptions {
 /**
  * Options for {@link vercel}. Supported c15t SDK settings include mode, debug,
  * endpoint, dsn and disableAutoTrack. scriptSrc aliases the SDK's scriptUrl.
- * Use a clientEntrypoint for callbacks and advanced script options.
+ * Use consent.ts for callbacks and advanced script options.
  */
 export type VercelOptions = VercelNamedOptions & {
   [option: string]: JsonValue;
@@ -38,7 +38,7 @@ export const vercelAdapterSchema = adapterDescriptorSchema(
  * Vercel Web Analytics through c15t, using the first-party tracker by default.
  * Enable Web Analytics for the Vercel project before deploying.
  *
- * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
+ * @deprecated Use blume/integrations/* in consent.ts. Removed in the next major release.
  */
 export const vercel = (options: VercelOptions = {}): VercelAdapter => ({
   kind: "vercel",

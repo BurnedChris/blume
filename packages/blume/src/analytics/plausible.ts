@@ -44,7 +44,7 @@ export const plausibleAdapterSchema = adapterDescriptorSchema(
  * Plausible Analytics. Nothing here is secret: the tag names the site and
  * where to send events.
  *
- * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
+ * @deprecated Use blume/integrations/* in consent.ts. Removed in the next major release.
  */
 export const plausible = (options: PlausibleOptions): PlausibleAdapter => ({
   kind: "plausible",

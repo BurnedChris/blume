@@ -5,5 +5,8 @@ interface Props { consent: NonNullable<BlumeDataConfig["consent"]>; }
 // Provider bootstrap only. c15t reads the provider's state and owns all other scripts.
 const tags = consentHead(Astro.props.consent).filter((tag) => tag.content === null);
 ---
-<script is:inline>window.blumeConsent ??= { analytics: null, kind: "c15t" };</script>
+<script is:inline>window.blumeConsent ??= { analytics: null, kind: "c15t" };
+// Runs right after the theme script, before paint: c15t's dark tokens key off
+// these classes, and Blume, not c15t, decides the theme (see runtime.ts).
+for (const name of ["c15t-dark", "dark"]) document.documentElement.classList.toggle(name, document.documentElement.dataset.theme === "dark");</script>
 {tags.map((tag) => <script is:inline {...tag.attributes} />)}

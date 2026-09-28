@@ -30,7 +30,7 @@ export const hotjarAdapterSchema = adapterDescriptorSchema(
  * Hotjar heatmaps and recordings. The site ID is public — it's in the tracking
  * code on every page.
  *
- * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
+ * @deprecated Use blume/integrations/* in consent.ts. Removed in the next major release.
  */
 export const hotjar = (options: HotjarOptions): HotjarAdapter => ({
   kind: "hotjar",

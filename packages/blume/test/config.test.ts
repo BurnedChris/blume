@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import type { AstroIntegration } from "astro";
 import { join } from "pathe";
 
+import { c15t } from "../src/consent/c15t.ts";
 import {
   ConfigValidationError,
   defineConfig,
@@ -96,10 +97,28 @@ describe("loadConfig", () => {
 
   it("does not warn for an empty analytics list or SDK client configuration", async () => {
     const dir = await makeDir(
-      'export default { analytics: [], consent: { kind: "c15t", options: { mode: { type: "offline" }, clientEntrypoint: "./consent.client.ts" }, runtimeDeps: [], requiredSecrets: [] } };'
+      'export default { analytics: [], consent: { kind: "c15t", options: { mode: { type: "offline" } }, runtimeDeps: [], requiredSecrets: [] } };'
     );
     const result = await loadConfig(dir);
     expect(result.diagnostics).toEqual([]);
+  });
+
+  it("turns on offline consent for a root consent.ts, unless consent is set", async () => {
+    const bare = await makeDir();
+    const without = await loadConfig(bare);
+    expect(without.config.consent).toBeNull();
+    await writeFile(join(bare, "consent.ts"), "export default {};");
+    const withFile = await loadConfig(bare);
+    expect(withFile.config.consent).toEqual(c15t());
+
+    const hosted = await makeDir(
+      'export default { consent: { kind: "c15t", options: { mode: { type: "hosted", url: "https://consent.example.com" } }, runtimeDeps: [], requiredSecrets: [] } };'
+    );
+    await writeFile(join(hosted, "consent.ts"), "export default {};");
+    const explicit = await loadConfig(hosted);
+    expect(explicit.config.consent?.options).toEqual({
+      mode: { type: "hosted", url: "https://consent.example.com" },
+    });
   });
 
   it("falls back to schema defaults when no config file exists", async () => {

@@ -42,7 +42,7 @@ export const cloudflareAdapterSchema = adapterDescriptorSchema(
  * doesn't proxy. A proxied zone with automatic RUM injection on needs no
  * adapter at all — listing one there would count every pageview twice.
  *
- * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
+ * @deprecated Use blume/integrations/* in consent.ts. Removed in the next major release.
  */
 export const cloudflare = (options: CloudflareOptions): CloudflareAdapter => ({
   kind: "cloudflare",

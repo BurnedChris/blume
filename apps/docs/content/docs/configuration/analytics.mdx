@@ -3,27 +3,18 @@ title: Analytics
 description: Configure analytics with direct c15t SDK exports and migrate deprecated Blume adapters.
 ---
 
-See [Integrations](/docs/configuration/integrations) for the SDK catalog, setup, consent, and verification. Use `blume/integrations/*` to import c15t integrations directly. The SDK owns the vendor options, loading, and consent lifecycle. Put scripts in a browser entrypoint so their callbacks remain intact.
+See [Integrations](/docs/configuration/integrations) for the SDK catalog, setup, consent, and verification. Use `blume/integrations/*` to import c15t integrations directly. The SDK owns the vendor options, loading, and consent lifecycle. Put scripts in a `consent.ts` at your project root so their callbacks remain intact. Blume finds it by name and turns on the consent banner:
 
-```ts blume.config.ts
-import { defineConfig } from "blume";
-import { c15t } from "blume/consent";
-
-export default defineConfig({
-  consent: c15t({ clientEntrypoint: "./consent.client.ts" }),
-});
-```
-
-```ts consent.client.ts
-import type { ConsentClientOptions } from "blume/consent";
+```ts consent.ts
+import { defineConsent } from "blume/consent/client";
 import { segment } from "blume/integrations/segment";
 
-export default {
+export default defineConsent({
   scripts: import.meta.env.PROD
     ? [segment({ writeKey: "YOUR_WRITE_KEY" })]
     : [],
   pageviews: ["segment"],
-} satisfies ConsentClientOptions;
+});
 ```
 
 The production guard keeps local development traffic out of your dashboards. The `pageviews` setting preserves Segment navigation events. See [Cookie consent](/docs/configuration/consent) for backends and external CMPs, and the [migration guide](/docs/configuration/analytics-migration) for every legacy adapter's SDK equivalent.
@@ -57,7 +48,7 @@ Adapters are translated into c15t SDK scripts. c15t owns their loading order, co
 Adapters in the `analytics` list load in **production builds only**. The scripts are emitted by `blume build`, never by `blume dev`, so local traffic never reaches your dashboards and you don't need a separate "development" project.
 
 :::note
-With no `analytics` list and no explicit `consent` configuration, Blume injects no consent runtime or analytics. Scripts registered in a consent client entrypoint are independent of the `analytics` list.
+With no `analytics` list and no explicit `consent` configuration, Blume injects no consent runtime or analytics. Scripts registered in `consent.ts` are independent of the `analytics` list, and the file alone turns consent on.
 :::
 
 An analytics list automatically enables an offline c15t banner. Configure [`consent`](/docs/configuration/consent) for a backend or an external CMP. SDK helpers may load before consent with denied-state behavior; each helper defines its loading policy.
@@ -117,7 +108,7 @@ Add `vercel()` to include [Vercel Web Analytics](https://vercel.com/docs/analyti
 analytics: [vercel()],
 ```
 
-No keys are needed for the default Vercel deployment, where the `/_vercel/insights` endpoint exists. Options are mapped to c15t's script helper: `scriptSrc` becomes `scriptUrl`, with supported options including `mode`, `debug`, `endpoint`, `dsn`, and `disableAutoTrack`. This no longer mounts the Vercel Astro component or forwards arbitrary component props. Function-valued options cannot travel through the `analytics` configuration; use a [client entrypoint](/docs/configuration/analytics-migration) for custom browser code, and check the helper's supported options.
+No keys are needed for the default Vercel deployment, where the `/_vercel/insights` endpoint exists. Options are mapped to c15t's script helper: `scriptSrc` becomes `scriptUrl`, with supported options including `mode`, `debug`, `endpoint`, `dsn`, and `disableAutoTrack`. This no longer mounts the Vercel Astro component or forwards arbitrary component props. Function-valued options cannot travel through the `analytics` configuration; use [`consent.ts`](/docs/configuration/analytics-migration) for custom browser code, and check the helper's supported options.
 
 ## Cloudflare Web Analytics
 
@@ -456,7 +447,7 @@ analytics: [
 | `segment()` | `key` | — | Segment source write key. Required. |
 | `segment()` | `cdn` | `https://cdn.segment.com` | Origin of a custom domain proxying Segment's CDN. |
 | `segment()` | anything else | — | Forwarded as the `analytics.load` options verbatim. |
-| `vercel()` | `mode`, `debug`, … | — | Mapped to c15t Vercel SDK options; use clientEntrypoint for callbacks. |
+| `vercel()` | `mode`, `debug`, … | — | Mapped to c15t Vercel SDK options; use `consent.ts` for callbacks. |
 | `script()` | `src` | — | External script URL. Mutually exclusive with `content`. |
 | `script()` | `content` | — | Inline script body. Mutually exclusive with `src`. |
 | `script()` | `strategy` | — | `async` or `defer` for an external script. |

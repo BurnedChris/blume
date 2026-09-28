@@ -1,20 +1,20 @@
-import type { C15tAstroOptions, C15tClientOptionsExtension } from "@c15t/astro";
+import type { C15tAstroOptions } from "@c15t/astro";
 import { z } from "zod";
 
 import type { AdapterDescriptor } from "../core/adapter.ts";
 import { adapterDescriptorSchema } from "../core/adapter.ts";
 
-/** Serializable c15t Astro options. Put scripts and callbacks in clientEntrypoint. */
+/**
+ * Serializable c15t Astro options. Scripts and callbacks go in `consent.ts`,
+ * which Blume finds on its own; the banner follows the site's light/dark
+ * theme, so `colorScheme` is Blume's too.
+ */
 export type C15tOptions = Omit<
   C15tAstroOptions,
-  "scripts" | "ui" | "requireUIIntegration"
+  "scripts" | "ui" | "requireUIIntegration" | "colorScheme" | "clientEntrypoint"
 >;
 
-/** Browser configuration for consent.clientEntrypoint, including SDK callbacks. */
-export interface ConsentClientOptions extends C15tClientOptionsExtension {
-  /** Forward router pageviews through c15t for SDKs without history tracking. */
-  pageviews?: ("posthog" | "segment" | "hightouch")[];
-}
+export type { ConsentClientOptions } from "./client.ts";
 
 // c15t owns its option vocabulary. Validate JSON at the snapshot boundary,
 // rather than copying its schema and drifting whenever the SDK adds an option.
@@ -26,7 +26,7 @@ export const c15tOptionsSchema = z
       ctx.addIssue({
         code: "custom",
         message:
-          "c15t options must be JSON. Put callbacks and scripts in clientEntrypoint.",
+          "c15t options must be JSON. Put callbacks and scripts in consent.ts.",
       });
     }
   });

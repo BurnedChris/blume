@@ -51,7 +51,7 @@ export const oneDollarStatsAdapterSchema = adapterDescriptorSchema(
  * OneDollarStats. Needs no keys — the dashboard matches events to a site by
  * the domain they come from.
  *
- * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
+ * @deprecated Use blume/integrations/* in consent.ts. Removed in the next major release.
  */
 export const oneDollarStats = (
   options: OneDollarStatsOptions = {}

@@ -116,7 +116,10 @@ it("connects preferences, theme, language and pageviews to one live c15t client 
   const page = mock();
   const track = mock();
   const language = mock();
-  const toggle = mock();
+  const classes = new Set<string>();
+  const toggle = mock((name: string, force: boolean) =>
+    force ? classes.add(name) : classes.delete(name)
+  );
   const disconnect = mock();
   let presentationChanged = mock();
   class Observer {
@@ -170,7 +173,8 @@ it("connects preferences, theme, language and pageviews to one live c15t client 
     ],
     ["segment"]
   );
-  expect(toggle).toHaveBeenCalledWith("c15t-dark", true);
+  // `dark` keeps c15t's React dialog, which mirrors it, on the site theme.
+  expect([...classes].toSorted()).toEqual(["c15t-dark", "dark"]);
   expect(language).toHaveBeenCalledWith("de");
   expect(changes).toHaveBeenCalledTimes(1);
   kernel.set.externalPermissions({ measurement: true });
@@ -190,8 +194,15 @@ it("connects preferences, theme, language and pageviews to one live c15t client 
   root.dataset.theme = "light";
   root.lang = "";
   presentationChanged();
-  expect(toggle).toHaveBeenLastCalledWith("c15t-dark", false);
+  expect(classes.size).toBe(0);
+  // c15t clears the class on a ClientRouter swap; Blume puts the theme back.
+  root.dataset.theme = "dark";
+  document.dispatchEvent(new Event("astro:after-swap"));
+  expect([...classes].toSorted()).toEqual(["c15t-dark", "dark"]);
   stop();
+  const toggles = toggle.mock.calls.length;
+  document.dispatchEvent(new Event("astro:after-swap"));
+  expect(toggle).toHaveBeenCalledTimes(toggles);
   expect(disconnect).toHaveBeenCalledTimes(1);
   expect(Reflect.has(window, "__blumeTrack")).toBe(false);
   document.dispatchEvent(new Event("click"));

@@ -38,7 +38,7 @@ export const scriptAdapterSchema = adapterDescriptorSchema(
  * external via `src`, inline via `content`. `attributes` is the verbatim
  * passthrough here — every entry lands on the tag as-is.
  *
- * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
+ * @deprecated Use blume/integrations/* in consent.ts. Removed in the next major release.
  */
 export const script = (options: ScriptOptions): ScriptAdapter => ({
   kind: "script",

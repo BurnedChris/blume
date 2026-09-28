@@ -1,0 +1,89 @@
+/* Injected ahead of c15t's stylesheet. Cascade layers rank by first mention,
+   and c15t's rules live in `@layer components`; without this, that layer is
+   declared before Tailwind's own order and sinks below the `base` preflight,
+   which zeroes the banner's padding and borders. Same order Tailwind emits. */
+@layer properties, theme, base, components, utilities;
+
+/* c15t pins the preference list to a system font stack instead of its
+   `--c15t-font-family` token, so the category rows ignored the site font.
+   Doubled `:root` outranks c15t's later, unlayered `:root` rule. */
+:root:root {
+  --consent-manager-font-family: var(--c15t-font-family);
+  /* One flat surface, like Blume's other cards, instead of a tinted footer. */
+  --consent-banner-footer-background-color: var(--c15t-surface);
+  --consent-banner-footer-background-color-dark: var(--c15t-surface);
+}
+
+/* A blocking c15t dialog locks scroll by hiding the body's overflow and
+   padding the body by the scrollbar's width. That keeps in-flow content in
+   place, but the viewport still widens, so Blume's fixed header controls and
+   right-edge panels jump sideways on systems with classic scrollbars. Lock
+   the way Blume's own modals do while the dialog is mounted (c15t mounts it
+   for exactly as long as it holds the lock): keep the gutter on `<html>`,
+   and drop c15t's padding so the gutter isn't reserved twice. */
+html:has([data-testid="consent-dialog-root"][data-blocking="true"]) {
+  overflow: hidden !important;
+  scrollbar-gutter: stable;
+}
+html:has([data-testid="consent-dialog-root"][data-blocking="true"]) body {
+  padding-right: 0 !important;
+}
+
+/* c15t paints its "Secured by" tag in the accent color with white text, and
+   has no tokens for it. Draw it as a tab of the card instead: same surface
+   and border, muted text, with the accent kept on the c15t mark alone. */
+[data-branding][data-variant$="-tag"] {
+  border-color: var(--c15t-border);
+  background-color: var(--c15t-surface);
+  color: var(--c15t-text-muted);
+}
+[data-branding][data-variant$="-tag"] * {
+  color: inherit;
+}
+[data-branding][data-variant$="-tag"] svg {
+  color: var(--c15t-primary);
+}
+/* c15t leaves out the edge the tag shares with the card so the two merge.
+   Draw it, over the card's own border line, so the tag reads as separate. */
+[data-branding][data-variant="banner-tag"] {
+  border-bottom-width: 1px;
+}
+[data-branding][data-variant="dialog-tag"] {
+  border-top-width: 1px;
+  transform: translateY(calc(100% - 1px));
+}
+
+/* From `lg`, fill the gutter beside the article instead of covering it.
+   `--blume-consent-free` is the room before the article's leading edge
+   (CONSENT_FIT_SCRIPT); take off the 1rem inset and a 1.5rem gap. Never
+   narrower than the sidebar's 15.5rem content box, nor wider than c15t's
+   own 27.5rem. Narrower screens keep c15t's full-width card. */
+@media (min-width: 64rem) {
+  :root:root {
+    --consent-banner-max-width: clamp(
+      15.5rem,
+      calc(var(--blume-consent-free, 0px) - 2.5rem),
+      27.5rem
+    );
+  }
+  [data-testid="consent-banner-root"][data-variant="floating"] {
+    padding: 1rem;
+  }
+  /* c15t lays actions out by viewport width, so on a wide screen its
+     compact row can overflow this card. Split Reject/Accept evenly on one
+     row and give Customize the full width below. */
+  [data-testid="consent-banner-footer"] {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+  [data-testid="consent-banner-footer-sub-group"] {
+    display: flex;
+    gap: 0.5rem;
+    width: 100%;
+  }
+  [data-testid="consent-banner-footer-sub-group"] > button {
+    flex: 1;
+    min-width: 0;
+  }
+}

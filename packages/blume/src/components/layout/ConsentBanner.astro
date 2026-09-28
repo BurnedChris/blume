@@ -2,7 +2,9 @@
 import ConsentBanner from "@c15t/astro/components/consent-banner.astro";
 import ConsentDialog from "@c15t/astro/components/consent-dialog.astro";
 import type { UIStrings } from "../../core/i18n-ui.ts";
+import { CONSENT_FIT_SCRIPT } from "./head-scripts.ts";
 interface Props { policy?: string; strings?: UIStrings["consent"]; }
 ---
 <ConsentBanner />
 <ConsentDialog />
+<script is:inline set:html={CONSENT_FIT_SCRIPT} />

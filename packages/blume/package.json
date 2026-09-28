@@ -100,8 +100,13 @@
     "./sources/*": "./src/core/sources/*",
     "./theme/*": "./src/theme/*",
     "./package.json": "./package.json",
+    "./consent/client": {
+      "types": "./dist/types/consent/client.d.ts",
+      "default": "./src/consent/client.ts"
+    },
     "./consent/integration": "./src/consent/integration.ts",
     "./consent/runtime": "./src/consent/runtime.ts",
+    "./consent/c15t.css": "./src/consent/c15t.css",
     "./integrations/adobe-analytics": {
       "types": "./dist/types/integrations/adobe-analytics.d.ts",
       "default": "./src/integrations/adobe-analytics.ts"
@@ -141,6 +146,10 @@
     "./integrations/fathom-analytics": {
       "types": "./dist/types/integrations/fathom-analytics.d.ts",
       "default": "./src/integrations/fathom-analytics.ts"
+    },
+    "./integrations/front-chat": {
+      "types": "./dist/types/integrations/front-chat.d.ts",
+      "default": "./src/integrations/front-chat.ts"
     },
     "./integrations/google-tag": {
       "types": "./dist/types/integrations/google-tag.d.ts",
@@ -194,9 +203,17 @@
       "types": "./dist/types/integrations/mixpanel-analytics.d.ts",
       "default": "./src/integrations/mixpanel-analytics.ts"
     },
+    "./integrations/one-dollar-stats": {
+      "types": "./dist/types/integrations/one-dollar-stats.d.ts",
+      "default": "./src/integrations/one-dollar-stats.ts"
+    },
     "./integrations/openai-pixel": {
       "types": "./dist/types/integrations/openai-pixel.d.ts",
       "default": "./src/integrations/openai-pixel.ts"
+    },
+    "./integrations/pinterest-tag": {
+      "types": "./dist/types/integrations/pinterest-tag.d.ts",
+      "default": "./src/integrations/pinterest-tag.ts"
     },
     "./integrations/pirsch": {
       "types": "./dist/types/integrations/pirsch.d.ts",
@@ -271,10 +288,10 @@
     "@astrojs/node": "^11.1.5",
     "@astrojs/react": "^6.0.5",
     "@astrojs/vercel": "^11.0.10",
-    "@c15t/astro": "file:../../.c15t-local/astro",
-    "@c15t/core": "file:../../.c15t-local/core",
-    "@c15t/react": "file:../../.c15t-local/react",
-    "@c15t/scripts": "file:../../.c15t-local/scripts",
+    "@c15t/astro": "3.0.0-alpha.3",
+    "@c15t/core": "3.0.0-alpha.3",
+    "@c15t/react": "3.0.0-alpha.3",
+    "@c15t/scripts": "3.0.0-alpha.2",
     "@clack/prompts": "^1.8.0",
     "@iconify-json/lucide": "^1.2.131",
     "@iconify/types": "^2.0.0",

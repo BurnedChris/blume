@@ -28,7 +28,7 @@ export const adobeAdapterSchema = adapterDescriptorSchema(
  * embed script, and the property's own rules decide what to track. Copy the
  * URL from the environment's install instructions in Data Collection.
  *
- * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
+ * @deprecated Use blume/integrations/* in consent.ts. Removed in the next major release.
  */
 export const adobe = (options: AdobeOptions): AdobeAdapter => ({
   kind: "adobe",

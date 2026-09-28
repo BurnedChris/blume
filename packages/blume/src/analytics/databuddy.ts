@@ -38,7 +38,7 @@ export const databuddyAdapterSchema = adapterDescriptorSchema(
 /**
  * Databuddy. The client ID is public — it's in the tag on every page.
  *
- * @deprecated Use blume/integrations/* in a consent client entrypoint. Removed in the next major release.
+ * @deprecated Use blume/integrations/* in consent.ts. Removed in the next major release.
  */
 export const databuddy = (options: DatabuddyOptions): DatabuddyAdapter => ({
   kind: "databuddy",

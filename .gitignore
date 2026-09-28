@@ -44,6 +44,3 @@ packages/video/public/music/
 
 # Benchmark fixtures (bench/fixture.ts), on the package realpath like the e2e ones
 packages/blume/blume-bench-*
-
-# Temporary c15t v3 alpha development packages
-.c15t-local/

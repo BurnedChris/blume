@@ -12,8 +12,8 @@ description: Keep existing analytics adapters working, or move integrations one 
 | Path | Required changes |
 | --- | --- |
 | Keep existing analytics | Temporarily keep `analytics` and `blume/analytics` imports, with a migration warning. Migrate before the next major release. |
-| Move one integration | Remove that entry from `analytics`, register its SDK script in a client entrypoint, and keep the remaining adapters. |
-| Move everything | Register all scripts in the client entrypoint, then remove the empty `analytics` list and its imports. Keep the `consent` configuration that connects the entrypoint. |
+| Move one integration | Remove that entry from `analytics`, register its SDK script in `consent.ts`, and keep the remaining adapters. |
+| Move everything | Register all scripts in `consent.ts`, then remove the empty `analytics` list and its imports. Keep any `consent` configuration you already have. |
 
 Do not put an SDK script directly into `analytics`. Analytics adapters are serialized descriptors; SDK scripts contain functions that must remain in the browser module.
 
@@ -33,24 +33,22 @@ export default defineConfig({
 });
 ```
 
-To move Adobe first, remove only its adapter and connect a browser module:
+To move Adobe first, remove only its adapter, and add it to a `consent.ts` at your project root:
 
 ```ts blume.config.ts
 import { defineConfig } from "blume";
 import { segment } from "blume/analytics";
-import { c15t } from "blume/consent";
 
 export default defineConfig({
   analytics: [segment({ key: "YOUR_WRITE_KEY" })],
-  consent: c15t({ clientEntrypoint: "./consent.client.ts" }),
 });
 ```
 
-```ts consent.client.ts
-import type { ConsentClientOptions } from "blume/consent";
+```ts consent.ts
+import { defineConsent } from "blume/consent/client";
 import { adobeAnalytics } from "blume/integrations/adobe-analytics";
 
-export default {
+export default defineConsent({
   scripts: import.meta.env.PROD
     ? [
         adobeAnalytics({
@@ -58,25 +56,25 @@ export default {
         }),
       ]
     : [],
-} satisfies ConsentClientOptions;
+});
 ```
 
-The path is relative to your site root. If you already configure `c15t()`, add `clientEntrypoint` to its existing options, preserving your backend, policy, translations, and legal links. With `osano()` or `ethyca()`, add the same option to that provider instead; do not replace your consent authority just to migrate scripts. See [Cookie consent](/docs/configuration/consent#keep-osano-or-fides).
+Blume finds `consent.ts` by name; no config points at it. An existing `c15t()`, `osano()`, or `ethyca()` configuration keeps working unchanged, with its backend, policy, translations, and legal links; do not replace your consent authority just to migrate scripts. See [Cookie consent](/docs/configuration/consent#keep-osano-or-fides).
 
 Keep each vendor registered in one place. Blume combines legacy adapters and client scripts; it does not deduplicate the same vendor configured through both APIs. Also remove any duplicate loaders in custom head HTML, tag containers, or CMP auto-loading rules. Give custom script entries stable, unique IDs; keep the vendor identity and lifecycle callbacks returned by SDK helpers.
 
-Legacy adapters are disabled in `blume dev`. Client entrypoint scripts run in development unless you guard them with `import.meta.env.PROD`, as above. That guard preserves the legacy production-only behavior.
+Legacy adapters are disabled in `blume dev`. Scripts in `consent.ts` run in development unless you guard them with `import.meta.env.PROD`, as above. That guard preserves the legacy production-only behavior.
 
 ## Preserve navigation pageviews
 
-Blume uses a client router. Segment and Hightouch need explicit navigation pageviews; PostHog needs them only when its own history tracking is disabled and pageview capture is enabled. Legacy adapters configure this automatically. For SDK scripts, declare the relevant vendors in the client entrypoint's `pageviews` list:
+Blume uses a client router. Segment and Hightouch need explicit navigation pageviews; PostHog needs them only when its own history tracking is disabled and pageview capture is enabled. Legacy adapters configure this automatically. For SDK scripts, declare the relevant vendors in the `pageviews` list of `consent.ts`:
 
-```ts consent.client.ts
-import type { ConsentClientOptions } from "blume/consent";
+```ts consent.ts
+import { defineConsent } from "blume/consent/client";
 import { posthog } from "blume/integrations/posthog";
 import { segment } from "blume/integrations/segment";
 
-export default {
+export default defineConsent({
   scripts: import.meta.env.PROD
     ? [
         posthog({
@@ -88,19 +86,10 @@ export default {
       ]
     : [],
   pageviews: ["posthog", "segment"],
-} satisfies ConsentClientOptions;
-```
-
-Remove the migrated PostHog and Segment entries from `analytics`. If these are your only integrations, the complete SDK-only configuration is:
-
-```ts blume.config.ts
-import { defineConfig } from "blume";
-import { c15t } from "blume/consent";
-
-export default defineConfig({
-  consent: c15t({ clientEntrypoint: "./consent.client.ts" }),
 });
 ```
+
+Remove the migrated PostHog and Segment entries from `analytics`. If these are your only integrations, `blume.config.ts` needs no `analytics` or `consent` entry at all: `consent.ts` on its own turns on the offline banner.
 
 This preserves the legacy PostHog host and defaults. The native c15t helper otherwise defaults to EU hosting and a newer PostHog defaults date. Copy your own host and initialization options when you have overridden them.
 
@@ -128,7 +117,7 @@ All subpaths below begin with `blume/integrations/`. These mappings preserve the
 | `hotjar()` | `hotjar`: `hotjar()` | `id` → `siteId`; keep `version`. |
 | `logrocket()` | `logrocket`: `logRocket()` | `id` → `appId`; remaining options → `initOptions`. Note the capital `R` in the factory. |
 | `mixpanel()` | `mixpanel-analytics`: `mixpanelAnalytics()` | Keep `token`; remaining init options → `initOptions`. Translate `region` to `api_host` and preserve `track_pageview` as below. |
-| `oneDollarStats()` | Custom script object | No native helper in this SDK snapshot. Keep the legacy adapter, or use the equivalent object below. |
+| `oneDollarStats()` | `one-dollar-stats`: `oneDollarStats()` | Same options: `hostname` plus string settings forwarded as `data-*` attributes. The helper rejects setting names outside lowercase letters, digits, and hyphens. |
 | `pirsch()` | `pirsch`: `pirsch()` | `code` → `identificationCode`; preserve remaining `data-*` attributes. |
 | `plausible()` | `plausible-analytics`: `plausibleAnalytics()` | Keep `domain`; `host` → `scriptUrl` ending in `/js/script.js` (default `https://plausible.io/js/script.js`). Preserve remaining `data-*` attributes. |
 | `posthog()` | `posthog`: `posthog()` | `key` → `id`, `host` → `apiHost`; remaining options → `initOptions`. Preserve host, defaults, and pageview ownership as above. |
@@ -152,19 +141,7 @@ const fathomWithOptions = {
 };
 ```
 
-Put `fathomWithOptions` in the client entrypoint's `scripts` array. The same pattern works for Databuddy, Pirsch, and Plausible legacy attributes.
-
-OneDollarStats can stay as a legacy adapter during this release, but must migrate before the next major release. To move it, use this entry in the client module's `scripts` array:
-
-```ts
-{
-  id: "one-dollar-stats",
-  vendor: "one-dollar-stats",
-  category: "measurement",
-  src: "https://assets.onedollarstats.com/stonks.js",
-  attributes: { "data-hostname": "docs.example.com" },
-}
-```
+Put `fathomWithOptions` in the `scripts` array of `consent.ts`. The same pattern works for Databuddy, Pirsch, and Plausible legacy attributes.
 
 For a legacy inline custom script, the equivalent entry is:
 
@@ -190,7 +167,7 @@ These consent changes apply even when you keep `blume/analytics`:
 - SDK helpers can load before consent using their denied-state behavior. Loading a tag container is not permission for every tag to run. Check the SDK policy and your container rules.
 - Existing `native()` configuration remains supported, but its old `blume-consent` storage is not imported. Returning visitors are asked again. Move old `i18n.ui.consent` banner overrides to c15t's `i18n` messages and check every supported language.
 - Osano and Fides can remain the decision source, UI, and record owner. c15t manages scripts without a second banner or copying provider decisions into new c15t receipts. Missing permissions remain denied.
-- Blume enables reload on consent withdrawal by default. The setting is `c15t({ reloadOnRevocation: false })` only when your integrations can safely handle withdrawal without a reload.
+- Blume enables reload on consent withdrawal by default. The setting is `c15t({ reloadOnConsentRevoked: false })` only when your integrations can safely handle withdrawal without a reload.
 - Offline mode has browser storage but no server-side consent records. Connecting a backend is independent of migrating scripts; preserve or configure the required backend and policy through `c15t()`.
 
 See [Cookie consent](/docs/configuration/consent) for backend, provider, policy, and translation configuration.

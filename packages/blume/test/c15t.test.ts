@@ -14,9 +14,19 @@ import {
   segment,
   vercel,
 } from "../src/analytics/index.ts";
-import { c15t, ethyca, native, osano } from "../src/consent/index.ts";
+import { defineConsent } from "../src/consent/client.ts";
+import {
+  c15t,
+  ethyca,
+  hosted,
+  manifest,
+  native,
+  offline,
+  osano,
+} from "../src/consent/index.ts";
 import type { ConsentClientOptions } from "../src/consent/index.ts";
 import { blumeConsentIntegrations } from "../src/consent/integration.ts";
+import { findConsentFile, resolveProjectContext } from "../src/core/project.ts";
 import { blumeConfigSchema } from "../src/core/schema.ts";
 
 it("keeps zero-config sites free of a consent runtime and activates offline consent for GTM", () => {
@@ -44,6 +54,36 @@ it("preserves explicit consent authorities and hosted mode", () => {
     ).toContain("blume:consent");
   }
 });
+it("takes c15t v3's mode factories as the serializable mode", () => {
+  for (const mode of [
+    hosted({ url: "https://consent.example.com" }),
+    manifest({ backendURL: "https://consent.example.com" }),
+    offline(),
+  ]) {
+    expect(
+      blumeConfigSchema.parse({ consent: c15t({ mode }) }).consent?.options
+    ).toEqual({ mode });
+  }
+  expect(c15t().options.mode).toEqual(offline());
+});
+
+it("finds consent.ts at the project root and types it with defineConsent", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "blume-consent-file-"));
+  try {
+    const config = blumeConfigSchema.parse({});
+    expect(findConsentFile(root)).toBeNull();
+    expect(resolveProjectContext(root, config).consentFile).toBeNull();
+    await writeFile(path.join(root, "consent.ts"), "export default {};");
+    expect(resolveProjectContext(root, config).consentFile).toBe(
+      path.join(root, "consent.ts")
+    );
+    const options = { pageviews: ["segment" as const], scripts: [] };
+    expect(defineConsent(options)).toBe(options);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it("rejects callback-bearing config instead of losing functions in JSON", () => {
   expect(
     blumeConfigSchema.safeParse({
@@ -155,18 +195,125 @@ it("runs every legacy adapter through the actual c15t SDK and preserves loader o
   );
 });
 
+it("declares Tailwind's layer order ahead of c15t's stylesheet", async () => {
+  const integrations = blumeConsentIntegrations({
+    analytics: [],
+    consent: c15t(),
+    root: "/site",
+  });
+  // c15t injects its `@layer components` CSS as a page-ssr import; cascade
+  // layers rank by first mention, so the order statement must land first.
+  expect(integrations.map((entry) => entry.name)).toEqual([
+    "blume:consent-styles",
+    "@c15t/astro",
+    "blume:consent",
+  ]);
+  const injectScript = mock();
+  // SAFETY: this hook consumes only injectScript.
+  await integrations[0]?.hooks["astro:config:setup"]?.({
+    injectScript,
+  } as never);
+  expect(injectScript.mock.calls).toEqual([
+    ["page-ssr", 'import "blume/consent/c15t.css";'],
+  ]);
+});
+
+/** Run c15t's and Blume's setup hooks and read what c15t serialized. */
+const setupConsent = async (consent: ReturnType<typeof c15t>) => {
+  const integrations = blumeConsentIntegrations({
+    analytics: [],
+    consent,
+    root: "/site",
+  });
+  const updateConfig = mock();
+  const injectScript = mock();
+  for (const name of ["@c15t/astro", "blume:consent"]) {
+    // SAFETY: c15t's setup and Blume's consume only these Astro fields.
+    // oxlint-disable-next-line no-await-in-loop -- Order matters: c15t, then Blume.
+    await integrations
+      .find((entry) => entry.name === name)
+      ?.hooks["astro:config:setup"]?.({
+        addMiddleware: mock(),
+        command: "build",
+        injectRoute: mock(),
+        injectScript,
+        updateConfig,
+      } as never);
+  }
+  const serialized = updateConfig.mock.calls
+    .flatMap(([config]) => config.vite.plugins)
+    .find((plugin) => plugin.name === "c15t:options")
+    .load("\0virtual:c15t/options");
+  return {
+    options: JSON.parse(
+      serialized.replace(/^export default /u, "").slice(0, -1)
+    ),
+    styles: injectScript.mock.calls
+      .filter(([stage]) => stage === "page-ssr")
+      .map(([, source]) => source),
+  };
+};
+
+it("styles c15t from Blume's theme tokens and leaves dark mode to the site", async () => {
+  // SAFETY: colorScheme is outside C15tOptions; this checks a JS config's value is overridden.
+  const defaults = await setupConsent(c15t({ colorScheme: "dark" } as never));
+  expect(defaults.options.colorScheme).toBe("light");
+  // No accent-colored action outranks the equal Reject/Accept pair.
+  expect(defaults.options.presentation.prompt.primaryActions).toEqual([]);
+  expect(defaults.options.theme).toMatchObject({
+    colors: {
+      primary: "var(--blume-action)",
+      surface: "var(--blume-background)",
+      text: "var(--blume-foreground)",
+    },
+    dark: { overlay: "oklch(0 0 0 / 0.7)" },
+    radius: { lg: "var(--blume-radius)" },
+    typography: { fontFamily: "var(--blume-font-body)" },
+  });
+  // c15t's stylesheet, then the dialog's, which Astro 7 drops from the island.
+  expect(defaults.styles).toEqual([
+    expect.stringContaining("@c15t/astro/dist/styles.css"),
+    expect.stringContaining("@c15t/ui/dist/styles/dialog.css"),
+  ]);
+
+  const custom = await setupConsent(
+    c15t({
+      presentation: { prompt: { primaryActions: ["accept"] } },
+      styles: false,
+      theme: {
+        colors: { primary: "red" },
+        slots: { consentBannerCard: "shadow-none" },
+        typography: { fontFamily: "Inter" },
+      },
+    })
+  );
+  expect(custom.options.presentation.prompt.primaryActions).toEqual(["accept"]);
+  // The site's tokens win one at a time; Blume's fill the rest.
+  expect(custom.options.theme.colors.primary).toBe("red");
+  expect(custom.options.theme.colors.surface).toBe("var(--blume-background)");
+  expect(custom.options.theme.typography).toEqual({ fontFamily: "Inter" });
+  expect(custom.options.theme.slots).toEqual({
+    consentBannerCard: "shadow-none",
+  });
+  expect(custom.styles).toEqual([]);
+});
+
 it("wires the Astro client module, preserves callbacks, and suppresses legacy trackers in dev", async () => {
+  // A root `consent.ts` is found by name; a site without one gets none.
+  const withFile = await mkdtemp(path.join(tmpdir(), "blume-consent wire-"));
+  const withoutFile = await mkdtemp(path.join(tmpdir(), "blume-consent-none-"));
+  await writeFile(path.join(withFile, "consent.ts"), "export default {};");
   for (const command of ["build", "dev"] as const) {
-    for (const consent of [
-      c15t({ clientEntrypoint: "consent.client.ts" }),
-      native({ policy: "/privacy" }),
-      native({ policy: "https://example.com/privacy" }),
-    ]) {
+    for (const [consent, root] of [
+      [c15t(), withFile],
+      [native({ policy: "/privacy" }), withoutFile],
+      [native({ policy: "https://example.com/privacy" }), withoutFile],
+    ] as const) {
       const integration = blumeConsentIntegrations({
         analytics: [vercel()],
         basePath: "/docs",
         consent,
-        root: "/site with spaces",
+        root,
       }).find((entry) => entry.name === "blume:consent");
       const updateConfig = mock();
       const injectScript = mock();
@@ -188,14 +335,21 @@ it("wires the Astro client module, preserves callbacks, and suppresses legacy tr
         command === "build"
       );
       expect(source).toContain(
-        consent.kind === "c15t"
-          ? "/site with spaces/consent.client.ts"
+        root === withFile
+          ? `import extension from ${JSON.stringify(path.join(withFile, "consent.ts"))};`
           : "const extension = {}"
       );
-      expect(injectScript.mock.calls[0]?.[0]).toBe("page");
-      expect(injectScript.mock.calls[0]?.[1]).toContain("startConsentRuntime");
+      const [styles, page] = injectScript.mock.calls;
+      expect(styles?.[0]).toBe("page-ssr");
+      expect(styles?.[1]).toMatch(
+        /^import ".+\/@c15t\/ui\/dist\/styles\/dialog\.css";$/u
+      );
+      expect(page?.[0]).toBe("page");
+      expect(page?.[1]).toContain("startConsentRuntime");
     }
   }
+  await rm(withFile, { force: true, recursive: true });
+  await rm(withoutFile, { force: true, recursive: true });
 });
 
 it("preserves Vercel's debug loader and custom script URL", () => {
@@ -222,13 +376,13 @@ it.each([
     const root = await mkdtemp(path.join(tmpdir(), "blume-sdk-migration-"));
     try {
       await writeFile(
-        path.join(root, "consent.client.mjs"),
+        path.join(root, "consent.mjs"),
         `import { segment } from ${JSON.stringify(new URL("../src/integrations/segment.ts", import.meta.url).href)};
 export default { scripts: [segment({ writeKey: "seg" })], pageviews: ["segment"], callbacks: { onError: () => "preserved" } };`
       );
       const integration = blumeConsentIntegrations({
         analytics: legacy ? [posthog({ key: "ph" })] : [],
-        consent: c15t({ clientEntrypoint: "./consent.client.mjs" }),
+        consent: c15t(),
         root,
       }).find((entry) => entry.name === "blume:consent");
       const updateConfig = mock();
@@ -261,7 +415,7 @@ export default { scripts: [segment({ writeKey: "seg" })], pageviews: ["segment"]
         legacy && command === "build" ? ["posthog", "segment"] : ["segment"]
       );
       expect(client.callbacks?.onError).toEqual(expect.any(Function));
-      expect(injectScript.mock.calls[0]?.[1]).toContain(
+      expect(injectScript.mock.calls.at(-1)?.[1]).toContain(
         "startConsentRuntime(extension.scripts, extension.pageviews)"
       );
     } finally {

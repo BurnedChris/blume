@@ -142,15 +142,7 @@ export const analyticsClientModule = (adapters: AnalyticsAdapter[]): string => {
         break;
       }
       case "one-dollar-stats": {
-        entries.push(
-          JSON.stringify({
-            attributes: attrs(adapter.options),
-            category: "measurement",
-            id: "one-dollar-stats",
-            src: "https://assets.onedollarstats.com/stonks.js",
-            vendor: "one-dollar-stats",
-          })
-        );
+        add("one-dollar-stats", "oneDollarStats", adapter.options);
         break;
       }
       case "pirsch": {

@@ -6,8 +6,6 @@ import { adapterDescriptorSchema } from "../core/adapter.ts";
 
 /** Options for {@link ethyca}. */
 export interface EthycaOptions {
-  /** Browser module exporting c15t scripts and lifecycle callbacks. */
-  clientEntrypoint?: string;
   /** c15t category to provider consent property/notice mapping. Unmapped categories stay denied. */
   categories?: Partial<
     Record<"measurement" | "marketing" | "experience" | "functionality", string>
@@ -30,7 +28,6 @@ export const ethycaOptionsSchema = z.strictObject({
       z.string().min(1)
     )
     .optional(),
-  clientEntrypoint: z.string().min(1).optional(),
   notice: z.string().min(1).optional(),
   privacyCenter: z.url({ protocol: /^https?$/u }),
   propertyId: z.string().min(1).optional(),

@@ -2,31 +2,22 @@
 
 This draft replaces Blume's consent state machine and vendor loaders with c15t's Astro integration. Blume owns configuration, application event names, and the boundary that keeps raw search and assistant text out of vendor events. c15t owns consent evaluation, script lifecycle, SDK callbacks, and event delivery. Osano and Fides can remain the consent authority and UI while c15t runs the scripts.
 
-## Prepare the unpublished dependency
+## Dependencies
 
-Use [c15t/c15t#1204](https://github.com/c15t/c15t/pull/1204), the companion `christopher/blume-runtime` branch based on `v3`. An existing alpha without that branch does not contain the external consent source and event dispatcher APIs used here.
+Blume pins the published c15t v3 alphas exactly (`@c15t/astro`, `@c15t/core`, `@c15t/react` at `3.0.0-alpha.3`; `@c15t/scripts` at `3.0.0-alpha.2`, the latest publish of that package from the same release train). They include the external consent source and event dispatcher from [c15t/c15t#1204](https://github.com/c15t/c15t/pull/1204). Prerelease ranges would float to later alphas whose API may differ, so bump the pins deliberately and rerun the checks below.
 
-In the c15t checkout:
+To upgrade, change the four versions in `packages/blume/package.json`, then:
 
 ```sh
 bun install
-bun --bun turbo run build --filter=@c15t/astro --filter=@c15t/react --filter=@c15t/scripts
-```
-
-In this Blume checkout, use the pinned Bun version from package.json (1.4.2):
-
-```sh
-bun scripts/link-c15t.ts /absolute/path/to/c15t
-bun install
+bun run sync:c15t-integrations
 bun run check
 bun run typecheck
 bun run test:coverage
 bun run build
 ```
 
-The preparation script copies the packages' distribution files into ignored `.c15t-local` workspaces. The four `file:` dependencies are intentionally temporary. Rebuild and rerun the preparation command after editing c15t. Blume's coverage gate excludes these external distributions; the c15t checkout runs its own coverage suites.
-
-Before merging or publishing, replace the file dependencies with the released alpha versions, remove the temporary workspaces and linking script, regenerate the lockfile, and verify a clean install and packed consumer build. Until that change, a clean checkout and ordinary CI install require the preparation step above. Do not publish Blume with these file dependencies.
+`sync:c15t-integrations` regenerates the `blume/integrations/*` re-exports and the docs catalog from the installed SDK's export map; commit what it changes.
 
 ## Framework boundary
 
@@ -36,23 +27,14 @@ Blume uses the Astro adapter because its generated site is Astro. Other c15t fra
 
 ## Browser verification
 
-Create a small fixture with `docs/index.md`, `docs/next.md`, and a link from the first page to `/next`. Link its `node_modules/blume` to this checkout's `packages/blume`. Configure:
+Create a small fixture with `docs/index.md`, `docs/next.md`, and a link from the first page to `/next`. Link its `node_modules/blume` to this checkout's `packages/blume`. No consent config is needed; create a root `consent.ts`, which Blume finds by name:
 
 ```ts
-import { c15t } from "blume/consent";
-export default {
-  consent: c15t({ clientEntrypoint: "./consent.client.ts" }),
-};
-```
-
-Create `consent.client.ts`:
-
-```ts
-import type { ConsentClientOptions } from "blume/consent";
+import { defineConsent } from "blume/consent/client";
 import { googleTagManager } from "blume/integrations/google-tag-manager";
-export default {
+export default defineConsent({
   scripts: import.meta.env.PROD ? [googleTagManager({ id: "GTM-TEST" })] : [],
-} satisfies ConsentClientOptions;
+});
 ```
 
 Run `blume build` from that fixture (use the checkout's `packages/blume/bin/blume.mjs` with Node), then serve its `dist` directory on port 4317. For network-independent builds, set the theme font roles to a local font file as in `test/configured-integrations.test.ts`.
@@ -60,22 +42,41 @@ Run `blume build` from that fixture (use the checkout's `packages/blume/bin/blum
 ```sh
 python3 -m http.server 4317 --bind 127.0.0.1 --directory /absolute/path/to/fixture/dist
 # In another terminal, from the Blume checkout:
-node scripts/verify-c15t-browser.mjs /absolute/path/to/c15t
+node scripts/verify-c15t-browser.mjs
 ```
 
-The browser check uses the c15t checkout's Playwright installation and intercepts the GTM request. It verifies denied event suppression, acceptance, one runtime/container across navigation, preferences, and withdrawal/reload. It does not send analytics to a real account.
+The browser check uses the docs app's Playwright installation (`bunx playwright install chromium` in `apps/docs` if Chromium is missing) and intercepts the GTM request. It verifies denied event suppression, acceptance, one runtime/container across navigation, a styled preference dialog that follows the site theme rather than the OS color scheme, and withdrawal/reload. It does not send analytics to a real account.
 
 Also test external Osano/Fides initialization, category changes, unavailable provider, withdrawal and preferences against the deployment's real CMP configuration. Unit tests exercise both adapters, missing providers, listener cleanup, theme/language synchronization and the SDK conversion for every legacy analytics adapter.
+
+## c15t alpha.3 workarounds
+
+Blume works around three c15t issues. Each has a comment at its site; remove them once c15t ships the fix.
+
+- Astro 7 drops CSS that a page script reaches only through a dynamic import, so the React and Svelte dialog islands open unstyled. c15t already injects `@c15t/ui/styles/dialog.css` page-wide for Vue; Blume does the same for React (`consent/integration.ts`). Reproduces in a bare Astro 7 app with `ui: 'react'` or `'svelte'`; Astro 5 emits the chunk's CSS.
+- The Astro dialog islands pass no `colorScheme` to the framework provider, so React's `useColorScheme(undefined)` mirrors a `.dark` class onto `c15t-dark` while the dialog is open. Blume sets `colorScheme: "light"` (c15t leaves the class alone), then owns `c15t-dark` and keeps `.dark` in step with `data-theme` (`consent/runtime.ts`, `ConsentHead.astro`). The fix upstream is `colorScheme: null` in `buildProviderProps`.
+- `--consent-manager-font-family` is a hardcoded system stack rather than `var(--c15t-font-family)`, so the preference list ignores the theme font (`consent/c15t.css`).
+
+The banner and dialog map c15t's color, radius, shadow and font tokens to `--blume-*` variables, which switch with the theme, so one set of values serves both palettes. A site's `c15t({ theme })` overrides them group by group.
+
+## UI workarounds for the pinned alphas
+
+Blume works around four `@c15t/astro` 3.0.0-alpha.3 gaps. Remove each once c15t ships the fix:
+
+- Astro 7 drops CSS reached only through a page script's dynamic import, so the React and Svelte dialog islands open unstyled. Blume imports `@c15t/ui/styles/dialog.css` page-wide, as c15t already does for Vue (`src/consent/integration.ts`).
+- The dialog islands mount `ConsentProvider` without a `colorScheme`, so React mirrors a `.dark` class onto `c15t-dark` while the dialog is open. Blume passes `colorScheme: "light"`, owns `c15t-dark` itself, and keeps `.dark` in sync with its theme (`src/consent/runtime.ts`, `ConsentHead.astro`).
+- `--consent-manager-font-family` is a hardcoded system stack rather than `var(--c15t-font-family)` (`src/consent/c15t.css`).
+- The server-rendered banner ignores `theme.consentActions` and lays out actions by viewport width, so a narrow card on a wide screen overflows. Blume clears `primaryActions` and lays out the sidebar-width banner's footer itself (`src/consent/c15t.css`).
 
 ## Maintainer decisions and release boundaries
 
 - No analytics and no consent configuration means no consent UI or client assets.
 - Analytics alone enables offline c15t and an explicit opt-in policy everywhere. `native()` remains an offline compatibility alias; `c15t()` exposes the Astro options and an optional backend.
-- `blume/analytics` is deprecated and frozen, with removal planned for the next major release. Existing configurations produce a migration warning and continue to work. The [user migration guide](../apps/docs/content/docs/configuration/analytics-migration.mdx) covers all adapters, staged adoption, changed defaults, consent behavior, verification, and rollback. Client entrypoints can declare `pageviews` through `ConsentClientOptions` to retain Segment, Hightouch, or legacy-style PostHog router events. Never register a vendor in both APIs.
-- `blume/integrations/*` re-exports named public c15t script SDK entries. New scripts and callbacks belong in `clientEntrypoint`, preserving functions instead of serializing them.
+- `blume/analytics` is deprecated and frozen, with removal planned for the next major release. Existing configurations produce a migration warning and continue to work. The [user migration guide](../apps/docs/content/docs/configuration/analytics-migration.mdx) covers all adapters, staged adoption, changed defaults, consent behavior, verification, and rollback. `consent.ts` can declare `pageviews` to retain Segment, Hightouch, or legacy-style PostHog router events. Never register a vendor in both APIs.
+- `blume/integrations/*` re-exports named public c15t script SDK entries. New scripts and callbacks belong in the root `consent.ts`, preserving functions instead of serializing them. Blume finds it by name like `components.ts`, and its presence alone turns on offline consent. c15t/astro's own `clientEntrypoint` option is Blume's implementation detail, not part of Blume's config. Modes use c15t's `hosted()`, `manifest()`, and `offline()` factories, re-exported from `blume/consent`.
 - A helper's `alwaysLoad` policy can initialize a vendor in its denied mode before a decision. Loading GTM does not make all tags inside its container safe: configure those tags' consent requirements. Custom scripts default to the measurement gate.
 - External CMP grants are volatile permissions, not c15t receipts. The provider owns decisions, records, expiration and privacy signals. Missing or unavailable providers fail closed; c15t does not mount a second banner or persist fabricated records.
-- Blume enables c15t's `reloadOnRevocation` by default because many executed SDKs cannot unload. The reload follows synchronous consent callbacks and local persistence. Custom c15t options can override it.
+- Blume sets c15t's `reloadOnConsentRevoked` explicitly (c15t also defaults it on) because many executed SDKs cannot unload. The reload follows synchronous consent callbacks and local persistence. Custom c15t options can override it.
 - Legacy Blume native storage is not imported as a new receipt. Existing readers are asked again. Configure c15t translation messages for the site's languages; old Blume banner strings are not a c15t message pack.
 - c15t reduces duplicated consent-sensitive code and gives Blume one tested lifecycle to maintain. It does not establish legal compliance by itself; policy configuration, category mapping, tag behavior and backend deployment remain application responsibilities.
 
@@ -85,13 +86,13 @@ The migration update passed 5,297 Blume tests with 100% line/function coverage, 
 
 The Blume branch is based on the fork's `main`, including its newer search analytics and translated UI changes. The generated GTM-only site, custom client scripts with Fides and Osano, and an ejected Astro app were exercised in Chromium with third-party requests intercepted. Verified: denial, acceptance, preferences, one runtime across navigation, external authority without a c15t receipt/banner, and withdrawal/reload. A no-integration build was checked for absence of c15t assets. The ejected fixture includes a package.json before eject so Astro can discover its declared renderer dependencies.
 
-The companion c15t implementation is published in [c15t/c15t#1204](https://github.com/c15t/c15t/pull/1204), commit `8c7d0f85` on `christopher/blume-runtime`. Its shared-control checks pass across core and framework packages (4,018 tests), with the scripts suite also verified (434 tests). Build/types/lint passed for affected packages. Package documentation was regenerated from the canonical Astro guide. Check out that branch before preparing the local dependencies.
+The companion c15t implementation, [c15t/c15t#1204](https://github.com/c15t/c15t/pull/1204), is merged and shipped in the pinned alphas. Its shared-control checks pass across core and framework packages (4,018 tests), with the scripts suite also verified (434 tests). Build/types/lint passed for affected packages. Package documentation was regenerated from the canonical Astro guide.
 
 ## Updating SDK re-exports
 
-The installed `@c15t/scripts` package manifest is the source of truth for named public SDK subpaths. Its integration registry also generates the catalog in the [integrations guide](../apps/docs/content/docs/configuration/integrations.mdx), keeping rendered documentation and Markdown/agent mirrors in sync. After preparing or upgrading c15t, run `bun run sync:c15t-integrations` (also included in `bun run fix`) and commit the generated `src/integrations` files and package exports. The generator adds new entries and removes stale ones while preserving unrelated Blume exports. Root, package metadata, blocked exports, and wildcard deep imports are not mirrored.
+The installed `@c15t/scripts` package manifest is the source of truth for named public SDK subpaths. Its integration registry also generates the catalog in the [integrations guide](../apps/docs/content/docs/configuration/integrations.mdx), keeping rendered documentation and Markdown/agent mirrors in sync. After upgrading c15t, run `bun run sync:c15t-integrations` (also included in `bun run fix`) and commit the generated `src/integrations` files and package exports. The generator adds new entries and removes stale ones while preserving unrelated Blume exports. Root, package metadata, blocked exports, and wildcard deep imports are not mirrored.
 
-`bun run check:c15t-integrations` is read-only and fails on missing, changed, or stale exports. `bun run check` includes it, so the existing lint CI job enforces parity once its dependencies have been prepared. Do not generate during CI installation, since that would hide uncommitted drift.
+`bun run check:c15t-integrations` is read-only and fails on missing, changed, or stale exports. `bun run check` includes it, so the existing lint CI job enforces parity. Do not generate during CI installation, since that would hide uncommitted drift.
 
 The export/deprecation update passed 5,300 tests with 100% line/function coverage, uncached typechecks, the production workspace build, and lint/format plus SDK export parity checks. Built CLI `doctor --json` reports one migration warning and no errors for legacy analytics; the SDK-only fixture reports no diagnostics. Generator regression tests cover additions, nested exports, removals, read-only drift detection, and TypeScript condition order.
 

@@ -2,7 +2,8 @@
 // The site footer `footer` in blume.config.ts configures: social profile
 // icons and up to four link columns, below the content on every page. With
 // `consent` configured it also holds the Cookie settings link, which reopens
-// the reader's consent choices. Renders nothing when neither is set; a
+// the reader's consent choices while their policy owes consent UI (see
+// `consentTrigger` below). Renders nothing when neither is set; a
 // `components.ts` `Footer` replaces it.
 import data from "blume:data";
 
@@ -38,6 +39,18 @@ const columns = footerColumns(footer?.links ?? [], {
 const consentSettings = data.config.consent
   ? { ...EN_UI.consent, ...ui?.consent }.settings
   : null;
+// The Cookie settings control is a c15t trigger surface: c15t's client hides
+// it while the visitor's policy owes no consent UI (a `none` rule with no
+// rights) and shows it for opt-in, opt-out, IAB, rights, or an external CMP.
+// Start from the server's answer so it does not flash; fall back to visible.
+const consentUi = Astro.locals.c15t?.hasConsentUi ?? true;
+const hasLinks = socials.length > 0 || columns.length > 0;
+// When the control is the footer's only content, the whole footer is the
+// trigger, so hiding it leaves no empty bordered strip behind.
+const consentTrigger = {
+  "data-c15t-surface": "trigger",
+  hidden: consentUi ? undefined : true,
+};
 // Literal classes, so Tailwind's scan sees every one.
 const COLUMN_CLASSES = [
   "sm:grid-cols-1",
@@ -50,17 +63,22 @@ const linkClass =
 ---
 
 {
-  (socials.length > 0 || columns.length > 0 || consentSettings) && (
+  (hasLinks || consentSettings) && (
     <footer
       class:list={[
         "border-border border-t px-4 md:px-6",
-        socials.length > 0 || columns.length > 0 ? "py-10" : "py-6",
+        hasLinks ? "py-10" : "py-6",
       ]}
       data-blume-footer
+      {...(hasLinks ? {} : consentTrigger)}
     >
-      {(socials.length > 0 || columns.length > 0) && (
       <div class="flex flex-col gap-10 md:flex-row md:items-start md:justify-between">
-        {socials.length > 0 && (
+        {/* The leading column holds the site-level links: social profiles,
+            then Cookie settings, so the control belongs to a group instead
+            of floating on its own below the whole footer. */}
+        {(socials.length > 0 || consentSettings) && (
+          <div class="flex flex-col items-start gap-4">
+            {socials.length > 0 && (
           <ul class="flex flex-wrap items-center gap-4">
             {socials.map((social) => (
               <li>
@@ -88,6 +106,18 @@ const linkClass =
               </li>
             ))}
           </ul>
+            )}
+            {consentSettings && (
+              <button
+                class:list={[linkClass, "text-sm"]}
+                data-blume-consent-open
+                type="button"
+                {...(hasLinks ? consentTrigger : {})}
+              >
+                {consentSettings}
+              </button>
+            )}
+          </div>
         )}
         {columns.length > 0 && (
           <div
@@ -129,20 +159,6 @@ const linkClass =
           </div>
         )}
       </div>
-      )}
-      {consentSettings && (
-        <button
-          class:list={[
-            linkClass,
-            "text-sm",
-            (socials.length > 0 || columns.length > 0) && "mt-10",
-          ]}
-          data-blume-consent-open
-          type="button"
-        >
-          {consentSettings}
-        </button>
-      )}
     </footer>
   )
 }

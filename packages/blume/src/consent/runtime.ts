@@ -148,10 +148,11 @@ export const startConsentRuntime = (
     }
   };
   const syncPresentation = () => {
-    document.documentElement.classList.toggle(
-      "c15t-dark",
-      document.documentElement.dataset.theme === "dark"
-    );
+    const dark = document.documentElement.dataset.theme === "dark";
+    document.documentElement.classList.toggle("c15t-dark", dark);
+    // c15t's React dialog mounts its provider without a colorScheme, which
+    // makes it mirror `.dark` onto `c15t-dark` for as long as it is open.
+    document.documentElement.classList.toggle("dark", dark);
     const language = document.documentElement.lang;
     if (language && client.getConsent().translations?.language !== language) {
       client.runtime.kernel.set.language(language);
@@ -180,11 +181,15 @@ export const startConsentRuntime = (
   };
   dispatcher.pageview(location.pathname + location.search);
   document.addEventListener("click", onClick);
+  // c15t's own after-swap handler clears `c15t-dark` (colorScheme "light");
+  // this one is registered later, so it restores the site theme before paint.
+  document.addEventListener("astro:after-swap", syncPresentation);
   document.addEventListener("astro:page-load", onPageLoad);
   return () => {
     unsubscribe();
     observer.disconnect();
     document.removeEventListener("click", onClick);
+    document.removeEventListener("astro:after-swap", syncPresentation);
     document.removeEventListener("astro:page-load", onPageLoad);
     delete w.__blumeTrack;
   };
