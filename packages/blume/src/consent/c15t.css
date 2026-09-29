@@ -36,6 +36,9 @@ html:has([data-testid="consent-dialog-root"][data-blocking="true"]) body {
   border-color: var(--c15t-border);
   background-color: var(--c15t-surface);
   color: var(--c15t-text-muted);
+  /* c15t's highlight and drop shadow suit its filled tag; on a tab they
+     smudge the card edge the tab sits on. */
+  box-shadow: none;
 }
 [data-branding][data-variant$="-tag"] * {
   color: inherit;
