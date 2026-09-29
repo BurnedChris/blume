@@ -96,6 +96,11 @@ export interface ProjectContext {
   themeFile: string | null;
   /** Absolute path to the user `components.ts`/`.tsx`, if present. */
   componentsFile: string | null;
+  /**
+   * Absolute path to the user `consent.ts`, if present. Optional so hand-built
+   * test contexts still typecheck; `resolveProjectContext` always sets it.
+   */
+  consentFile?: string | null;
   /** Absolute path to the resolved config file, if any was found. */
   configFile: string | null;
 }

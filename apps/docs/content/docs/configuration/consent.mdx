@@ -1,100 +1,108 @@
 ---
 title: Cookie consent
-description: Ask readers before analytics runs, with Blume's own banner or a hosted consent manager like Osano or Ethyca, as an adapter in blume.config.ts.
+description: Use c15t for script loading and consent, with an offline banner, a c15t backend, or an existing Osano or Fides installation.
 ---
 
-Set `consent` in `blume.config.ts` to ask readers before your [analytics](/docs/configuration/analytics) runs. It takes one adapter from `blume/consent`: Blume's own banner, or a hosted consent manager you already use.
+Blume uses [c15t](https://c15t.com) to ask readers for consent and to load your scripts only as their answer allows. Add a `consent.ts` to your project root, next to `blume.config.ts`, and list your scripts in it. Blume finds the file by name and shows a consent banner; nothing in `blume.config.ts` is required.
 
-```ts blume.config.ts lineNumbers
+```ts consent.ts
+import { defineConsent } from "blume/consent/client";
+import { plausibleAnalytics } from "blume/integrations/plausible-analytics";
+
+export default defineConsent({
+  scripts: [plausibleAnalytics({ domain: "docs.example.com" })],
+});
+```
+
+[Integrations](/docs/configuration/integrations) lists every vendor helper and covers pageviews, custom scripts, and testing. A site with no `consent.ts`, no `consent` config, and no deprecated `analytics` list loads no c15t code at all.
+
+## Connect a backend
+
+On its own, `consent.ts` runs c15t in offline mode with an opt-in policy everywhere. Choices are stored in the reader's browser, with no server-side record and no central policy. That suits trying things out; before production, decide whether you need a backend.
+
+To use one, set `consent` with c15t's `hosted()` mode, pointing at an [Inth](https://inth.com) project or a self-hosted c15t backend. Configure its policy rules and allowed origins for your site. `consent.ts` stays as it is.
+
+```ts blume.config.ts
 import { defineConfig } from "blume";
-import { googleAnalytics, posthog } from "blume/analytics";
-import { native } from "blume/consent";
+import { c15t, hosted } from "blume/consent";
 
 export default defineConfig({
-  analytics: [
-    googleAnalytics({ id: "G-XXXXXXXXXX" }),
-    posthog({ key: "phc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }),
-  ],
-  consent: native({ policy: "/privacy" }),
+  consent: c15t({
+    mode: hosted({ url: "https://consent.example.com" }),
+  }),
 });
 ```
 
-With `consent` set, every analytics adapter waits. Its tags are in the page but don't run until the reader allows analytics, and then they run in the order you listed them. A reader who declines never loads them, and doesn't see the [page rating](/docs/configuration#page-feedback) or its comment box either, since their answers would have nowhere to go. Vercel Web Analytics loads either way, since its component isn't a tag Blume can hold, but it sends nothing until the reader allows analytics.
+`blume/consent` also exports `manifest()` and `offline()`. `manifest()` adds server routes, so it needs a server [deployment](/docs/deployment) such as `vercel()` or `node()`. `offline({ policyRules })` keeps the offline mode with your own rules.
 
-:::note
-Consent is opt-in. Without `consent`, analytics runs as the page loads, as it always has.
-:::
+## Customize the banner
 
-## Adapters
+The banner and the preferences dialog take the site's theme: its colors, corners, shadows, and body font, plus its light/dark toggle. On wide screens the banner fits the space beside the article instead of covering it. Reject, Accept, and Customize share one button style, so no answer looks preferred.
 
-| Adapter    | Consent manager                      | Required                 |
-| ---------- | ------------------------------------ | ------------------------ |
-| `native()` | [Blume's own banner](#blumes-banner) | —                        |
-| `osano()`  | [Osano](#osano)                      | `customerId`, `configId` |
-| `ethyca()` | [Ethyca](#ethyca)                    | `privacyCenter`          |
+Change the wording, links, categories, or look with c15t's options on `c15t()`:
 
-## Blume's banner
+```ts blume.config.ts
+import { defineConfig } from "blume";
+import { c15t } from "blume/consent";
 
-`native()` shows a small card at the foot of the page until the reader answers, with **Accept** and **Decline** side by side, so declining is as easy as accepting. The answer stays in the reader's browser, and the banner doesn't come back once they've given it.
-
-```ts blume.config.ts lineNumbers
-consent: native({
-  policy: "/privacy", // optional: links the banner to your privacy policy
-}),
+export default defineConfig({
+  consent: c15t({
+    legalLinks: { privacyPolicy: { href: "/privacy" } },
+    theme: { colors: { primary: "oklch(0.55 0.2 260)" } },
+  }),
+});
 ```
 
-`policy` takes a page route or a full URL. The banner's text is translated in every built-in language. To change the wording, override the `consent` [UI strings](/docs/content/i18n#translated-ui) (`message`, `accept`, `decline`, `policy`, `settings`) with `i18n.ui`.
+- `legalLinks` puts your privacy policy and other legal pages in the banner and dialog.
+- `theme` overrides Blume's defaults one token at a time; tokens you leave out keep the site's values.
+- `i18n` sets the copy. The banner follows the page's language; for a multilingual site, include c15t's message bundle for each language in `i18n.messages`.
+- `consentCategories` lists the categories the dialog offers.
+- `presentation.prompt.primaryActions`, for example `["accept"]`, highlights an action if your policy allows it.
 
-The banner also works in `blume dev`, so you can see it while you write. Analytics itself only loads in production builds.
+## Keep Osano or Fides
 
-## Osano
+An existing consent manager can stay in charge of the banner, preferences, and consent records while c15t loads your scripts. Blume shows no second banner and doesn't copy the provider's decisions into c15t. Keep your scripts in `consent.ts`; the provider only decides what they may do, so don't let it load the same vendors separately.
 
-`osano()` loads [Osano Cookie Consent](https://www.osano.com), which shows the banner and drawer you set up in the Osano dashboard. Blume runs your analytics once Osano reports the reader's analytics consent, and again whenever they change it. Both IDs come from the script tag Osano gives you: `https://cmp.osano.com/<customerId>/<configId>/osano.js`.
+For Fides, `notice` names the privacy notice that covers analytics (default `analytics`), and `categories` maps further c15t categories to your notice keys. `true`, `opt_in`, and `acknowledge` grant a category; anything else denies it.
 
-```ts blume.config.ts lineNumbers
-import { osano } from "blume/consent";
-
-consent: osano({ customerId: "AzZdRbSIoEzZU2", configId: "7b9e2f4a-…" }),
-```
-
-Osano decides what counts as consent in each region, following the compliance mode you chose in its dashboard.
-
-## Ethyca
-
-`ethyca()` loads [Ethyca's Fides](https://www.ethyca.com) consent manager from your privacy center, which shows the banner and modal you set up in Fides. Blume runs your analytics once the reader's analytics notice is on: opted in, not opted out of, or a notice that only asks them to acknowledge it.
-
-```ts blume.config.ts lineNumbers
+```ts blume.config.ts
+import { defineConfig } from "blume";
 import { ethyca } from "blume/consent";
 
-consent: ethyca({
-  privacyCenter: "https://privacy.example.com",
-  propertyId: "FDS-XXXXXX", // optional: which Fides property to load
-  notice: "analytics", // optional: the notice key that covers analytics
-}),
-```
-
-`notice` defaults to `analytics`. Set it when your Fides notice for analytics has another key.
-
-Like analytics, Osano and Fides load in production builds only, so testing in `blume dev` creates no consent records. Preview them with `blume build` and `blume preview`.
-
-## Changing an answer
-
-When `consent` is set, the site footer shows a **Cookie settings** link. It reopens Blume's banner, or the hosted consent manager's preferences. If you replace the footer with your own [`Footer`](/docs/configuration/customization#layout-slots), give any element the `data-blume-consent-open` attribute to make it the link:
-
-```html
-<button data-blume-consent-open type="button">Cookie settings</button>
-```
-
-A reader who allows analytics and later takes it back gets a page reload, the one way to stop scripts that already started. From then on, analytics stays off.
-
-## Your own scripts
-
-Hold any script of your own the same way: give it `type="text/plain"` and `data-blume-consent="analytics"`, and it runs when the reader allows analytics. To react to answers yourself, listen for the `blume:consent` event on `window`, whose `detail.analytics` is the reader's choice. `window.blumeConsent.analytics` holds the current one: `null` until the consent manager answers, then `true` or `false`.
-
-```js
-window.addEventListener("blume:consent", (event) => {
-  if (event.detail.analytics) {
-    // start something that needs consent
-  }
+export default defineConfig({
+  consent: ethyca({
+    privacyCenter: "https://privacy.example.com",
+    notice: "analytics",
+    categories: { marketing: "advertising" },
+  }),
 });
 ```
+
+For Osano, `analytics === true` grants measurement, and `categories` maps further c15t categories to the boolean consent properties your Osano setup exposes.
+
+```ts
+import { osano } from "blume/consent";
+
+const consent = osano({
+  customerId: "your-customer-id",
+  configId: "your-config-id",
+});
+```
+
+Categories you don't map stay denied, and so does everything while the provider is missing or fails to load.
+
+## Cookie settings link
+
+The site footer has a **Cookie settings** link that reopens the preferences dialog, or the provider's preferences with Osano and Fides. It shows while the reader's policy asks for consent (opt-in, opt-out, or IAB) or grants privacy rights, and always with Osano or Fides. A policy that needs no consent and grants no rights hides it.
+
+If you replace the footer with a [`Footer` override](/docs/configuration/customization), give any element a `data-blume-consent-open` attribute to open preferences from it.
+
+## Withdrawal and reload
+
+When a reader withdraws consent they had given, Blume reloads the page. Removing a script tag can't stop JavaScript that already ran, so the reload starts a page with only the scripts still allowed. Turn it off with `c15t({ reloadOnConsentRevoked: false })` only after checking that every vendor you load stops on its own.
+
+## Upgrading from native()
+
+`native({ policy: "/privacy" })` still works and runs the same c15t banner, with `policy` as its privacy link. Answers stored by Blume's old banner aren't carried over, so returning readers are asked again. Banner copy set through `i18n.ui.consent` no longer applies; move it to `c15t({ i18n })`.
+
+Blume handles consent mechanics for you, but not compliance: your policy, notices, category choices, and vendors' actual behavior still need review.

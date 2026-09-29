@@ -551,6 +551,7 @@ export const scanProject = async (
     config,
     context,
     diagnostics: [
+      ...configResult.diagnostics,
       ...contentDiagnostics,
       ...includeDiagnostics,
       ...variableDiagnostics,

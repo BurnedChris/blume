@@ -41,3 +41,9 @@ declare module "*.astro" {
   const component: (props: Record<string, unknown>) => unknown;
   export default component;
 }
+
+declare module "blume:consent-ui" {
+  // oxlint-disable-next-line typescript/consistent-type-imports -- Ambient declarations must remain a global script.
+  const component: typeof import("./components/layout/ConsentBanner.astro").default;
+  export default component;
+}

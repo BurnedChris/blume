@@ -35,26 +35,26 @@ Resolve `$ref` includes first (Mintlify splits config across files). Map only wh
 | `seo.metatags` | **drop** | no equivalent; use per-page `seo` frontmatter |
 | `seo.indexing: "all"` | `search.indexing.includeHiddenPages: true` |  |
 | `variables` (`{{name}}`) | `variables` | same syntax and names (letters, digits, `_`, `-`); pages keep their `{{name}}` references unchanged |
-| `integrations.posthog` (`{ apiKey, apiHost, sessionRecording }`) | `posthog({ key, host })` in the `analytics` list | preserve the host verbatim (e.g. `us.posthog.com` — Blume's default is `us.i.posthog.com`); `sessionRecording: false` → `disable_session_recording: true`; every adapter is imported from `blume/analytics` |
-| `integrations.ga4` (`{ measurementId }`) | `googleAnalytics({ id })` |  |
-| `integrations.gtm` (`{ tagId }`) | `googleTagManager({ id })` |  |
-| `integrations.plausible` (`{ domain, server }`) | `plausible({ domain, host })` | `server` is a bare hostname; `host` is an origin — prepend `https://` |
-| `integrations.fathom` (`{ siteId }`) | `fathom({ site })` |  |
-| `integrations.pirsch` (`{ id }`) | `pirsch({ code })` |  |
-| `integrations.mixpanel` (`{ projectToken, region }`) | `mixpanel({ token, region })` |  |
-| `integrations.amplitude` (`{ apiKey }`) | `amplitude({ key })` |  |
-| `integrations.segment` (`{ key, cdnUrl }`) | `segment({ key, cdn })` |  |
-| `integrations.hightouch` (`{ writeKey, apiHost }`) | `hightouch({ key, host })` |  |
-| `integrations.heap` (`{ appId }`) | `heap({ id })` |  |
-| `integrations.hotjar` (`{ hjid, hjsv }`) | `hotjar({ id, version })` | both numbers |
-| `integrations.clarity` (`{ projectId }`) | `clarity({ id })` |  |
-| `integrations.logrocket` (`{ apiKey }`) | `logrocket({ id })` |  |
-| `integrations.clearbit` (`{ publicApiKey }`) | `clearbit({ key })` |  |
-| `integrations.adobe` (`{ launchUrl }`) | `adobe({ url })` |  |
-| any other `integrations` script | `script({ src, strategy, attributes })` / `vercel()` in the `analytics` list | one `script()` adapter per provider without a factory |
+| `integrations.posthog` (`{ apiKey, apiHost, sessionRecording }`) | `posthog({ id, apiHost })` in `consent.ts` | every vendor maps to a helper imported from its own `blume/integrations/<name>` subpath, listed in the `scripts` array of a root `consent.ts` (see the migrate skill's analytics note). Preserve the host verbatim as `apiHost`; `sessionRecording: false` → `initOptions: { disable_session_recording: true }` |
+| `integrations.ga4` (`{ measurementId }`) | `gtag({ id, category: "measurement" })` from `google-tag` |  |
+| `integrations.gtm` (`{ tagId }`) | `googleTagManager({ id })` from `google-tag-manager` | report that tags inside the container must honor Consent Mode |
+| `integrations.plausible` (`{ domain, server }`) | `plausibleAnalytics({ domain, scriptUrl })` from `plausible-analytics` | `scriptUrl` is `https://<server>/js/script.js`; omit it without a `server` |
+| `integrations.fathom` (`{ siteId }`) | `fathomAnalytics({ site, spa: "auto" })` from `fathom-analytics` |  |
+| `integrations.pirsch` (`{ id }`) | `pirsch({ identificationCode })` |  |
+| `integrations.mixpanel` (`{ projectToken, region }`) | `mixpanelAnalytics({ token, initOptions: { api_host } })` from `mixpanel-analytics` | `api_host` is `https://api-js.mixpanel.com` (US), `https://api-eu.mixpanel.com` (EU), or `https://api-in.mixpanel.com` (India) |
+| `integrations.amplitude` (`{ apiKey }`) | `amplitude({ apiKey })` |  |
+| `integrations.segment` (`{ key, cdnUrl }`) | `segment({ writeKey, scriptUrl })` | add `"segment"` to `pageviews`; with a `cdnUrl`, `scriptUrl` is `<cdnUrl>/analytics.js/v1/<writeKey>/analytics.min.js` |
+| `integrations.hightouch` (`{ writeKey, apiHost }`) | `hightouch({ writeKey, apiHost })` | add `"hightouch"` to `pageviews` |
+| `integrations.heap` (`{ appId }`) | `heap({ envId })` |  |
+| `integrations.hotjar` (`{ hjid, hjsv }`) | `hotjar({ siteId, version })` | both numbers |
+| `integrations.clarity` (`{ projectId }`) | `clarity({ id })` from `microsoft-clarity` |  |
+| `integrations.logrocket` (`{ apiKey }`) | `logRocket({ appId })` from `logrocket` | capital `R` |
+| `integrations.clearbit` (`{ publicApiKey }`) | `clearbit({ publishableKey })` |  |
+| `integrations.adobe` (`{ launchUrl }`) | `adobeAnalytics({ scriptUrl })` from `adobe-analytics` |  |
+| any other `integrations` script | a script object `{ id, category: "measurement", src, attributes }` in `consent.ts`, or `vercelAnalytics()` from `vercel-analytics` | one object per provider without a helper; `id` must be unique |
 | `telemetry` (`{ enabled: false }`) | `feedback: false` | Mintlify's switch also turned off its feedback widgets; Blume sends no telemetry of its own, so only the rating needs turning off |
-| Feedback toggles in the Mintlify dashboard (not in `docs.json`) | `feedback: { comments: true }` for contextual (written) feedback | ask whether the site collected written feedback; Blume sends comments through the `analytics` adapters as `feedback_comment` events. Code-snippet feedback, edit suggestions, and raise-issue have no equivalent: report them |
-| `integrations.cookies` (`{ key, value }`), or a content-folder `.js` file that injects Osano or Ethyca/Fides | `consent`, imported from `blume/consent`: `osano({ customerId, configId })` (both IDs from the `cmp.osano.com/<customerId>/<configId>/osano.js` URL), `ethyca({ privacyCenter })` (the origin that serves `fides.js`), or `native()` for Blume's own banner | Mintlify's `cookies` pair only switched off its own telemetry for readers whose localStorage lacked the value; under `consent`, every `analytics` adapter waits for the reader instead. Delete the injector script. Another consent manager (Transcend, OneTrust, …) has no adapter: report it |
+| Feedback toggles in the Mintlify dashboard (not in `docs.json`) | `feedback: { comments: true }` for contextual (written) feedback | ask whether the site collected written feedback; Blume sends comments as `feedback_comment` events to the integrations in `consent.ts` that support events. Code-snippet feedback, edit suggestions, and raise-issue have no equivalent: report them |
+| `integrations.cookies` (`{ key, value }`), or a content-folder `.js` file that injects Osano or Ethyca/Fides | `consent`, imported from `blume/consent`: `osano({ customerId, configId })` (both IDs from the `cmp.osano.com/<customerId>/<configId>/osano.js` URL), `ethyca({ privacyCenter })` (the origin that serves `fides.js`), or nothing at all for Blume's own c15t banner, which a `consent.ts` turns on | Mintlify's `cookies` pair only switched off its own telemetry for readers whose localStorage lacked the value. Under c15t, each helper follows its own consent category; some load early in a denied state (GTM with Consent Mode) rather than waiting. Delete the injector script. Another consent manager (Transcend, OneTrust, …) has no adapter: report it |
 | `contextual` (`["copy","chatgpt","claude",…]`) | **mostly free** | Copy-as-Markdown and Open-in-chat are default page actions; `mcp` needs `agents.mcp.enabled` + server output (report as a follow-up) |
 | `footer` (`{ socials, links }`) | `footer: { socials, links }` | `socials` keeps its keys, except `twitter`/`x-twitter` → `x` and `earth-americas` → `website`; a key outside Blume's list drops (report); each `links` column's `header` → `label`, its `items` (`{ label, href }`) as written |
 | `api.mdx` (`{ server, auth: { method, name } }`) | `api: { server, auth: { method, name } }` | the defaults for `api`-frontmatter pages |

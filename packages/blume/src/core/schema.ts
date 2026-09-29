@@ -14,6 +14,7 @@ import {
   AUTH_METHODS,
   PLAYGROUND_MODES,
 } from "../components/content/api-page.ts";
+import { c15t } from "../consent/c15t.ts";
 import { consentConfigSchema } from "../consent/schema.ts";
 import { resolvedDeploymentSchema } from "../deploy/adapters/registry.ts";
 import type { CodeTheme } from "../markdown/themes.ts";
@@ -2216,7 +2217,11 @@ export const blumeConfigSchema = z
         path: ["rateLimit"],
       });
     }
-  });
+  })
+  .transform((config) => ({
+    ...config,
+    consent: config.consent ?? (config.analytics.length > 0 ? c15t() : null),
+  }));
 
 /** Resolved config: every field present after defaults are applied. */
 export type ResolvedConfig = z.infer<typeof blumeConfigSchema>;

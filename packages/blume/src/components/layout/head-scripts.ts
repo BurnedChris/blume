@@ -123,3 +123,18 @@ export const SWAP_STYLESHEET_INIT_SCRIPT = `(()=>{const sel='body link[rel="styl
  * never moves.
  */
 export const SIDEBAR_SCROLL_INIT_SCRIPT = `(()=>{const drawer=()=>document.querySelector("[data-blume-nav-drawer]");const center=()=>{const n=drawer();const s=n&&(n.querySelector("[data-blume-nav-tree]")||n);if(!s)return;let l=null;for(const a of s.querySelectorAll('a[aria-current="page"]')){if(a.getClientRects().length){l=a;break;}}if(!l)return;const r=n.getBoundingClientRect();const t=l.getBoundingClientRect();if(t.top>=r.top&&t.bottom<=r.bottom)return;n.scrollTop+=t.top-r.top-(n.clientHeight-t.height)/2;};let saved=-1;document.addEventListener("astro:before-swap",()=>{const n=drawer();saved=n?n.scrollTop:-1;});document.addEventListener("astro:after-swap",()=>{const n=drawer();if(n&&saved>=0){n.scrollTop=saved;}center();});center();})();`;
+
+/**
+ * Tells the consent banner how much room the page leaves beside the article:
+ * the distance from the viewport's leading edge to the article's, as
+ * `--blume-consent-free` on `<html>`. `c15t.css` turns that into the banner's
+ * width from `lg` up, so the card fills the sidebar gutter without covering
+ * the text, whatever the page's columns and content width.
+ *
+ * It runs inline right after the banner markup, which follows `<main>`, so
+ * the article is parsed and the width is set before the banner first paints.
+ * Resizes and client-router navigations measure again; the listeners are
+ * added once even though the script re-runs with each swapped body. Pages
+ * without an article drop the value and keep the stylesheet's default.
+ */
+export const CONSENT_FIT_SCRIPT = `(()=>{const fit=()=>{const r=document.documentElement;const a=document.querySelector("#blume-content article");if(!a){r.style.removeProperty("--blume-consent-free");return;}const b=a.getBoundingClientRect();r.style.setProperty("--blume-consent-free",(r.dir==="rtl"?innerWidth-b.right:b.left)+"px");};fit();if(window.__blumeConsentFit){return;}window.__blumeConsentFit=true;let q=0;addEventListener("resize",()=>{if(q){return;}q=requestAnimationFrame(()=>{q=0;fit();});});document.addEventListener("astro:page-load",fit);})();`;

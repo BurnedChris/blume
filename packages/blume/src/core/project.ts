@@ -14,6 +14,7 @@ const CONFIG_FILENAMES = [
 
 const THEME_FILENAMES = ["theme.css"];
 const COMPONENTS_FILENAMES = ["components.tsx", "components.ts"];
+const CONSENT_FILENAMES = ["consent.ts", "consent.js", "consent.mjs"];
 
 const firstExisting = (root: string, names: string[]): string | null => {
   for (const name of names) {
@@ -32,6 +33,14 @@ export const findConfigFile = (root: string): string | null =>
 /** Locate the project's `components.ts`/`.tsx` override file, if any. */
 export const findComponentsFile = (root: string): string | null =>
   firstExisting(root, COMPONENTS_FILENAMES);
+
+/**
+ * Locate the project's `consent.ts`: the browser module that hands c15t its
+ * scripts and callbacks. They carry functions, so they can't live in the
+ * serialized config. Its presence alone turns on consent (see `loadConfig`).
+ */
+export const findConsentFile = (root: string): string | null =>
+  firstExisting(root, CONSENT_FILENAMES);
 
 /**
  * Resolve the generated runtime directory for a project. Defaults to
@@ -73,6 +82,7 @@ export const resolveProjectContext = (
   return {
     componentsFile: findComponentsFile(absoluteRoot),
     configFile: findConfigFile(absoluteRoot),
+    consentFile: findConsentFile(absoluteRoot),
     contentRoot,
     distDir,
     outDir,

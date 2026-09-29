@@ -466,7 +466,7 @@ export default defineConfig({
 });
 ```
 
-A reader's answer is sent as a `feedback` [custom event](/docs/configuration/analytics#custom-events) — with `helpful` (`"yes"` or `"no"`), `path`, and `title` — through every configured analytics adapter that has an event API, and as a `blume:track` event on `window`. Without an analytics adapter, the answer isn't recorded anywhere, and with [cookie consent](/docs/configuration/consent) on, the rating only shows for readers who allowed analytics, since from anyone else an answer would go nowhere. The question and thank-you text are UI strings you can translate with [`i18n.ui`](/docs/content/i18n#translated-ui).
+A reader's answer is sent as a `feedback` [application event](/docs/configuration/integrations#blume-application-events) — with `helpful` (`"yes"` or `"no"`), `path`, and `title` — through configured [script integrations](/docs/configuration/integrations#blume-application-events) supported by c15t's event dispatcher, and as a local `blume:track` event on `window`. Vendor delivery requires measurement permission and the integration's own consent gate. With a consent runtime active, the rating only shows after measurement consent is granted. Without a supported vendor or a custom local listener, Blume does not persist the answer. The question and thank-you text are UI strings you can translate with [`i18n.ui`](/docs/content/i18n#translated-ui).
 
 ### Written feedback
 
@@ -498,8 +498,8 @@ Each of these has its own guide. The config field is the entry point:
 | `narration` | The "Listen to this page" player, with browser voices or voices generated at build | [Narration](/docs/configuration/narration) |
 | `reference` | API references: `openapi()`, `asyncapi()`, `graphql()`, and `scalar()` adapters from `blume/reference` | [OpenAPI](/docs/references/openapi), [AsyncAPI](/docs/references/asyncapi), [GraphQL](/docs/references/graphql), [Scalar](/docs/references/scalar) |
 | `api` | The server, auth, and Try it panel of hand-written endpoint pages | [Hand-written API pages](/docs/references/api-pages) |
-| `analytics` | Adapters from `blume/analytics` — PostHog, Google Analytics, Plausible, Mixpanel, Segment, and more — plus custom scripts | [Analytics](/docs/configuration/analytics) |
-| `consent` | A cookie consent adapter from `blume/consent` — Blume's own banner, Osano, or Ethyca — that holds analytics until the reader allows it | [Cookie consent](/docs/configuration/consent) |
+| `analytics` | Deprecated compatibility adapters, frozen until removal in the next major release; use SDK scripts in a root `consent.ts` instead | [Migration](/docs/configuration/analytics-migration) |
+| `consent` | c15t consent and script runtime (scripts go in a root `consent.ts`), with offline consent, a backend, or an external Osano/Fides provider | [Integrations](/docs/configuration/integrations), [Cookie consent](/docs/configuration/consent) |
 | `seo` | Metadata, OG images, feeds, structured data, sitemap, robots | [SEO and AEO](/docs/discoverability) |
 | `deployment` | A host adapter from `blume/deploy`, or `{ site, base }` for a static build | [Deployment](/docs/deployment) |
 | `redirects` | Permanent and temporary redirects | [Deployment](/docs/deployment#redirects) |

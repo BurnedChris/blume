@@ -6,6 +6,10 @@ import { adapterDescriptorSchema } from "../core/adapter.ts";
 
 /** Options for {@link osano}. */
 export interface OsanoOptions {
+  /** c15t category to provider consent property/notice mapping. Unmapped categories stay denied. */
+  categories?: Partial<
+    Record<"measurement" | "marketing" | "experience" | "functionality", string>
+  >;
   /** The configuration ID from the script tag Osano gives you. */
   configId: string;
   /** The customer ID from the script tag Osano gives you. */
@@ -13,6 +17,12 @@ export interface OsanoOptions {
 }
 
 export const osanoOptionsSchema = z.strictObject({
+  categories: z
+    .partialRecord(
+      z.enum(["measurement", "marketing", "experience", "functionality"]),
+      z.string().min(1)
+    )
+    .optional(),
   configId: z.string().min(1),
   customerId: z.string().min(1),
 });
@@ -38,15 +48,8 @@ export const osano = (options: OsanoOptions): OsanoAdapter => ({
 });
 
 /**
- * Reports Osano's analytics consent to `window.blumeConsent` now (`Osano.cm`
- * is ready as soon as its script ran) and on every Osano consent event, and
- * reopens Osano's drawer from the Cookie settings link.
- */
-export const OSANO_BRIDGE = `(()=>{const o=window.Osano?.cm;const c=window.blumeConsent;if(!o||!c){return;}const sync=()=>c.set({analytics:o.analytics===true});c.open=()=>o.showDrawer();for(const e of ["osano-cm-initialized","osano-cm-consent-saved","osano-cm-consent-changed"]){o.addEventListener(e,sync);}sync();})();`;
-
-/**
- * Osano's loader, synchronous as its install guide requires, then the
- * bridge. The IDs are path segments, so each is encoded.
+ * Osano's synchronous bootstrap; c15t observes its decisions separately.
+ * The IDs are path segments, so each is encoded.
  */
 export const osanoHead = (options: OsanoOptions): HeadScript[] => [
   {
@@ -55,5 +58,4 @@ export const osanoHead = (options: OsanoOptions): HeadScript[] => [
     },
     content: null,
   },
-  { attributes: {}, content: OSANO_BRIDGE },
 ];

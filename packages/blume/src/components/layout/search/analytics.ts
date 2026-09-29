@@ -5,7 +5,7 @@
  * The dialog searches on every keystroke, so a query is only recorded once it
  * settles: a second without typing, or the reader picking a result or closing
  * the dialog. Each settled query is one `search` event with the number of
- * results, so a dashboard can list the queries that found nothing. Picking a
+ * results. Raw queries stay in the local blume:track event. Picking a
  * result is a `search_select` event with its position, for click-through. The
  * same query settling twice in a row (a filter toggled back and forth) counts
  * once.
@@ -19,7 +19,11 @@ export const MAX_QUERY_CHARS = 100;
 export const SETTLE_MS = 1000;
 
 /** Sends one analytics event. */
-export type SendEvent = (event: string, props: TrackProps) => void;
+export type SendEvent = (
+  event: string,
+  props: TrackProps,
+  local?: TrackProps
+) => void;
 
 /** The timer a tracker waits on; injectable for tests. */
 export interface SettleTimer {
@@ -63,11 +67,15 @@ export const createSearchTracker = (
       handle = undefined;
     }
     if (pending && pending.query !== last) {
-      send("search", {
-        path: location.pathname,
-        query: pending.query,
-        results: pending.results,
-      });
+      send(
+        "search",
+        {
+          length: pending.query.length,
+          path: location.pathname,
+          results: pending.results,
+        },
+        { query: pending.query }
+      );
       last = pending.query;
     }
     pending = undefined;
@@ -80,12 +88,16 @@ export const createSearchTracker = (
     },
     selected: (query, position, url) => {
       flush();
-      send("search_select", {
-        path: location.pathname,
-        position,
-        query: query.slice(0, MAX_QUERY_CHARS),
-        url,
-      });
+      send(
+        "search_select",
+        {
+          length: Math.min(query.length, MAX_QUERY_CHARS),
+          path: location.pathname,
+          position,
+          url,
+        },
+        { query: query.slice(0, MAX_QUERY_CHARS) }
+      );
     },
     settled: (query, results) => {
       if (handle !== undefined) {
