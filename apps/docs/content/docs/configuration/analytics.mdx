@@ -10,14 +10,12 @@ import { defineConsent } from "blume/consent/client";
 import { segment } from "blume/integrations/segment";
 
 export default defineConsent({
-  scripts: import.meta.env.PROD
-    ? [segment({ writeKey: "YOUR_WRITE_KEY" })]
-    : [],
+  scripts: [segment({ writeKey: "YOUR_WRITE_KEY" })],
   pageviews: ["segment"],
 });
 ```
 
-The production guard keeps local development traffic out of your dashboards. The `pageviews` setting preserves Segment navigation events. See [Cookie consent](/docs/configuration/consent) for backends and external CMPs, and the [migration guide](/docs/configuration/analytics-migration) for every legacy adapter's SDK equivalent.
+The `pageviews` setting preserves Segment navigation events. See [Cookie consent](/docs/configuration/consent) for backends and external CMPs, and the [migration guide](/docs/configuration/analytics-migration) for every legacy adapter's SDK equivalent.
 
 ## Legacy adapter reference
 
@@ -455,4 +453,4 @@ analytics: [
 
 ## Custom events
 
-Blume's page feedback (`feedback`, and `feedback_comment` when [written feedback](/docs/configuration#written-feedback) is on), [search](/docs/configuration/search#search-analytics) (`search`, `search_select`), and [narration](/docs/configuration/narration#analytics) player (`narration_play`, `narration_complete`) send custom events through every configured adapter that has a client API — PostHog, Mixpanel, Heap, Segment, Hightouch, Amplitude, LogRocket, Adobe, Google Analytics, Google Tag Manager (as a `{ event }` push on `window.dataLayer`), Plausible, Databuddy, Fathom, OneDollarStats (with each property value as a string), Pirsch, Clarity, Hotjar, and Vercel. Cloudflare and Clearbit have no event API. Every event also fires as a `blume:track` CustomEvent on `window` with `{ event, props }` in `detail`, so a `script()` adapter can forward it anywhere else. For deploying your built site, see [Deployment](/docs/deployment).
+Blume's page feedback, search, narration, and assistant events go through c15t's event dispatcher, the same one SDK scripts in `consent.ts` use. Legacy adapters reach it once Blume translates them into SDK scripts, so the delivery rules and supported vendors are the same as in [Blume application events](/docs/configuration/integrations#blume-application-events). Every event also fires as a local `blume:track` CustomEvent on `window` with `{ event, props }` in `detail`. For deploying your built site, see [Deployment](/docs/deployment).

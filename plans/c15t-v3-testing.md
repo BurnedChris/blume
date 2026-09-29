@@ -33,7 +33,7 @@ Create a small fixture with `docs/index.md`, `docs/next.md`, and a link from the
 import { defineConsent } from "blume/consent/client";
 import { googleTagManager } from "blume/integrations/google-tag-manager";
 export default defineConsent({
-  scripts: import.meta.env.PROD ? [googleTagManager({ id: "GTM-TEST" })] : [],
+  scripts: [googleTagManager({ id: "GTM-TEST" })],
 });
 ```
 

@@ -466,7 +466,7 @@ export default defineConfig({
 });
 ```
 
-A reader's answer is sent as a `feedback` [custom event](/docs/configuration/analytics#custom-events) — with `helpful` (`"yes"` or `"no"`), `path`, and `title` — through configured [script integrations](/docs/configuration/integrations#blume-application-events) supported by c15t's event dispatcher, and as a local `blume:track` event on `window`. Vendor delivery requires measurement permission and the integration's own consent gate. With a consent runtime active, the rating only shows after measurement consent is granted. Without a supported vendor or a custom local listener, Blume does not persist the answer. The question and thank-you text are UI strings you can translate with [`i18n.ui`](/docs/content/i18n#translated-ui).
+A reader's answer is sent as a `feedback` [application event](/docs/configuration/integrations#blume-application-events) — with `helpful` (`"yes"` or `"no"`), `path`, and `title` — through configured [script integrations](/docs/configuration/integrations#blume-application-events) supported by c15t's event dispatcher, and as a local `blume:track` event on `window`. Vendor delivery requires measurement permission and the integration's own consent gate. With a consent runtime active, the rating only shows after measurement consent is granted. Without a supported vendor or a custom local listener, Blume does not persist the answer. The question and thank-you text are UI strings you can translate with [`i18n.ui`](/docs/content/i18n#translated-ui).
 
 ### Written feedback
 

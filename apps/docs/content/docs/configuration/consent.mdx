@@ -3,26 +3,24 @@ title: Cookie consent
 description: Use c15t for script loading and consent, with an offline banner, a c15t backend, or an existing Osano or Fides installation.
 ---
 
-Blume uses c15t to manage scripts, consent changes, and analytics event delivery. Add a `consent.ts` to your project root, next to `blume.config.ts`, and list your scripts in it. Blume finds the file on its own and turns on an offline consent banner; no config is needed. Sites with no `consent.ts`, no analytics, and no consent configuration load no c15t runtime or UI.
+Blume uses [c15t](https://c15t.com) to ask readers for consent and to load your scripts only as their answer allows. Add a `consent.ts` to your project root, next to `blume.config.ts`, and list your scripts in it. Blume finds the file by name and shows a consent banner; nothing in `blume.config.ts` is required.
 
 ```ts consent.ts
 import { defineConsent } from "blume/consent/client";
-import { googleTagManager } from "blume/integrations/google-tag-manager";
+import { plausibleAnalytics } from "blume/integrations/plausible-analytics";
 
 export default defineConsent({
-  scripts: import.meta.env.PROD
-    ? [googleTagManager({ id: "GTM-EXAMPLE" })]
-    : [],
+  scripts: [plausibleAnalytics({ domain: "docs.example.com" })],
 });
 ```
 
-Scripts carry lifecycle callbacks, so they live in this browser module rather than in `blume.config.ts`, which Blume serializes. Existing `analytics` lists also enable offline consent automatically, but that API is deprecated and will be removed in the next major release. Follow the [migration guide](/docs/configuration/analytics-migration).
-
-GTM starts with c15t's Google Consent Mode defaults before its container loads. The banner asks for a choice and c15t sends updates afterward. Tags inside the container must honor those signals; Blume cannot inspect or correct your GTM configuration.
+[Integrations](/docs/configuration/integrations) lists every vendor helper and covers pageviews, custom scripts, and testing. A site with no `consent.ts`, no `consent` config, and no deprecated `analytics` list loads no c15t code at all.
 
 ## Connect a backend
 
-Use `c15t()` from `blume/consent` to configure the Astro integration, with c15t's `hosted()`, `manifest()`, or `offline()` mode. Hosted mode works with an Inth endpoint or a self-hosted c15t backend. Configure the backend's policy rules and allowed origins for your site. Your `consent.ts` stays as it is.
+On its own, `consent.ts` runs c15t in offline mode with an opt-in policy everywhere. Choices are stored in the reader's browser, with no server-side record and no central policy. That suits trying things out; before production, decide whether you need a backend.
+
+To use one, set `consent` with c15t's `hosted()` mode, pointing at an [Inth](https://inth.com) project or a self-hosted c15t backend. Configure its policy rules and allowed origins for your site. `consent.ts` stays as it is.
 
 ```ts blume.config.ts
 import { defineConfig } from "blume";
@@ -31,41 +29,41 @@ import { c15t, hosted } from "blume/consent";
 export default defineConfig({
   consent: c15t({
     mode: hosted({ url: "https://consent.example.com" }),
-    legalLinks: { privacyPolicy: { href: "/privacy" } },
   }),
 });
 ```
 
-`c15t()` without a mode, and a `consent.ts` on its own, use `offline()` with a global opt-in policy. Offline mode stores choices in the browser and does not provide a server-side consent record or centrally managed policy. It is intended here for local testing; review backend and policy requirements before production use.
+`blume/consent` also exports `manifest()` and `offline()`. `manifest()` adds server routes, so it needs a server [deployment](/docs/deployment) such as `vercel()` or `node()`. `offline({ policyRules })` keeps the offline mode with your own rules.
 
-The c15t banner and preferences use c15t's copy and translations. Configure `i18n`, `theme`, `legalLinks`, and `consentCategories` through `c15t()`. The banner and dialog follow Blume's light/dark setting and document language, and use the site's body font unless `theme.typography.fontFamily` sets another. When supplying multiple languages, include their c15t message bundles in `i18n.messages`.
+## Customize the banner
 
-## Use the full script SDK
+The banner and the preferences dialog take the site's theme: its colors, corners, shadows, and body font, plus its light/dark toggle. On wide screens the banner fits the space beside the article instead of covering it. Reject, Accept, and Customize share one button style, so no answer looks preferred.
 
-The [integrations guide](/docs/configuration/integrations) lists the available vendors and covers setup, navigation pageviews, custom scripts, and verification.
+Change the wording, links, categories, or look with c15t's options on `c15t()`:
 
-Every named public `@c15t/scripts` subpath is available under `blume/integrations` with the same exports and types. Import `defineConsent` from `blume/consent/client`, not `blume/consent`: `consent.ts` runs in the browser, and that entry keeps the config-side code out of your pages.
+```ts blume.config.ts
+import { defineConfig } from "blume";
+import { c15t } from "blume/consent";
 
-```ts consent.ts
-import { googleTagManager } from "blume/integrations/google-tag-manager";
-import { metaPixel } from "blume/integrations/meta-pixel";
-import { defineConsent } from "blume/consent/client";
-
-export default defineConsent({
-  scripts: [
-    googleTagManager({ id: "GTM-EXAMPLE" }),
-    metaPixel({ pixelId: "123456789" }),
-  ],
+export default defineConfig({
+  consent: c15t({
+    legalLinks: { privacyPolicy: { href: "/privacy" } },
+    theme: { colors: { primary: "oklch(0.55 0.2 260)" } },
+  }),
 });
 ```
 
-Use the SDK's `registry` export to discover integrations. Deprecated `blume/analytics` factories are translated into c15t SDK calls for this release and will be removed in the next major release. The [analytics migration guide](/docs/configuration/analytics-migration) covers every adapter, option mapping, mixed configurations, and `pageviews` for SDKs that need explicit router events.
-
-Legacy `analytics` adapters are disabled in `blume dev`. Scripts in `consent.ts` are under your control and run in development too; use `import.meta.env.PROD` if you want to disable them locally.
+- `legalLinks` puts your privacy policy and other legal pages in the banner and dialog.
+- `theme` overrides Blume's defaults one token at a time; tokens you leave out keep the site's values.
+- `i18n` sets the copy. The banner follows the page's language; for a multilingual site, include c15t's message bundle for each language in `i18n.messages`.
+- `consentCategories` lists the categories the dialog offers.
+- `presentation.prompt.primaryActions`, for example `["accept"]`, highlights an action if your policy allows it.
 
 ## Keep Osano or Fides
 
-An external CMP owns the banner, preferences, persistence, and consent records. c15t reads its decisions and manages scripts. Blume does not display a second banner or save an imported provider decision as a c15t receipt.
+An existing consent manager can stay in charge of the banner, preferences, and consent records while c15t loads your scripts. Blume shows no second banner and doesn't copy the provider's decisions into c15t. Keep your scripts in `consent.ts`; the provider only decides what they may do, so don't let it load the same vendors separately.
+
+For Fides, `notice` names the privacy notice that covers analytics (default `analytics`), and `categories` maps further c15t categories to your notice keys. `true`, `opt_in`, and `acknowledge` grant a category; anything else denies it.
 
 ```ts blume.config.ts
 import { defineConfig } from "blume";
@@ -80,7 +78,7 @@ export default defineConfig({
 });
 ```
 
-For Fides, `notice` defaults to `analytics`. `categories` maps additional c15t categories to your Fides notice keys. Values `true`, `opt_in`, and `acknowledge` grant the mapped category; other or missing values deny it. Configure those notices correctly for your processing.
+For Osano, `analytics === true` grants measurement, and `categories` maps further c15t categories to the boolean consent properties your Osano setup exposes.
 
 ```ts
 import { osano } from "blume/consent";
@@ -91,14 +89,20 @@ const consent = osano({
 });
 ```
 
-Blume still reads your scripts from `consent.ts`; the provider only decides what they may do. Osano maps `analytics === true` to c15t measurement consent. Its optional `categories` map names the additional boolean consent properties your Osano setup exposes. Unmapped categories stay denied. Failed or unavailable providers do not grant optional consent. Do not configure the external CMP to independently load the same vendor scripts.
+Categories you don't map stay denied, and so does everything while the provider is missing or fails to load.
 
-## Loading and withdrawal
+## Cookie settings link
 
-c15t owns one script runtime across Astro navigation. Each SDK helper defines whether its script waits for consent or loads earlier with denied-state behavior. `alwaysLoad`, Consent Mode, or cookieless operation is not permission to send arbitrary analytics events. Blume's custom events are dispatched only when measurement and the integration's own consent gates allow them. Denied events are discarded.
+The site footer has a **Cookie settings** link that reopens the preferences dialog, or the provider's preferences with Osano and Fides. It shows while the reader's policy asks for consent (opt-in, opt-out, or IAB) or grants privacy rights, and always with Osano or Fides. A policy that needs no consent and grants no rights hides it.
 
-Blume enables c15t's `reloadOnConsentRevoked` option by default to stop SDKs that cannot unload after executing. Set it to `false` only after verifying every configured vendor's withdrawal behavior. Removing a script element alone cannot undo JavaScript that already ran.
+If you replace the footer with a [`Footer` override](/docs/configuration/customization), give any element a `data-blume-consent-open` attribute to open preferences from it.
 
-The footer's **Cookie settings** control opens the active provider's preferences. It appears only while the visitor's policy asks for consent (opt-in, opt-out, or IAB) or grants privacy rights, and whenever Osano or Fides is the provider. A `none` policy with no rights hides it. `native({ policy: "/privacy" })` remains a compatibility option for the offline c15t banner; old `blume-consent` storage is not promoted into a c15t record, so existing visitors will be asked again. Old `i18n.ui.consent` banner-copy overrides should move to c15t's `i18n` options.
+## Withdrawal and reload
 
-Centralizing this behavior reduces the consent-sensitive code Blume maintains. It does not make a site automatically compliant: policy, notices, provider configuration, processing purposes, and actual network/storage behavior still need review.
+When a reader withdraws consent they had given, Blume reloads the page. Removing a script tag can't stop JavaScript that already ran, so the reload starts a page with only the scripts still allowed. Turn it off with `c15t({ reloadOnConsentRevoked: false })` only after checking that every vendor you load stops on its own.
+
+## Upgrading from native()
+
+`native({ policy: "/privacy" })` still works and runs the same c15t banner, with `policy` as its privacy link. Answers stored by Blume's old banner aren't carried over, so returning readers are asked again. Banner copy set through `i18n.ui.consent` no longer applies; move it to `c15t({ i18n })`.
+
+Blume handles consent mechanics for you, but not compliance: your policy, notices, category choices, and vendors' actual behavior still need review.

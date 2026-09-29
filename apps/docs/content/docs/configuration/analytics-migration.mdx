@@ -3,9 +3,9 @@ title: Migrate analytics to c15t scripts
 description: Keep existing analytics adapters working, or move integrations one at a time to the full c15t script SDK without losing configuration or navigation events.
 ---
 
-`blume/analytics` and the `analytics` configuration list are deprecated. They remain supported in this release as a frozen compatibility layer, with removal planned for the next major release. No new integrations or options will be added to the legacy adapters; necessary compatibility and bug fixes can still be made. Move new and existing integrations to `blume/integrations/*`.
+`blume/analytics` and the `analytics` list are deprecated. They keep working in this release, with bug fixes but no new vendors or options, and will be removed in the next major release. Their replacement is `blume/integrations/*`: c15t's full script SDK, with more vendors and lifecycle callbacks, imported one vendor subpath at a time into a root `consent.ts`.
 
-`blume/integrations/*` is the supported path to the full c15t SDK, including additional integrations and lifecycle callbacks. There is no bare `blume/integrations` barrel: import each vendor's subpath. Blume reports `BLUME_ANALYTICS_DEPRECATED` once per configuration load when the analytics list is nonempty. Build, dev, and doctor diagnostics link to this guide; the warning does not invalidate your config. Editors also mark the legacy factories as deprecated. Empty analytics lists and SDK-only configurations do not trigger it.
+While an `analytics` list has entries, `blume dev`, `blume build`, and `blume doctor` print a `BLUME_ANALYTICS_DEPRECATED` warning that links here. Your config stays valid.
 
 ## Choose the scope of your upgrade
 
@@ -49,13 +49,11 @@ import { defineConsent } from "blume/consent/client";
 import { adobeAnalytics } from "blume/integrations/adobe-analytics";
 
 export default defineConsent({
-  scripts: import.meta.env.PROD
-    ? [
-        adobeAnalytics({
-          scriptUrl: "https://assets.adobedtm.com/example/launch.js",
-        }),
-      ]
-    : [],
+  scripts: [
+    adobeAnalytics({
+      scriptUrl: "https://assets.adobedtm.com/example/launch.js",
+    }),
+  ],
 });
 ```
 
@@ -63,7 +61,7 @@ Blume finds `consent.ts` by name; no config points at it. An existing `c15t()`, 
 
 Keep each vendor registered in one place. Blume combines legacy adapters and client scripts; it does not deduplicate the same vendor configured through both APIs. Also remove any duplicate loaders in custom head HTML, tag containers, or CMP auto-loading rules. Give custom script entries stable, unique IDs; keep the vendor identity and lifecycle callbacks returned by SDK helpers.
 
-Legacy adapters are disabled in `blume dev`. Scripts in `consent.ts` run in development unless you guard them with `import.meta.env.PROD`, as above. That guard preserves the legacy production-only behavior.
+Legacy adapters don't load in `blume dev`, but scripts in `consent.ts` do. Use a separate test project in development if local visits shouldn't reach your dashboards.
 
 ## Preserve navigation pageviews
 
@@ -75,16 +73,14 @@ import { posthog } from "blume/integrations/posthog";
 import { segment } from "blume/integrations/segment";
 
 export default defineConsent({
-  scripts: import.meta.env.PROD
-    ? [
-        posthog({
-          id: "phc_YOUR_PROJECT_KEY",
-          apiHost: "https://us.i.posthog.com",
-          initOptions: { defaults: "unset" },
-        }),
-        segment({ writeKey: "YOUR_WRITE_KEY" }),
-      ]
-    : [],
+  scripts: [
+    posthog({
+      id: "phc_YOUR_PROJECT_KEY",
+      apiHost: "https://us.i.posthog.com",
+      initOptions: { defaults: "unset" },
+    }),
+    segment({ writeKey: "YOUR_WRITE_KEY" }),
+  ],
   pageviews: ["posthog", "segment"],
 });
 ```
@@ -153,7 +149,7 @@ For a legacy inline custom script, the equivalent entry is:
 }
 ```
 
-Custom objects can use c15t lifecycle callbacks directly. Do not replace an SDK helper's consent callbacks without preserving their behavior. Moving code to the client file makes functions possible; it does not make every vendor support the same options.
+Custom objects can use c15t lifecycle callbacks directly. Do not replace an SDK helper's consent callbacks without preserving their behavior. Moving code to `consent.ts` makes functions possible; it doesn't make every vendor support the same options.
 
 ## Events and consent changes
 
@@ -163,18 +159,18 @@ Raw search queries and assistant text stay out of vendor event metadata. The loc
 
 These consent changes apply even when you keep `blume/analytics`:
 
-- An analytics list now enables the offline c15t banner automatically. Without analytics or explicit consent configuration, no consent runtime is mounted. SDK-only sites must keep their explicit `consent` configuration.
+- An analytics list, like a `consent.ts`, now turns on the offline c15t banner. A site with neither and no `consent` config loads no consent code.
 - SDK helpers can load before consent using their denied-state behavior. Loading a tag container is not permission for every tag to run. Check the SDK policy and your container rules.
 - Existing `native()` configuration remains supported, but its old `blume-consent` storage is not imported. Returning visitors are asked again. Move old `i18n.ui.consent` banner overrides to c15t's `i18n` messages and check every supported language.
 - Osano and Fides can remain the decision source, UI, and record owner. c15t manages scripts without a second banner or copying provider decisions into new c15t receipts. Missing permissions remain denied.
 - Blume enables reload on consent withdrawal by default. The setting is `c15t({ reloadOnConsentRevoked: false })` only when your integrations can safely handle withdrawal without a reload.
-- Offline mode has browser storage but no server-side consent records. Connecting a backend is independent of migrating scripts; preserve or configure the required backend and policy through `c15t()`.
+- Offline mode keeps choices in the browser, with no server-side records. Connecting a backend is a separate step from moving scripts; see [Connect a backend](/docs/configuration/consent#connect-a-backend).
 
 See [Cookie consent](/docs/configuration/consent) for backend, provider, policy, and translation configuration.
 
 ## Verify and roll back
 
-1. Run `blume doctor` and `blume build`, then test the production output. Verify `blume dev` sends no vendor traffic if you kept the production guard.
+1. Run `blume doctor` and `blume build`, then test the production output.
 2. Start with fresh browser storage. Check denied-state network and storage behavior, then accept and confirm one loader and the expected initial pageview for each vendor.
 3. Navigate between pages and query strings. Check exactly one expected navigation pageview and no extra hash-only pageview. Exercise feedback, search, and narration events with consent denied and granted.
 4. Open preferences, withdraw consent, and verify the reload and subsequent denied behavior. Reload again to check persistence. For external CMPs, repeat with the provider unavailable and verify optional permissions remain denied.

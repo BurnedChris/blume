@@ -3,7 +3,7 @@ title: Integrations
 description: Add analytics, advertising pixels, tag managers, and support widgets with Blume's direct c15t script SDK exports.
 ---
 
-Use `blume/integrations/*` to add browser integrations to your docs site. These are direct re-exports of the c15t script SDK: the options, types, script loading, and consent callbacks come from c15t. Blume connects that runtime to its navigation, preferences control, and application events.
+Use `blume/integrations/*` to add analytics, tag managers, advertising pixels, and support widgets to your docs site. Each subpath re-exports a helper from c15t's script SDK, so the options, types, and loading behavior are c15t's. Blume wires them to its page navigation, consent banner, and events.
 
 Browser scripts go in a `consent.ts` at your project root. The top-level `integrations` array in `blume.config.ts` is for [Astro plugins](/docs/configuration/customization#astro-integrations), not vendor scripts.
 
@@ -16,20 +16,18 @@ import { defineConsent } from "blume/consent/client";
 import { posthog } from "blume/integrations/posthog";
 
 export default defineConsent({
-  scripts: import.meta.env.PROD
-    ? [
-        posthog({
-          id: "phc_YOUR_PROJECT_KEY",
-          region: "us",
-          loadMode: "after-consent",
-          initOptions: { capture_pageview: "history_change" },
-        }),
-      ]
-    : [],
+  scripts: [
+    posthog({
+      id: "phc_YOUR_PROJECT_KEY",
+      region: "us",
+      loadMode: "after-consent",
+      initOptions: { capture_pageview: "history_change" },
+    }),
+  ],
 });
 ```
 
-This example waits for measurement consent before loading PostHog and lets PostHog track client-side navigation. It explicitly selects the US region; use `eu` for an EU project, or the SDK's host options for your own endpoint. The production guard disables the script in `blume dev`.
+This example waits for measurement consent before loading PostHog and lets PostHog track client-side navigation. It explicitly selects the US region; use `eu` for an EU project, or the SDK's host options for your own endpoint. Scripts in `consent.ts` also run in `blume dev`; use a separate test project there if local visits shouldn't reach your dashboards.
 
 Use the public browser identifier supplied by your vendor. Anything in this module reaches the browser; do not put secret API credentials here.
 
@@ -100,13 +98,11 @@ import { googleTagManager } from "blume/integrations/google-tag-manager";
 import { metaPixel } from "blume/integrations/meta-pixel";
 
 export default defineConsent({
-  scripts: import.meta.env.PROD
-    ? [
-        googleTagManager({ id: "GTM-EXAMPLE" }),
-        metaPixel({ pixelId: "123456789" }),
-        crisp({ websiteId: "YOUR_CRISP_WEBSITE_ID" }),
-      ]
-    : [],
+  scripts: [
+    googleTagManager({ id: "GTM-EXAMPLE" }),
+    metaPixel({ pixelId: "123456789" }),
+    crisp({ websiteId: "YOUR_CRISP_WEBSITE_ID" }),
+  ],
 });
 ```
 
@@ -131,7 +127,7 @@ export default defineConfig({
 
 For Osano or Fides, configure `osano()` or `ethyca()` instead; Blume still reads the scripts from `consent.ts`. The external provider owns the banner, preferences, persistence, and consent records; c15t reads its permissions and manages scripts. Do not configure a second banner or let the provider independently load those same scripts. Follow the [provider setup and category mapping](/docs/configuration/consent#keep-osano-or-fides).
 
-Blume's footer preferences control opens the active provider. Blume enables reload on consent withdrawal by default because executed vendor code may continue running after its script element is removed. See [Loading and withdrawal](/docs/configuration/consent#loading-and-withdrawal) before overriding that behavior.
+The footer's **Cookie settings** link opens whichever provider is active. When a reader withdraws consent, Blume reloads the page so vendor code that already ran stops; see [Withdrawal and reload](/docs/configuration/consent#withdrawal-and-reload) before turning that off.
 
 ## Navigation and pageviews
 
@@ -142,9 +138,7 @@ import { defineConsent } from "blume/consent/client";
 import { segment } from "blume/integrations/segment";
 
 export default defineConsent({
-  scripts: import.meta.env.PROD
-    ? [segment({ writeKey: "YOUR_WRITE_KEY" })]
-    : [],
+  scripts: [segment({ writeKey: "YOUR_WRITE_KEY" })],
   pageviews: ["segment"],
 });
 ```
@@ -157,9 +151,9 @@ Adobe and GTM containers need their own rules for history-change events. For leg
 
 ## Blume application events
 
-Blume forwards feedback, search, narration, and assistant usage events through c15t to configured vendors supported by its event dispatcher. Delivery requires measurement permission as well as the script's own consent conditions. SDK-only integrations and legacy analytics adapters use the same dispatcher.
+Blume sends its own events through c15t to the integrations whose vendors have an event API: page feedback (`feedback`, `feedback_comment`), search (`search`, `search_select`), narration (`narration_play`, `narration_complete`), and the assistant (`ask`, `ask_answer`, `ask_error`). Each needs measurement consent plus the integration's own consent category. Support widgets and advertising pixels don't receive them. Legacy `analytics` adapters use the same path.
 
-A script loader does not automatically provide a custom event mapping. Analytics vendors with supported event APIs receive these events; support widgets and advertising pixels are not automatically destinations for every Blume event. See the event references for [feedback](/docs/configuration#page-feedback), [search](/docs/configuration/search#search-analytics), [narration](/docs/configuration/narration#analytics), and the [assistant](/docs/configuration/assistant#analytics).
+Each event's properties are listed with its feature: [feedback](/docs/configuration#page-feedback), [search](/docs/configuration/search#search-analytics), [narration](/docs/configuration/narration#analytics), and the [assistant](/docs/configuration/assistant#analytics).
 
 The local `blume:track` browser event remains available to application code even when vendor delivery is denied. It can include raw search queries or assistant text that Blume excludes from vendor metadata. A custom listener must check permissions and select safe fields before forwarding data. Written feedback comments are intentionally sent when that feature is enabled; review their contents and recipients separately.
 
@@ -171,18 +165,16 @@ For a script without a helper, add a c15t script object with a stable, unique ID
 import { defineConsent } from "blume/consent/client";
 
 export default defineConsent({
-  scripts: import.meta.env.PROD
-    ? [
-        {
-          id: "support-widget",
-          category: "functionality",
-          src: "https://support.example.com/widget.js",
-          onLoad: () => {
-            window.dispatchEvent(new Event("support:ready"));
-          },
-        },
-      ]
-    : [],
+  scripts: [
+    {
+      id: "support-widget",
+      category: "functionality",
+      src: "https://support.example.com/widget.js",
+      onLoad: () => {
+        window.dispatchEvent(new Event("support:ready"));
+      },
+    },
+  ],
 });
 ```
 
@@ -192,13 +184,13 @@ When extending a vendor helper, preserve its returned fields and consent callbac
 
 ## Verify your setup
 
-1. Run `blume doctor` and `blume build`. Test the production output; the examples intentionally disable vendor scripts during development.
+1. Run `blume doctor` and `blume build`. Test the production output.
 2. Use fresh browser storage. Check requests and storage before making a choice, then accept and confirm the expected script loads once.
 3. Navigate between docs pages. Check initial and navigation pageviews for missing or duplicate events, including hash-only and query-string changes.
 4. Open **Cookie settings**, withdraw consent, and verify the reload and subsequent denied behavior. For an external CMP, also test it being unavailable.
-5. Confirm your production identifiers, host region, notices, legal links, and translations. A successful loader test does not verify tags inside a container or establish compliance for the site.
+5. Confirm your production identifiers, host region, notices, legal links, and translations. A script that loads doesn't prove the tags inside a container behave.
 
-If nothing loads in `blume dev`, check the production guard first. If nothing loads in a build, check the entrypoint path, script category, current permissions, vendor ID, network failures, and your Content Security Policy. For duplicate events, check repeated registrations and whether both Blume and the vendor track navigation.
+If nothing loads in a build, check that `consent.ts` sits next to `blume.config.ts`, then the script's category, current permissions, vendor ID, network failures, and your Content Security Policy. For duplicate events, check repeated registrations and whether both Blume and the vendor track navigation.
 
 ## Migrate an existing configuration
 

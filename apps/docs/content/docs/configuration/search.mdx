@@ -92,7 +92,7 @@ search:
 
 ## Search analytics
 
-With an [analytics adapter](/docs/configuration/analytics) configured, search reports what readers look for. A query is recorded once it settles, after a second without typing or when the reader picks a result or closes the dialog, as a `search` event with the query `length`, the number of `results`, and the `path` it was searched from. A query with no results shows up with `results: 0`, so filtering on it lists what your docs don't cover yet. Picking a result sends a `search_select` event with the query `length`, the result's 1-based `position`, and its `url`, for click-through.
+With [integrations](/docs/configuration/integrations#blume-application-events) configured, search reports what readers look for. A query is recorded once it settles, after a second without typing or when the reader picks a result or closes the dialog, as a `search` event with the query `length`, the number of `results`, and the `path` it was searched from. A query with no results shows up with `results: 0`, so filtering on it lists what your docs don't cover yet. Picking a result sends a `search_select` event with the query `length`, the result's 1-based `position`, and its `url`, for click-through.
 
 Raw queries, capped at 100 characters, are included only in the local `blume:track` event. They are not forwarded to vendor SDKs. c15t delivers vendor events only while measurement consent is granted.
 
