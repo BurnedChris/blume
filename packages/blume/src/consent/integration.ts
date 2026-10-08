@@ -81,6 +81,10 @@ export const blumeConsentIntegrations = (input: {
   const { consent } = input;
   const configured = consent.kind === "c15t" ? consent.options : undefined;
   const options: C15tAstroOptions = {
+    // A manifest site bundles its policy at build time, so the init route
+    // answers without waiting on the backend. `buildManifest: false` fetches
+    // it at runtime instead, for policy edits that must skip a rebuild.
+    buildManifest: configured?.mode?.type === "manifest",
     consentCategories: [
       "necessary",
       "functionality",

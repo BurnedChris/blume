@@ -33,7 +33,31 @@ export default defineConfig({
 });
 ```
 
-`blume/consent` also exports `manifest()` and `offline()`. `manifest()` adds server routes, so it needs a server [deployment](/docs/deployment) such as `vercel()` or `node()`. `offline({ policyRules })` keeps the offline mode with your own rules.
+`blume/consent` also exports `offline()`, and `offline({ policyRules })` keeps the offline mode with your own rules.
+
+### Serve the banner from your own site
+
+With a server [deployment](/docs/deployment) such as `vercel()` or `node()`, use `manifest()` instead of `hosted()`. The reader's browser then asks your site, not the backend, which banner to show:
+
+```ts blume.config.ts
+import { defineConfig } from "blume";
+import { c15t, manifest } from "blume/consent";
+import { vercel } from "blume/deploy";
+
+export default defineConfig({
+  consent: c15t({
+    mode: manifest({ backendURL: "https://consent.example.com" }),
+  }),
+  deployment: vercel(),
+});
+```
+
+Blume downloads the backend's policy when it builds and bundles it into the server, so the banner doesn't wait on a request to the backend. Readers' choices still go to the backend. Because the policy is fixed at build time:
+
+- Rebuild after changing policies, translations, or vendors in the backend.
+- The build fails if it can't reach the backend, and `blume dev` downloads the policy when it starts.
+
+To pick up policy changes without a rebuild, set `buildManifest: false` on `c15t()`. The server then downloads the policy when it first needs it and caches it. A static site can't use `manifest()`; use `hosted()` there.
 
 ## Customize the banner
 

@@ -240,14 +240,19 @@ const setupConsent = async (consent: ReturnType<typeof c15t>) => {
         updateConfig,
       } as never);
   }
-  const serialized = updateConfig.mock.calls
+  const plugin = updateConfig.mock.calls
     .flatMap(([config]) => config.vite.plugins)
-    .find((plugin) => plugin.name === "c15t:options")
-    .load("\0virtual:c15t/options");
+    .find((entry) => entry.name === "c15t:options");
+  const read = (ssr: boolean) =>
+    JSON.parse(
+      plugin
+        .load("\0virtual:c15t/options", { ssr })
+        .replace(/^export default /u, "")
+        .slice(0, -1)
+    );
   return {
-    options: JSON.parse(
-      serialized.replace(/^export default /u, "").slice(0, -1)
-    ),
+    options: read(false),
+    serverOptions: read(true),
     styles: injectScript.mock.calls
       .filter(([stage]) => stage === "page-ssr")
       .map(([, source]) => source),
@@ -296,6 +301,33 @@ it("styles c15t from Blume's theme tokens and leaves dark mode to the site", asy
     consentBannerCard: "shadow-none",
   });
   expect(custom.styles).toEqual([]);
+});
+
+it("bundles the manifest at build time in manifest mode unless the site opts out", async () => {
+  const policy = { branding: "inth", revision: "r1", schemaVersion: 2 };
+  const fetchMock = mock((_url: string | URL | Request) =>
+    Promise.resolve(Response.json(policy))
+  );
+  const realFetch = globalThis.fetch;
+  // SAFETY: c15t's build-time loader only calls fetch(url, init).
+  globalThis.fetch = fetchMock as never;
+  try {
+    const mode = manifest({ backendURL: "https://consent.example.com" });
+    const built = await setupConsent(c15t({ mode }));
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://consent.example.com/manifest",
+    ]);
+    // The server gets the snapshot; the browser bundle never does.
+    expect(built.serverOptions.mode.manifest).toMatchObject(policy);
+    expect(built.options.mode.manifest).toBeUndefined();
+
+    fetchMock.mockClear();
+    await setupConsent(c15t({ buildManifest: false, mode }));
+    await setupConsent(c15t({ mode: hosted({ url: "https://c.example" }) }));
+    expect(fetchMock).not.toHaveBeenCalled();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
 it("wires the Astro client module, preserves callbacks, and suppresses legacy trackers in dev", async () => {
