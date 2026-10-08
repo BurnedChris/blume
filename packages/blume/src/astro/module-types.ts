@@ -59,6 +59,11 @@ declare module "blume:examples" {
   export const examplesBase: string;
 }
 
+declare module "blume:consent-ui" {
+  const component: typeof import("blume/components/layout/ConsentBanner.astro").default;
+  export default component;
+}
+
 declare module "blume:examples-theme";
 
 declare module "blume:openapi" {

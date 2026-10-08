@@ -2706,3 +2706,32 @@ describe("askEndpointTemplate bot check", () => {
     expect(askEndpointTemplate(resolveAskBackend())).not.toContain("captcha");
   });
 });
+
+it("includes c15t in both generated and ejected config only when configured", () => {
+  for (const ejected of [false, true]) {
+    const consentConfig = blumeConfigSchema.parse({
+      analytics: [
+        { kind: "vercel", options: {}, requiredSecrets: [], runtimeDeps: [] },
+      ],
+    });
+    const out = astroConfigTemplate({
+      askPath: "./Ask.astro",
+      config: consentConfig,
+      contentRoutes: [],
+      context: context(),
+      examplesPath: "./examples.ts",
+      examplesThemePath: "./examples.css",
+      featuresPath: "./features.ts",
+      generatedModulesDir: ejected ? "./src/generated" : undefined,
+      needsReact: false,
+      pages: [],
+      searchClientPath: "./search.ts",
+      themePath: "./app.css",
+    });
+    expect(out).toContain("blumeConsentIntegrations");
+    expect(out).toContain("blume/components/layout/ConsentBanner.astro");
+    if (ejected) {
+      expect(out).toContain('fileURLToPath(new URL(".", import.meta.url))');
+    }
+  }
+});

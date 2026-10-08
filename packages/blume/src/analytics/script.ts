@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import type { AdapterDescriptor } from "../core/adapter.ts";
 import { adapterDescriptorSchema } from "../core/adapter.ts";
-import type { HeadScript } from "./head.ts";
 
 /** Options for {@link script}; set exactly one of `src` or `content`. */
 export interface ScriptOptions {
@@ -38,6 +37,8 @@ export const scriptAdapterSchema = adapterDescriptorSchema(
  * Any other provider (Plausible, Fathom, GA, Umami, …) as one `<script>` tag:
  * external via `src`, inline via `content`. `attributes` is the verbatim
  * passthrough here — every entry lands on the tag as-is.
+ *
+ * @deprecated Use blume/integrations/* in consent.ts. Removed in the next major release.
  */
 export const script = (options: ScriptOptions): ScriptAdapter => ({
   kind: "script",
@@ -45,16 +46,3 @@ export const script = (options: ScriptOptions): ScriptAdapter => ({
   requiredSecrets: [],
   runtimeDeps: [],
 });
-
-/** The tag. Explicit `src`/`strategy` win over a same-named spread attribute. */
-export const scriptHead = (options: ScriptOptions): HeadScript[] => {
-  const attributes: HeadScript["attributes"] = { ...options.attributes };
-  if (!options.src) {
-    return [{ attributes, content: options.content ?? "" }];
-  }
-  if (options.strategy) {
-    attributes[options.strategy] = true;
-  }
-  attributes.src = options.src;
-  return [{ attributes, content: null }];
-};

@@ -15,7 +15,7 @@ import { NEW_TAB_HINT_ID } from "../../core/new-tab.ts";
 import type { FontHead } from "../../theme/fonts.ts";
 import type { Navigation } from "../../core/types.ts";
 import Analytics from "./Analytics.astro";
-import ConsentBanner from "./ConsentBanner.astro";
+import ConsentBanner from "blume:consent-ui";
 import ConsentHead from "./ConsentHead.astro";
 import WebMcp from "./WebMcp.astro";
 import Banner from "./Banner.astro";
@@ -172,9 +172,9 @@ createIconSprite(Astro.locals);
     </div>
     <WebMcp />
     {
-      consent?.kind === "native" && (
+      (consent?.kind === "native" || consent?.kind === "c15t") && (
         <ConsentBanner
-          policy={consent.options.policy}
+          policy={consent.kind === "native" ? consent.options.policy : undefined}
           strings={strings.consent}
         />
       )

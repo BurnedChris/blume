@@ -1,0 +1,179 @@
+---
+title: Migrate analytics to c15t scripts
+description: Keep existing analytics adapters working, or move integrations one at a time to the full c15t script SDK without losing configuration or navigation events.
+---
+
+`blume/analytics` and the `analytics` list are deprecated. They keep working in this release, with bug fixes but no new vendors or options, and will be removed in the next major release. Their replacement is `blume/integrations/*`: c15t's full script SDK, with more vendors and lifecycle callbacks, imported one vendor subpath at a time into a root `consent.ts`.
+
+While an `analytics` list has entries, `blume dev`, `blume build`, and `blume doctor` print a `BLUME_ANALYTICS_DEPRECATED` warning that links here. Your config stays valid.
+
+## Choose the scope of your upgrade
+
+| Path | Required changes |
+| --- | --- |
+| Keep existing analytics | Temporarily keep `analytics` and `blume/analytics` imports, with a migration warning. Migrate before the next major release. |
+| Move one integration | Remove that entry from `analytics`, register its SDK script in `consent.ts`, and keep the remaining adapters. |
+| Move everything | Register all scripts in `consent.ts`, then remove the empty `analytics` list and its imports. Keep any `consent` configuration you already have. |
+
+Do not put an SDK script directly into `analytics`. Analytics adapters are serialized descriptors; SDK scripts contain functions that must remain in the browser module.
+
+## Move an integration
+
+For example, this Adobe configuration continues to work:
+
+```ts blume.config.ts
+import { defineConfig } from "blume";
+import { adobe, segment } from "blume/analytics";
+
+export default defineConfig({
+  analytics: [
+    adobe({ url: "https://assets.adobedtm.com/example/launch.js" }),
+    segment({ key: "YOUR_WRITE_KEY" }),
+  ],
+});
+```
+
+To move Adobe first, remove only its adapter, and add it to a `consent.ts` at your project root:
+
+```ts blume.config.ts
+import { defineConfig } from "blume";
+import { segment } from "blume/analytics";
+
+export default defineConfig({
+  analytics: [segment({ key: "YOUR_WRITE_KEY" })],
+});
+```
+
+```ts consent.ts
+import { defineConsent } from "blume/consent/client";
+import { adobeAnalytics } from "blume/integrations/adobe-analytics";
+
+export default defineConsent({
+  scripts: [
+    adobeAnalytics({
+      scriptUrl: "https://assets.adobedtm.com/example/launch.js",
+    }),
+  ],
+});
+```
+
+Blume finds `consent.ts` by name; no config points at it. An existing `c15t()`, `osano()`, or `ethyca()` configuration keeps working unchanged, with its backend, policy, translations, and legal links; do not replace your consent authority just to migrate scripts. See [Cookie consent](/docs/configuration/consent#keep-osano-or-fides).
+
+Keep each vendor registered in one place. Blume combines legacy adapters and client scripts; it does not deduplicate the same vendor configured through both APIs. Also remove any duplicate loaders in custom head HTML, tag containers, or CMP auto-loading rules. Give custom script entries stable, unique IDs; keep the vendor identity and lifecycle callbacks returned by SDK helpers.
+
+Legacy adapters don't load in `blume dev`, but scripts in `consent.ts` do. Use a separate test project in development if local visits shouldn't reach your dashboards.
+
+## Preserve navigation pageviews
+
+Blume uses a client router. Segment and Hightouch need explicit navigation pageviews; PostHog needs them only when its own history tracking is disabled and pageview capture is enabled. Legacy adapters configure this automatically. For SDK scripts, declare the relevant vendors in the `pageviews` list of `consent.ts`:
+
+```ts consent.ts
+import { defineConsent } from "blume/consent/client";
+import { posthog } from "blume/integrations/posthog";
+import { segment } from "blume/integrations/segment";
+
+export default defineConsent({
+  scripts: [
+    posthog({
+      id: "phc_YOUR_PROJECT_KEY",
+      apiHost: "https://us.i.posthog.com",
+      initOptions: { defaults: "unset" },
+    }),
+    segment({ writeKey: "YOUR_WRITE_KEY" }),
+  ],
+  pageviews: ["posthog", "segment"],
+});
+```
+
+Remove the migrated PostHog and Segment entries from `analytics`. If these are your only integrations, `blume.config.ts` needs no `analytics` or `consent` entry at all: `consent.ts` on its own turns on the offline banner.
+
+This preserves the legacy PostHog host and defaults. The native c15t helper otherwise defaults to EU hosting and a newer PostHog defaults date. Copy your own host and initialization options when you have overridden them.
+
+For PostHog with `capture_pageview: "history_change"`, or a newer `defaults` date with automatic history tracking, leave `posthog` out of `pageviews` to avoid double counting. With `capture_pageview: false`, also leave it out. If you explicitly use `capture_pageview: true`, include it to preserve Blume's navigation tracking. Add `hightouch` for its SDK when migrating that adapter. If you disable a vendor's initial pageview intentionally, review navigation tracking separately.
+
+c15t delivers these pageviews only to configured scripts whose consent gates allow them, with measurement permission required. Blume seeds the initial route without sending a second initial pageview, deduplicates repeated route notifications, and ignores hash-only changes. Denied navigation events are discarded. Initial pageviews remain the SDK's responsibility. Other SDKs can track history themselves; Adobe and GTM containers still need their own history-change rules.
+
+## Map every existing adapter
+
+All subpaths below begin with `blume/integrations/`. These mappings preserve the compatibility adapter's current behavior; review the native helper's types before adopting different defaults. Move remaining vendor initialization options into the indicated nested object instead of spreading them at the top level.
+
+| Existing factory | SDK subpath and factory | Option migration |
+| --- | --- | --- |
+| `adobe()` | `adobe-analytics`: `adobeAnalytics()` | `url` → `scriptUrl`. |
+| `amplitude()` | `amplitude`: `amplitude()` | `key` → `apiKey`; remaining options → `initOptions`. Preserve `autocapture: true` and `fetchRemoteConfig: true` unless you overrode them. |
+| `clarity()` | `microsoft-clarity`: `clarity()` | Keep `id`. |
+| `clearbit()` | `clearbit`: `clearbit()` | `key` → `publishableKey`. |
+| `cloudflare()` | `cloudflare-web-analytics`: `cloudflareWebAnalytics()` | Keep `token` and supported beacon options such as `spa`. |
+| `databuddy()` | `databuddy`: `databuddy()` | Keep `clientId`. Preserve `configWhenDenied: { disabled: true }` and `configWhenGranted: { disabled: false }`. Move remaining legacy options to `data-*` attributes as below. |
+| `fathom()` | `fathom-analytics`: `fathomAnalytics()` | Keep `site`, set `spa: "auto"`, and preserve remaining `data-*` attributes. |
+| `googleAnalytics()` | `google-tag`: `gtag()` | Keep `id`, set `category: "measurement"`; remaining options → `config`. |
+| `googleTagManager()` | `google-tag-manager`: `googleTagManager()` | Keep `id` and `dataLayer` if customized. Retain consent-aware tag rules in the container. |
+| `heap()` | `heap`: `heap()` | `id` → `envId`; remaining options → `clientConfig`. |
+| `hightouch()` | `hightouch`: `hightouch()` | `key` → `writeKey`, `host` → `apiHost`; add `hightouch` to `pageviews`. |
+| `hotjar()` | `hotjar`: `hotjar()` | `id` → `siteId`; keep `version`. |
+| `logrocket()` | `logrocket`: `logRocket()` | `id` → `appId`; remaining options → `initOptions`. Note the capital `R` in the factory. |
+| `mixpanel()` | `mixpanel-analytics`: `mixpanelAnalytics()` | Keep `token`; remaining init options → `initOptions`. Translate `region` to `api_host` and preserve `track_pageview` as below. |
+| `oneDollarStats()` | `one-dollar-stats`: `oneDollarStats()` | Same options: `hostname` plus string settings forwarded as `data-*` attributes. The helper rejects setting names outside lowercase letters, digits, and hyphens. |
+| `pirsch()` | `pirsch`: `pirsch()` | `code` → `identificationCode`; preserve remaining `data-*` attributes. |
+| `plausible()` | `plausible-analytics`: `plausibleAnalytics()` | Keep `domain`; `host` → `scriptUrl` ending in `/js/script.js` (default `https://plausible.io/js/script.js`). Preserve remaining `data-*` attributes. |
+| `posthog()` | `posthog`: `posthog()` | `key` → `id`, `host` → `apiHost`; remaining options → `initOptions`. Preserve host, defaults, and pageview ownership as above. |
+| `segment()` | `segment`: `segment()` | `key` → `writeKey`; remaining load options → `loadOptions`. A custom `cdn` becomes `scriptUrl` as below. Add `segment` to `pageviews`. |
+| `vercel()` | `vercel-analytics`: `vercelAnalytics()` | `scriptSrc` → `scriptUrl`; retain supported options such as `mode`, `debug`, `endpoint`, `dsn`, and `disableAutoTrack`. For the legacy production loader, set `scriptUrl: "/_vercel/insights/script.js"`. Omit it for the SDK's hosted/debug loader. Register once. |
+| `script()` | Custom script object | `content` → `textContent`; keep `src` or inline content, `attributes`, and `strategy`. Add a unique `id` and `category: "measurement"`. |
+
+For Mixpanel, put `api_host` inside `initOptions`: US uses `https://api-js.mixpanel.com`, EU uses `https://api-eu.mixpanel.com`, and India uses `https://api-in.mixpanel.com`. Preserve the legacy `track_pageview: "url-with-path-and-query-string"` unless you already override it. Your explicitly supplied initialization options take precedence over those defaults.
+
+For Segment's custom CDN, use `${cdn.replace(/\/+$/, "")}/analytics.js/v1/${encodeURIComponent(writeKey)}/analytics.min.js` as `scriptUrl`. Without a custom CDN, the helper uses Segment's CDN.
+
+Legacy script-attribute adapters turn each remaining option into `data-${key}` with `String(value)`. Preserve the exact names, including underscores. Merge with the helper's own attributes rather than replacing them:
+
+```ts
+import { fathomAnalytics } from "blume/integrations/fathom-analytics";
+
+const fathom = fathomAnalytics({ site: "YOUR_SITE_ID", spa: "auto" });
+const fathomWithOptions = {
+  ...fathom,
+  attributes: { ...fathom.attributes, "data-honor_dnt": "true" },
+};
+```
+
+Put `fathomWithOptions` in the `scripts` array of `consent.ts`. The same pattern works for Databuddy, Pirsch, and Plausible legacy attributes.
+
+For a legacy inline custom script, the equivalent entry is:
+
+```ts
+{
+  id: "custom-analytics",
+  category: "measurement",
+  textContent: "window.myAnalyticsEnabled = true;",
+}
+```
+
+Custom objects can use c15t lifecycle callbacks directly. Do not replace an SDK helper's consent callbacks without preserving their behavior. Moving code to `consent.ts` makes functions possible; it doesn't make every vendor support the same options.
+
+## Events and consent changes
+
+Blume's feedback, search, and narration event names continue through the same c15t dispatcher for both APIs. The migration does not require changing application event producers. Only integrations supported by the dispatcher's vendor event API receive those events; a new loader alone does not automatically add custom event forwarding for that vendor.
+
+Raw search queries and assistant text stay out of vendor event metadata. The local `blume:track` event remains an application hook and can include raw text. It is not consent-gated: a custom listener must check permissions and minimize data before forwarding anything externally.
+
+These consent changes apply even when you keep `blume/analytics`:
+
+- An analytics list, like a `consent.ts`, now turns on the offline c15t banner. A site with neither and no `consent` config loads no consent code.
+- SDK helpers can load before consent using their denied-state behavior. Loading a tag container is not permission for every tag to run. Check the SDK policy and your container rules.
+- Existing `native()` configuration remains supported, but its old `blume-consent` storage is not imported. Returning visitors are asked again. Move old `i18n.ui.consent` banner overrides to c15t's `i18n` messages and check every supported language.
+- Osano and Fides can remain the decision source, UI, and record owner. c15t manages scripts without a second banner or copying provider decisions into new c15t receipts. Missing permissions remain denied.
+- Blume enables reload on consent withdrawal by default. The setting is `c15t({ reloadOnConsentRevoked: false })` only when your integrations can safely handle withdrawal without a reload.
+- Offline mode keeps choices in the browser, with no server-side records. Connecting a backend is a separate step from moving scripts; see [Connect a backend](/docs/configuration/consent#connect-a-backend).
+
+See [Cookie consent](/docs/configuration/consent) for backend, provider, policy, and translation configuration.
+
+## Verify and roll back
+
+1. Run `blume doctor` and `blume build`, then test the production output.
+2. Start with fresh browser storage. Check denied-state network and storage behavior, then accept and confirm one loader and the expected initial pageview for each vendor.
+3. Navigate between pages and query strings. Check exactly one expected navigation pageview and no extra hash-only pageview. Exercise feedback, search, and narration events with consent denied and granted.
+4. Open preferences, withdraw consent, and verify the reload and subsequent denied behavior. Reload again to check persistence. For external CMPs, repeat with the provider unavailable and verify optional permissions remain denied.
+5. Check existing visitors are asked again where expected, translations and policy links are correct, and each environment uses the intended vendor host and public project identifier.
+
+To roll back a vendor migration, remove its SDK entry and `pageviews` entry, then restore its original `blume/analytics` adapter. Keep other client scripts and the consent provider configuration. This reverses the configuration move; it does not restore Blume's previous consent engine or old storage. Reverting the entire runtime upgrade requires pinning the previous Blume version and restoring that version's configuration together.

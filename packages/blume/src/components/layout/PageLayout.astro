@@ -45,7 +45,7 @@ import { searchLocaleFor } from "./search-locale.ts";
 import "blume:theme";
 import { ClientRouter } from "astro:transitions";
 import Analytics from "./Analytics.astro";
-import ConsentBanner from "./ConsentBanner.astro";
+import ConsentBanner from "blume:consent-ui";
 import ConsentHead from "./ConsentHead.astro";
 import Banner from "./Banner.astro";
 import DiscoveryLinks from "./DiscoveryLinks.astro";
@@ -425,9 +425,9 @@ createIconSprite(Astro.locals);
     }
     <WebMcp />
     {
-      consent?.kind === "native" && (
+      (consent?.kind === "native" || consent?.kind === "c15t") && (
         <ConsentBanner
-          policy={consent.options.policy}
+          policy={consent.kind === "native" ? consent.options.policy : undefined}
           strings={strings.consent}
         />
       )

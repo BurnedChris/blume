@@ -20,13 +20,8 @@ export const nativeAdapterSchema = adapterDescriptorSchema(
   nativeOptionsSchema
 );
 
-/**
- * Blume's own consent banner: a card at the foot of the page asking to use
- * analytics cookies, with Accept and Decline side by side and an optional
- * link to your privacy policy. The answer stays in the reader's browser, and
- * the footer's Cookie settings link brings the banner back to change it. Its
- * text comes from the `consent` UI strings, translated in every built-in
- * language.
+/** Backward-compatible alias for c15t's offline banner and preferences dialog.
+ * Choices stay in the browser. Use c15t() for backend and translation options.
  */
 export const native = (options: NativeOptions = {}): NativeAdapter => ({
   kind: "native",

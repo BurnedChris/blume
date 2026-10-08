@@ -8,6 +8,8 @@ sidebar:
 
 Blume 2 changes configuration, not content: your Markdown and MDX pages need no edits, unless one sets the removed `search.boost` frontmatter field (see [Frontmatter](#frontmatter)). Settings that used to be a named string or a keyed block — the search provider, the deployment target, content sources, API references, analytics, and the assistant's model backend — are now **adapters** you import from a `blume/*` subpath and call. Ask AI is renamed the assistant, so `ai.ask` becomes `ai.assistant`. The machine-readable settings move from `ai` to a new `agents` key, and `components.ts` overrides are checked before the build. A zero-config site, or one that sets none of these, only needs the version bump.
 
+For the c15t integration update, `blume/analytics` is deprecated and remains supported only until the next major release. See the separate [c15t script migration guide](/docs/configuration/analytics-migration) for consent behavior changes and a vendor-by-vendor move to `blume/integrations/*`.
+
 ## Upgrade with one command
 
 Run the upgrade from your project, the folder with `blume.config.ts`:
