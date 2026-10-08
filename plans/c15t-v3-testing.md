@@ -4,7 +4,7 @@ This draft replaces Blume's consent state machine and vendor loaders with c15t's
 
 ## Dependencies
 
-Blume pins the published c15t v3 alphas exactly (`@c15t/astro`, `@c15t/core`, `@c15t/react` at `3.0.0-alpha.3`; `@c15t/scripts` at `3.0.0-alpha.2`, the latest publish of that package from the same release train). They include the external consent source and event dispatcher from [c15t/c15t#1204](https://github.com/c15t/c15t/pull/1204). Prerelease ranges would float to later alphas whose API may differ, so bump the pins deliberately and rerun the checks below.
+Blume pins the published c15t v3 alphas exactly (`@c15t/astro`, `@c15t/core`, `@c15t/react` at `3.0.0-alpha.8`; `@c15t/integrations` at `3.0.0-alpha.7`, the latest publish of that package from the same release train). `@c15t/integrations` replaced `@c15t/scripts`, which is now a deprecated re-export. They include the external consent source and event dispatcher from [c15t/c15t#1204](https://github.com/c15t/c15t/pull/1204). Prerelease ranges would float to later alphas whose API may differ, so bump the pins deliberately and rerun the checks below.
 
 To upgrade, change the four versions in `packages/blume/package.json`, then:
 
@@ -90,7 +90,7 @@ The companion c15t implementation, [c15t/c15t#1204](https://github.com/c15t/c15t
 
 ## Updating SDK re-exports
 
-The installed `@c15t/scripts` package manifest is the source of truth for named public SDK subpaths. Its integration registry also generates the catalog in the [integrations guide](../apps/docs/content/docs/configuration/integrations.mdx), keeping rendered documentation and Markdown/agent mirrors in sync. After upgrading c15t, run `bun run sync:c15t-integrations` (also included in `bun run fix`) and commit the generated `src/integrations` files and package exports. The generator adds new entries and removes stale ones while preserving unrelated Blume exports. Root, package metadata, blocked exports, and wildcard deep imports are not mirrored.
+The installed `@c15t/integrations` package manifest is the source of truth for named public SDK subpaths. Its integration registry also generates the catalog in the [integrations guide](../apps/docs/content/docs/configuration/integrations.mdx), keeping rendered documentation and Markdown/agent mirrors in sync. After upgrading c15t, run `bun run sync:c15t-integrations` (also included in `bun run fix`) and commit the generated `src/integrations` files and package exports. The generator adds new entries and removes stale ones while preserving unrelated Blume exports. Root, package metadata, blocked exports, and wildcard deep imports are not mirrored.
 
 `bun run check:c15t-integrations` is read-only and fails on missing, changed, or stale exports. `bun run check` includes it, so the existing lint CI job enforces parity. Do not generate during CI installation, since that would hide uncommitted drift.
 

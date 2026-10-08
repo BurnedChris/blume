@@ -176,7 +176,7 @@ export const runtimeDependencies = (options: {
   const { config, needsReact, needsSvelte, needsVue } = options;
   const deps = ["@astrojs/mdx"];
   if (config.consent) {
-    deps.push("@c15t/astro", "@c15t/core", "@c15t/scripts", "@c15t/react");
+    deps.push("@c15t/astro", "@c15t/core", "@c15t/integrations", "@c15t/react");
   }
   if (needsReact || config.consent) {
     deps.push("@astrojs/react");

@@ -175,6 +175,10 @@
       "types": "./dist/types/integrations/intercom.d.ts",
       "default": "./src/integrations/intercom.ts"
     },
+    "./integrations/klaviyo": {
+      "types": "./dist/types/integrations/klaviyo.d.ts",
+      "default": "./src/integrations/klaviyo.ts"
+    },
     "./integrations/linkedin-insights": {
       "types": "./dist/types/integrations/linkedin-insights.d.ts",
       "default": "./src/integrations/linkedin-insights.ts"
@@ -251,6 +255,10 @@
       "types": "./dist/types/integrations/segment.d.ts",
       "default": "./src/integrations/segment.ts"
     },
+    "./integrations/sentry": {
+      "types": "./dist/types/integrations/sentry.d.ts",
+      "default": "./src/integrations/sentry.ts"
+    },
     "./integrations/snapchat-pixel": {
       "types": "./dist/types/integrations/snapchat-pixel.d.ts",
       "default": "./src/integrations/snapchat-pixel.ts"
@@ -288,10 +296,10 @@
     "@astrojs/node": "^11.1.5",
     "@astrojs/react": "^6.0.5",
     "@astrojs/vercel": "^11.0.10",
-    "@c15t/astro": "3.0.0-alpha.3",
-    "@c15t/core": "3.0.0-alpha.3",
-    "@c15t/react": "3.0.0-alpha.3",
-    "@c15t/scripts": "3.0.0-alpha.2",
+    "@c15t/astro": "3.0.0-alpha.8",
+    "@c15t/core": "3.0.0-alpha.8",
+    "@c15t/integrations": "3.0.0-alpha.7",
+    "@c15t/react": "3.0.0-alpha.8",
     "@clack/prompts": "^1.8.0",
     "@iconify-json/lucide": "^1.2.131",
     "@iconify/types": "^2.0.0",

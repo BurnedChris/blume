@@ -41,5 +41,10 @@ export const c15t = (options: Partial<C15tOptions> = {}): C15tAdapter => ({
   kind: "c15t",
   options: { ...options, mode: options.mode ?? { type: "offline" } },
   requiredSecrets: [],
-  runtimeDeps: ["@c15t/astro", "@c15t/core", "@c15t/react", "@c15t/scripts"],
+  runtimeDeps: [
+    "@c15t/astro",
+    "@c15t/core",
+    "@c15t/react",
+    "@c15t/integrations",
+  ],
 });

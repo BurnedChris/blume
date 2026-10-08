@@ -6,7 +6,7 @@ import path from "node:path";
 it("generates added exports, removes stale ones, and detects drift without changing files", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "blume-exports-"));
   const packageRoot = path.join(root, "packages/blume");
-  const sdkRoot = path.join(packageRoot, "node_modules/@c15t/scripts");
+  const sdkRoot = path.join(packageRoot, "node_modules/@c15t/integrations");
   const manifestPath = path.join(packageRoot, "package.json");
   const entry = path.resolve(
     import.meta.dirname,
@@ -37,7 +37,7 @@ it("generates added exports, removes stale ones, and detects drift without chang
           "./private": null,
           "./registry": "./registry.js",
         },
-        name: "@c15t/scripts",
+        name: "@c15t/integrations",
       })
     );
     const original = JSON.stringify({
@@ -85,7 +85,7 @@ it("generates added exports, removes stale ones, and detects drift without chang
         path.join(packageRoot, "src/integrations/new-vendor.ts"),
         "utf-8"
       )
-    ).toContain('export * from "@c15t/scripts/new-vendor";');
+    ).toContain('export * from "@c15t/integrations/new-vendor";');
     await expect(run(true)).resolves.toMatchObject({ code: 0 });
     await writeFile(
       path.join(packageRoot, "src/integrations/new-vendor.ts"),
@@ -114,7 +114,11 @@ it("generates added exports, removes stale ones, and detects drift without chang
     await writeFile(docsPath, draft);
     await writeFile(
       path.join(sdkRoot, "registry.js"),
-      'export const builtInScriptIntegrations = [{ label: "New Vendor", packageSubpath: "new-vendor", consentCategory: "measurement" }];'
+      `export const builtInScriptIntegrations = [
+        { label: "New Vendor", packageSubpath: "new-vendor", consentCategory: "measurement" },
+        { label: "Either", packageSubpath: "new-vendor", consentCategory: { or: ["necessary", "measurement"] } },
+        { label: "Nested", packageSubpath: "new-vendor", consentCategory: { and: ["marketing", { not: { or: ["experience", "functionality"] } }] } },
+      ];`
     );
     await expect(run(true)).resolves.toMatchObject({
       code: 1,
@@ -127,6 +131,12 @@ it("generates added exports, removes stale ones, and detects drift without chang
     expect(guide).toEndWith("After\n");
     expect(guide).toContain(
       "| New Vendor | `blume/integrations/new-vendor` | `measurement` |"
+    );
+    expect(guide).toContain(
+      "| Either | `blume/integrations/new-vendor` | `necessary` or `measurement` |"
+    );
+    expect(guide).toContain(
+      "| Nested | `blume/integrations/new-vendor` | `marketing` and not (`experience` or `functionality`) |"
     );
     expect(guide).not.toContain("Stale table");
     await expect(run(true)).resolves.toMatchObject({ code: 0 });

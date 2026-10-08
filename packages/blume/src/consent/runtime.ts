@@ -1,7 +1,7 @@
 import { getConsentClient } from "@c15t/astro/client";
 import type { ConsentState, Script } from "@c15t/core";
 import type { ConsentRuntimeOptions } from "@c15t/core/runtime";
-import { createEventDispatcher } from "@c15t/scripts/events";
+import { createEventDispatcher } from "@c15t/integrations/events";
 
 import type { ConsentAdapter } from "./schema.ts";
 
