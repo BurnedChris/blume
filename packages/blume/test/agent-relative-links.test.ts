@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 
 import { dirname, join } from "pathe";
 
+import { buildAskData } from "../src/ai/ask-data.ts";
 import { buildLlmsFiles } from "../src/ai/llms.ts";
 import { buildRawMarkdown } from "../src/ai/markdown.ts";
 import { relativeLinkRewriter } from "../src/ai/relative-links.ts";
@@ -59,6 +60,13 @@ const FILES = {
   "docs/guides/setup.md": "---\nslug: guides/configure\n---\n# Setup\n",
   "docs/index.md": "# Home\n",
 };
+
+/** A staged source entry, as a remote source loads it. */
+const entry = (ref: string, title: string, text: string) => ({
+  body: { format: "md", text },
+  data: { title },
+  ref,
+});
 
 describe("relative page links on the agent surfaces", () => {
   it("points each at the route it means in the Markdown mirrors", async () => {
@@ -177,7 +185,167 @@ describe("relative page links on the agent surfaces", () => {
     expect(raw["/guides"]?.mdx).toContain('<a href="/guides/setup.md">Raw</a>');
   });
 
-  it("leaves a page with no source file as written", async () => {
+  it("rewrites them in the assistant's grounding, without the deployment base", async () => {
+    // The chat panel mounts the links it renders under `deployment.base`. A
+    // root link to a content file lands on its page there too, read with the
+    // base or without it; other root links stay as written.
+    const project = await scanFixture({
+      ...FILES,
+      "docs/guides/cards.mdx": '# Cards\n\n<Card href="./install" />\n',
+      "docs/guides/rooted.md":
+        "# Rooted\n\nSee [Install](/guides/install), [Setup](/guides/setup.md#run) and [it again](/sub/guides/setup.md).\n",
+    });
+    const { documents } = await buildAskData(project);
+    const content = (route: string) =>
+      documents.find((doc) => doc.route === route)?.content;
+    expect(content("/guides/leaf")).toContain(
+      "See [Install](/guides/install)."
+    );
+    expect(content("/guides/rooted")).toContain(
+      "See [Install](/guides/install), [Setup](/guides/configure#run) and [it again](/guides/configure)."
+    );
+    // The link is rewritten before the card downlevels, so the label the
+    // card takes from its `href` is the route too, as in llms-full.txt.
+    expect(content("/guides/cards")).toContain(
+      "**[/guides/install](/guides/install)**"
+    );
+    expect(documents.some((doc) => doc.content.includes("/sub/"))).toBe(false);
+  });
+
+  it("points them at the pages the assistant's snapshot holds", async () => {
+    // Routes carry basePath but no deployment base. An untranslated sibling
+    // is the default tree's page, which the snapshot holds, however the link
+    // names it; its French fallback copy isn't in the snapshot.
+    const project = await scanFixture({
+      "blume.config.ts": `export default {
+  basePath: "/docs",
+  deployment: { base: "/sub" },
+  i18n: { defaultLocale: "en", locales: [{ code: "en", label: "English" }, { code: "fr", label: "Français" }] },
+};`,
+      "docs/fr/guides/leaf.md":
+        "# Feuille\n\nVoir [Install](./install), [le fichier](./install.md#run) et [Setup](./setup).\n",
+      "docs/fr/guides/setup.md": "# Configurer\n",
+      "docs/guides/install.md": "# Install\n",
+      "docs/guides/leaf.md": "# Leaf\n\nSee [Install](./install).\n",
+      "docs/guides/setup.md": "# Setup\n",
+    });
+    const { documents } = await buildAskData(project);
+    const content = (route: string) =>
+      documents.find((doc) => doc.route === route)?.content;
+    expect(content("/docs/guides/leaf")).toContain(
+      "See [Install](/docs/guides/install)."
+    );
+    expect(content("/docs/fr/guides/leaf")).toContain(
+      "Voir [Install](/docs/guides/install), [le fichier](/docs/guides/install#run) et [Setup](/docs/fr/guides/setup)."
+    );
+    expect(content("/docs/guides/install")).toBeDefined();
+    expect(content("/docs/fr/guides/setup")).toBeDefined();
+  });
+
+  it("reads a raw `<a href>` the way the browser does", async () => {
+    // The rendered page ships it as written, so it resolves against the
+    // page's slashless URL: an index page's parent folder, and a `.md`
+    // target is a Markdown copy rather than a file link.
+    const project = await scanFixture({
+      ...FILES,
+      "docs/guides/index.md":
+        '# Guides\n\n<a href="./install">Install</a>, not <a href="./diagram.png">the diagram</a>, <a href="#top">the top</a> or <a href="https://example.com/x">elsewhere</a>.\n',
+      "docs/guides/leaf.md": '# Leaf\n\n<a href="./setup.md#run">Copy</a>\n',
+    });
+    const raw = await buildRawMarkdown(project);
+    expect(raw["/guides"]?.mdx).toContain(
+      '<a href="/sub/install">Install</a>, not <a href="./diagram.png">the diagram</a>, <a href="#top">the top</a> or <a href="https://example.com/x">elsewhere</a>.'
+    );
+    expect(raw["/guides/leaf"]?.mdx).toContain(
+      '<a href="/sub/guides/setup.md#run">Copy</a>'
+    );
+    const { documents } = await buildAskData(project);
+    const content = (route: string) =>
+      documents.find((doc) => doc.route === route)?.content;
+    expect(content("/guides")).toContain('<a href="/install">Install</a>');
+    expect(content("/guides/leaf")).toContain(
+      '<a href="/guides/setup.md#run">Copy</a>'
+    );
+  });
+
+  it("resolves each page's links from its own file when two share a route", async () => {
+    // `BLUME_DUPLICATE_ROUTE` is reported, but a dev regeneration still
+    // builds the snapshot, one document per page.
+    const project = await scanFixture({
+      "docs/guides/install.md": "# Install\n",
+      "docs/guides/setup.md": "# Setup\n\n[Leaf](./install)\n",
+      "docs/guides/setup/index.md": "# Setup\n\n[Index](./install)\n",
+    });
+    const { documents } = await buildAskData(project);
+    const contents = documents.map((doc) => doc.content);
+    expect(contents).toContain("# Setup\n\n[Leaf](/guides/install)");
+    expect(contents).toContain("# Setup\n\n[Index](/guides/setup/install)");
+  });
+
+  it("resolves a staged page's links by its path under the staging dir", async () => {
+    // A remote source's pages have no file on disk; they link each other as
+    // they do in their repo, and the rendered page resolves that already.
+    const entries = [
+      entry(
+        "wiki/index.md",
+        "Wiki",
+        "See [Setup](./tools/setup.md#run) and [Install](./tools/install)."
+      ),
+      // A slug moves the page, so only the entry id finds it.
+      {
+        ...entry(
+          "wiki/tools/setup.md",
+          "Setup",
+          "Back to [the wiki](../index.md), on to [Install](./install.md)."
+        ),
+        data: { slug: "wiki/configure", title: "Setup" },
+      },
+      entry("wiki/tools/install.md", "Install", "# Install"),
+    ];
+    const project = await scanFixture({
+      "blume.config.ts": `export default {
+  content: {
+    sources: [
+      { kind: "filesystem", options: { root: "docs" }, requiredSecrets: [], runtimeDeps: [] },
+      {
+        kind: "custom",
+        options: {
+          load: () => Promise.resolve({ diagnostics: [], entries: ${JSON.stringify(entries)} }),
+          name: "remote",
+          staged: true,
+        },
+        requiredSecrets: [],
+        runtimeDeps: [],
+      },
+    ],
+  },
+};
+`,
+      "docs/index.md": "# Home\n",
+    });
+    const raw = await buildRawMarkdown(project);
+    // A file link resolves by entry id (the route-relative reading would give
+    // `/wiki/tools/setup` and `/`); a route link against the page's folder,
+    // which for an index page is its own.
+    expect(raw["/wiki"]?.mdx).toContain(
+      "See [Setup](/wiki/configure#run) and [Install](/wiki/tools/install)."
+    );
+    expect(raw["/wiki/configure"]?.mdx).toContain(
+      "Back to [the wiki](/wiki), on to [Install](/wiki/tools/install)."
+    );
+    const { full } = await buildLlmsFiles(project);
+    expect(full).toContain(
+      "See [Setup](/wiki/configure#run) and [Install](/wiki/tools/install)."
+    );
+    const { documents } = await buildAskData(project);
+    expect(
+      documents.find((doc) => doc.route === "/wiki/configure")?.content
+    ).toContain(
+      "Back to [the wiki](/wiki), on to [Install](/wiki/tools/install)."
+    );
+  });
+
+  it("leaves a page with neither a source file nor an entry id as written", async () => {
     const project = await scanFixture(FILES);
     const rewrite = relativeLinkRewriter(project);
     expect(rewrite("[Install](./install)", { route: "/remote" })).toBe(
