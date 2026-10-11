@@ -16,6 +16,18 @@ seo: {
 }
 ```
 
+### Sprachalternativen [#locale-alternates]
+
+Aktiviere alternative Links in der Sitemap einer mehrsprachigen Website:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  sitemap: { alternates: true },
+}
+```
+
+Jede übersetzte Seite listet ihre Übersetzungen, sich selbst eingeschlossen, als `xhtml:link`-Elemente auf, dazu einen `x-default`-Link, wenn die Standardsprache die Seite enthält. Das sind dieselben `hreflang`-Links, die auch der Seitenkopf enthält: Eine Übersetzung mit `noindex`, eine versteckte oder eine, deren Canonical auf eine andere URL zeigt, taucht in keinem von beiden auf. Eine Seite, die in weniger als zwei der aufgeführten Sprachen vorliegt, bekommt keine alternativen Links. Die URLs enthalten den Basispfad des Deployments. `sitemap: true` und `sitemap: {}` lassen die Alternativen deaktiviert; `sitemap: false` deaktiviert die Sitemap.
+
 Liefere deine eigene `public/sitemap.xml` aus, um die Kontrolle zu übernehmen — Blume überschreibt niemals eine Datei, die du in `public/` ablegst.
 
 ## Robots

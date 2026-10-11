@@ -4,13 +4,28 @@ description: >-
   Cards sociais 1200×630 gerados para cada página — identidade visual, camadas do card, fontes para escritas não latinas e substituições por página.
 ---
 
-O Blume pode renderizar um card social de 1200×630 para cada página em tempo de build — sem navegador headless, graças ao [Takumi](https://takumi.kane.tw), então os builds continuam rápidos. Ativado por padrão assim que [`deployment.site`](/docs/deployment) é definido ou detectado automaticamente (a URL de `og:image` precisa ser absoluta para ser útil aos crawlers), e desativado caso contrário. Defina `enabled` para sobrescrever isso em qualquer direção:
+O Blume pode renderizar um card social de 1200×630 para cada página em tempo de build — sem navegador headless, graças ao [Takumi](https://takumi.kane.tw), então os builds continuam rápidos. Ativado por padrão assim que [`deployment.site`](/docs/deployment) é definido ou detectado automaticamente (a URL de `og:image` precisa ser absoluta para ser útil aos crawlers), e desativado caso contrário ou quando uma [imagem padrão](#default-image) substitui os cards. Defina `enabled` para sobrescrever isso em qualquer direção:
 
 ```ts blume.config.ts lineNumbers
 seo: {
   og: { enabled: true }, // or false to opt out even with a site set
 }
 ```
+
+## Imagem padrão [#default-image]
+
+Defina `seo.og.image` para compartilhar uma única imagem entre todas as páginas em vez de um card gerado, ou dê a cada locale a sua própria:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  og: {
+    image: { en: "/og/default-en.png", fr: "/og/default-fr.png" },
+    // Or image: "https://example.com/og/default.png"
+  },
+}
+```
+
+O `seo.image` de uma página, ou a prop `ogImage` de uma página personalizada, prevalece sobre o padrão. Um locale ausente do mapa usa a imagem do locale padrão. O padrão também cobre páginas personalizadas renderizadas com `PageLayout` e o índice de changelog gerado, então o Blume para de gerar cards assim que ele é definido, a menos que `enabled` seja `true`. Caminhos relativos à raiz são resolvidos sob a base do deploy. O Blume declara as dimensões da imagem apenas para cards gerados. Seja qual for a imagem que uma página acabe usando, ela também vai para o [JSON-LD](/docs/discoverability/structured-data) da página como `image`.
 
 ## Aplique sua marca ao card gerado [#brand-the-generated-card]
 

@@ -49,6 +49,50 @@ seo: {
 
 `software` fügt der Startseite einen **SoftwareApplication**-Knoten hinzu: Name und Beschreibung des Produkts (standardmäßig die der Website), `applicationCategory` (Standard `"DeveloperApplication"`), Betriebssystem, Lizenz, ein `Offer`, wenn `price` gesetzt ist, sowie die Registry- oder Repository-URLs in `sameAs`. Übergib `software: true`, um alle Standardwerte zu übernehmen. Die Organisation wird, sofern konfiguriert, als deren `publisher` angegeben.
 
+## Gemeinsame Entitäts-Identifier [#shared-entity-identifiers]
+
+Wenn deine Dokumentation innerhalb einer anderen Website liegt (`example.com/docs`), verweise auf die Entitäten, die diese Website bereits definiert, statt sie noch einmal zu definieren:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  jsonLd: {
+    websiteId: "https://example.com/#website",
+    organizationId: "https://example.com/#organization",
+  },
+}
+```
+
+Jede Seite nennt `websiteId` als ihr `isPartOf`, und Blume gibt keinen eigenen WebSite-Knoten mehr aus, dessen Name und URL die Dokumentation statt der Website beschreiben würden. Setze `website: true`, um ihn trotzdem unter dieser ID auszugeben, oder `website: false`, um den eigenen WebSite-Knoten der Dokumentation wegzulassen, ohne eine ID zu teilen. `organizationId` wird zum Herausgeber jeder Seite. Wenn zusätzlich [`seo.organization`](#site-identity) gesetzt ist, verwendet der Organization-Knoten diese ID und enthält nur die Felder, die du konfigurierst: Titel und URL der Dokumentation springen nicht für seinen Namen und seine URL ein. Standardmäßig gibt Blume den WebSite-Knoten aus und verwendet die URL der Website plus `#website` und `#organization`. Identifier müssen absolute URLs sein, deshalb funktionieren sie auch ohne Website-URL.
+
+## Autor und Herausgeber der Seite [#page-author-and-publisher]
+
+Verweise auf jeder Seite auf bestehende Entitäten:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  jsonLd: {
+    author: { "@id": "https://example.com/#author" },
+    publisher: { "@id": "https://example.com/#publisher" },
+  },
+}
+```
+
+Diese Verweise gelten für den WebPage- oder Artikel-Knoten, und `publisher` ersetzt die Organisation als dessen Herausgeber. Blume definiert die Entitäten, auf die sie verweisen, nicht selbst. Das eigene [`authors`](/docs/content/frontmatter)-Frontmatter einer Seite hat Vorrang vor `author`: Jeder Eintrag wird als `Person` genannt.
+
+## Veröffentlichungsdatum aus Git [#publication-date-from-git]
+
+Datiere Seiten anhand des Commits, der ihre Inhaltsdatei hinzugefügt hat:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  datePublished: "git",
+}
+```
+
+`date` oder `changelog.date` im Frontmatter haben weiterhin Vorrang. Den Rest datiert Git, über dasselbe `git log` wie [`lastModified`](/docs/configuration#last-modified). Umbenennungen werden nur verfolgt, wenn der Inhalt unverändert ist, damit eine neue Seite nie die Historie einer ähnlichen Seite erbt, die im selben Commit gelöscht wurde. Seiten aus Quellen außerhalb des Dateisystems und nicht committete Dateien bekommen kein Datum aus Git. Ein Shallow Clone datiert keine Seite und gibt stattdessen eine Warnung aus, da sein ältester Commit nur die Stelle ist, an der der Clone abgeschnitten wurde. Hol dir in der CI die vollständige Historie (`VERCEL_DEEP_CLONE=true` auf Vercel, `fetch-depth: 0` für `actions/checkout`).
+
+Das aufgelöste [Open-Graph-Bild](/docs/discoverability/open-graph) wird außerdem als `image` des Seiten-Knotens aufgenommen – egal ob es aus dem Frontmatter, einem Standardwert der Website oder einer generierten Karte stammt.
+
 ## Eigene Seiten [#custom-pages]
 
 Eine eigene [`.astro`-Seite](/docs/advanced/custom-pages), die über `PageLayout` gerendert wird, gibt denselben Graphen aus, damit eine Marketing-Startseite nicht die eine URL ohne strukturierte Daten ist. Eine eigene Seite hat keine Inhaltsdatei, aus der sich ein Datum ablesen ließe, also übergib `lastModified`, um ihr ein `dateModified` zu geben. Übergib `structuredDataEnabled={config.structuredData}`, um sie mit dieser Einstellung synchron zu halten, oder `structuredDataEnabled={false}`, um sie nur für diese Seite abzuschalten.

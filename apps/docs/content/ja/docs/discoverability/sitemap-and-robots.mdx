@@ -16,6 +16,18 @@ seo: {
 }
 ```
 
+### ロケールの代替リンク [#locale-alternates]
+
+多言語サイトでは、サイトマップに代替リンクを含めるようオプトインできます:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  sitemap: { alternates: true },
+}
+```
+
+翻訳された各ページは、自身を含むすべての翻訳を `xhtml:link` 要素として列挙し、デフォルトロケールにそのページがある場合は `x-default` リンクも追加します。これらはページの head に含まれる `hreflang` リンクと同じものです。`noindex`・非表示・canonical が別の URL を指している翻訳は、どちらにも含まれません。列挙されるロケールが 2 つ未満のページには、代替リンクは付きません。URL にはデプロイメントのベースパスが含まれます。`sitemap: true` と `sitemap: {}` では代替リンクは無効のままで、`sitemap: false` を指定するとサイトマップ自体が無効になります。
+
 独自の `public/sitemap.xml` を配置すれば、そちらが優先されます — Blume が `public/` に置いたファイルを上書きすることはありません。
 
 ## Robots

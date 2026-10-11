@@ -16,6 +16,18 @@ seo: {
 }
 ```
 
+### Links alternativos de idioma [#locale-alternates]
+
+Ative links alternativos no sitemap de um site multilíngue:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  sitemap: { alternates: true },
+}
+```
+
+Cada página traduzida lista suas traduções, incluindo ela mesma, como elementos `xhtml:link`, além de um link `x-default` quando o locale padrão tem a página. São os mesmos links `hreflang` que o head da página carrega: uma tradução com `noindex`, oculta ou com canonical apontando para outro lugar não aparece em nenhum dos dois. Uma página presente em menos de dois locales listados não recebe links alternativos. As URLs incluem a base do deployment. `sitemap: true` e `sitemap: {}` mantêm os links alternativos desativados; `sitemap: false` desativa o sitemap.
+
 Envie seu próprio `public/sitemap.xml` para assumir o controle — o Blume nunca sobrescreve um arquivo que você coloca em `public/`.
 
 ## Robots

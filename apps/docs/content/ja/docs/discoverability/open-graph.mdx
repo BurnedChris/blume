@@ -4,13 +4,28 @@ description: >-
   すべてのページ向けに生成される 1200×630 のソーシャルカード — ブランディング、カードのレイヤー、非ラテン文字向けフォント、ページ単位のオーバーライドについて。
 ---
 
-Blume は、すべてのページに対してビルド時に 1200×630 のソーシャルカードをレンダリングできます。[Takumi](https://takumi.kane.tw) のおかげでヘッドレスブラウザは不要で、ビルドは高速なままです。[`deployment.site`](/docs/deployment) が設定されているか自動検出された場合はデフォルトで有効になり（`og:image` の URL はクローラーにとって有用であるために絶対 URL である必要があります）、そうでない場合は無効です。どちらの挙動も `enabled` で上書きできます:
+Blume は、すべてのページに対してビルド時に 1200×630 のソーシャルカードをレンダリングできます。[Takumi](https://takumi.kane.tw) のおかげでヘッドレスブラウザは不要で、ビルドは高速なままです。[`deployment.site`](/docs/deployment) が設定されているか自動検出された場合はデフォルトで有効になり（`og:image` の URL はクローラーにとって有用であるために絶対 URL である必要があります）、そうでない場合や [デフォルト画像](#default-image) がカードを置き換える場合は無効です。どちらの挙動も `enabled` で上書きできます:
 
 ```ts blume.config.ts lineNumbers
 seo: {
   og: { enabled: true }, // or false to opt out even with a site set
 }
 ```
+
+## デフォルト画像 [#default-image]
+
+生成されるカードの代わりにすべてのページで 1 つの画像を共有するには、`seo.og.image` を設定します。ロケールごとに個別の画像を指定することもできます:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  og: {
+    image: { en: "/og/default-en.png", fr: "/og/default-fr.png" },
+    // Or image: "https://example.com/og/default.png"
+  },
+}
+```
+
+ページの `seo.image` やカスタムページの `ogImage` プロパティは、デフォルトよりも優先されます。マップに含まれないロケールには、デフォルトロケールの画像が使われます。デフォルト画像は `PageLayout` でレンダリングされるカスタムページや、生成される変更履歴のインデックスにも適用されるため、これを設定すると、`enabled` が `true` でない限り Blume はカードを生成しなくなります。ルート相対パスはデプロイのベースパスの下で解決されます。Blume が画像のサイズを宣言するのは、生成されたカードに対してのみです。最終的にページで使われる画像は、ページの `image` としてその [JSON-LD](/docs/discoverability/structured-data) にも含まれます。
 
 ## 生成されるカードをブランディングする [#brand-the-generated-card]
 

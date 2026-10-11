@@ -187,7 +187,7 @@ i18n: {
 O SEO localizado é cuidado para você — não há metadados por página para escrever:
 
 - `<html lang>` e `dir` são definidos a partir do locale ativo.
-- As alternativas `hreflang` apontam para todas as traduções reais de uma página, mais um `x-default` apontando para o locale padrão.
+- As alternativas `hreflang` apontam para todas as traduções reais de uma página que os motores de busca podem indexar (uma tradução com `noindex`, oculta ou com canonical apontando para outro lugar fica de fora), mais um `x-default` apontando para o locale padrão.
 - As URLs canônicas são corretas por locale, e o JSON-LD carrega `inLanguage`.
 
 Defina [`deployment.site`](/docs/deployment) para que isso possa ser emitido como URLs absolutas.

@@ -187,7 +187,7 @@ i18n: {
 Lokalisiertes SEO wird für dich erledigt – keine Metadaten pro Seite zu schreiben:
 
 - `<html lang>` und `dir` werden anhand der aktiven Locale gesetzt.
-- `hreflang`-Alternates verlinken jede echte Übersetzung einer Seite, plus ein `x-default`, das auf die Standard-Locale zeigt.
+- `hreflang`-Alternates verlinken jede echte Übersetzung einer Seite, die Suchmaschinen indexieren dürfen (eine Übersetzung mit `noindex`, eine ausgeblendete oder eine, deren kanonische URL woanders liegt, wird ausgelassen), plus ein `x-default`, das auf die Standard-Locale zeigt.
 - Kanonische URLs sind locale-korrekt, und JSON-LD führt `inLanguage`.
 
 Setze [`deployment.site`](/docs/deployment), damit diese als absolute URLs ausgegeben werden können.
