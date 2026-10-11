@@ -34,6 +34,7 @@ export const ko: UIStringsOverride = {
     error: "죄송합니다. 문제가 발생했습니다.",
     explainCode: "이 코드를 설명해 주세요.",
     label: "질문하기",
+    open: "어시스턴트 열기",
     placeholder: "질문하기…",
     rateLimited: "질문을 너무 많이 하셨습니다. 몇 분 후에 다시 시도해 주세요.",
     removeCode: "코드 제거",
@@ -48,6 +49,7 @@ export const ko: UIStringsOverride = {
   banner: { dismiss: "공지 닫기" },
   changelog: {
     description: "제품 업데이트 및 릴리스 노트.",
+    empty: "아직 변경 로그 항목이 없습니다.",
     title: "변경 로그",
   },
   consent: {
@@ -69,6 +71,7 @@ export const ko: UIStringsOverride = {
     preview: "미리보기",
     prop: "속성",
     selectTab: "탭 선택",
+    selectView: "보기 선택",
     showLess: "간략히 보기",
     showMore: "더 보기",
     stars: "스타",

@@ -7,7 +7,7 @@ sidebar:
   order: 2.5
 ---
 
-Blume 2 ändert die Konfiguration, nicht die Inhalte: Deine Markdown- und MDX-Seiten brauchen keine Anpassungen, es sei denn, eine davon setzt das entfernte Frontmatter-Feld `search.boost` (siehe [Frontmatter](#frontmatter)). Einstellungen, die früher ein benannter String oder ein Block mit Schlüssel waren – der Suchanbieter, das Deployment-Ziel, Content-Quellen, API-Referenzen, Analytics und das Modell-Backend des Assistenten –, sind jetzt **Adapter**, die du aus einem `blume/*`-Subpath importierst und aufrufst. Ask AI heißt jetzt Assistent, daher wird `ai.ask` zu `ai.assistant`. Die maschinenlesbaren Einstellungen wandern von `ai` in einen neuen Schlüssel `agents`, und Überschreibungen in `components.ts` werden vor dem Build geprüft. Eine Site ohne Konfiguration oder eine, die nichts davon setzt, braucht nur das Versions-Update.
+Blume 2 ändert die Konfiguration, nicht die Inhalte: Deine Markdown- und MDX-Seiten brauchen keine Anpassungen (unter [Frontmatter](#frontmatter) findest du ein Feld, das jetzt etwas bewirkt). Einstellungen, die früher ein benannter String oder ein Block mit Schlüssel waren – der Suchanbieter, das Deployment-Ziel, Content-Quellen, API-Referenzen, Analytics und das Modell-Backend des Assistenten –, sind jetzt **Adapter**, die du aus einem `blume/*`-Subpath importierst und aufrufst. Ask AI heißt jetzt Assistent, daher wird `ai.ask` zu `ai.assistant`. Die maschinenlesbaren Einstellungen wandern von `ai` in einen neuen Schlüssel `agents`, und Überschreibungen in `components.ts` werden vor dem Build geprüft. Eine Site ohne Konfiguration oder eine, die nichts davon setzt, braucht nur das Versions-Update.
 
 ## Mit einem Befehl upgraden [#upgrade-with-one-command]
 
@@ -88,8 +88,8 @@ export default defineConfig({
 
 - `netlify()`, `cloudflare()` und `node()` funktionieren genauso. Sobald du einen Host-Adapter angibst, wird auf Server-Output umgeschaltet; übergib `output: "static"`, um einen statischen Build mit den Plattformdateien dieses Hosts zu behalten.
 - Eine Konfiguration, die nur `site` oder `base` setzt, bleibt, wie sie ist: `deployment: { site, base }` ist weiterhin die statische Form.
-- `redirects` erwarten exakte Pfade. Ein `from` oder `to` mit einem `:param`-Segment oder einer `*`-Wildcard besteht die Validierung jetzt nicht mehr; Blume 1 hat Muster nie unterstützt, und Hosts haben sie unterschiedlich behandelt. Verschiebe Regeln mit Mustern in die eigene Konfiguration deines Hosts (`vercel.json`, `_redirects`).
-- Die Flags `--adapter`, `--output` und `--base` von `blume build` gibt es nicht mehr; übergibst du eines davon, bricht der Build mit einem Fehler ab, der die `deployment`-Einstellung nennt, die es ersetzt. Setze den Adapter in `blume.config.ts` und gib ihn explizit an: Server-Output wird nicht mehr aus der Umgebung der Plattform abgeleitet.
+- `redirects` lesen `:name`-Segmente und ein abschließendes `*` als Muster, die auf jedem Host gleich ausgewertet werden (siehe [Redirects mit Mustern](/docs/deployment#pattern-redirects)). Blume 1 hat Muster nie unterstützt und sie unverändert an den jeweiligen Host weitergegeben – prüf also jedes `from` oder `to`, das eines enthält.
+- Die Flags `--adapter`, `--output` und `--base` von `blume build` gibt es nicht mehr; übergibst du eines davon, bricht der Build mit einem Fehler ab, der die `deployment`-Einstellung nennt, die es ersetzt. Setze den Adapter in `blume.config.ts` und gib ihn explizit an: Server-Output wird nicht mehr aus der Umgebung der Plattform abgeleitet. Ein CI-Schritt, der pro Deployment ein anderes `--base` übergeben hat, kann es stattdessen in der Konfiguration [aus einer Umgebungsvariable lesen](/docs/deployment#a-different-base-per-deploy).
 
 Die Optionen der einzelnen Adapter findest du unter [Deployment](/docs/deployment).
 
@@ -134,6 +134,7 @@ export default defineConfig({
 - `mdx-remote`, `sanity`, `notion` und `obsidian` werden zu `mdxRemote()`, `sanity()`, `notion()` und `obsidian()`, wobei alle anderen Felder unverändert in den Aufruf wandern. `{ type: "custom", source }` wird zu `custom(source)`.
 - `content.root`, `content.include` und `content.exclude` sind weiterhin die Kurzform für einen einzelnen Ordner, können aber nicht mehr neben `sources` stehen. Verschiebe sie in den `filesystem()`-Eintrag.
 - Release-Seiten aus `githubReleases()` werden jetzt in nur einer Sprache veröffentlicht, eine mehrsprachige Site kopiert sie also nicht mehr unter die URL jeder anderen Locale (`/de/changelog/…`). Wenn andere Sites auf diese Kopien verlinken, füge [Redirects](/docs/deployment#redirects) auf die Seiten der Standard-Locale hinzu.
+- Text, den du in Notion eingibst, wird jetzt so dargestellt, wie er geschrieben ist: Eine Komponente, ein `{` oder ein Markdown-Zeichen auf einer `notion()`-Seite erscheint wie eingegeben, statt als MDX gelesen zu werden. Enthalten deine Notion-Seiten Komponenten oder Markdown, die als Text eingegeben sind, setz [`mdx: true`](/docs/content/sources/notion#writing-mdx-in-notion) für die Quelle.
 
 ## API-Referenzen [#api-references]
 
@@ -240,7 +241,7 @@ export default defineConfig({
 
 </CodeGroup>
 
-Die Adapter sind `gateway()`, `openrouter()`, `llmgateway()`, `inkeep()` und `openaiCompatible({ baseUrl, name, model, apiKeyEnv })`. `model`, `apiKeyEnv`, `baseUrl`, `headers` und `reasoning` wandern in den Adapter; `enabled`, `instructions`, `retrieval`, `suggestions`, `cors` und `endpoint` wandern unverändert nach `ai.assistant`. Lässt du `provider` weg, wird weiterhin das AI Gateway verwendet.
+Ein `provider`-Name aus 1.x wird auf `gateway()`, `openrouter()`, `llmgateway()` oder `inkeep()` abgebildet und `openai-compatible` auf `openai({ baseUrl, name, model, apiKeyEnv })`; alle weiteren findest du in der [Adapter-Liste](/docs/configuration/assistant#adapters). `model`, `apiKeyEnv`, `baseUrl`, `headers` und `reasoning` wandern in den Adapter; `enabled`, `instructions`, `retrieval`, `suggestions`, `cors` und `endpoint` wandern unverändert nach `ai.assistant`. Lässt du `provider` weg, wird weiterhin das AI Gateway verwendet.
 
 Die Umbenennung betrifft jeden Namen, in dem Ask AI vorkam:
 
@@ -291,7 +292,7 @@ export default defineConfig({
 
 ## Frontmatter
 
-Ein Frontmatter-Feld entfällt: `search.boost`. Blume 1 hat es akzeptiert, die Suche hat es aber nie ausgewertet – eine Seite wurde ohne das Feld also genauso gerankt. Lösch es überall, wo es vorkommt; eine Seite, die es noch setzt, besteht die Validierung nicht und bekommt einen Hinweis, und `blume upgrade` listet jedes Vorkommen mit Datei und Zeile auf.
+Seiten behalten ihr Frontmatter. Ein Feld ändert, was es bewirkt: `search.boost`. Blume 1 hat es akzeptiert, die Suche hat es aber nie ausgewertet – eine Seite wurde ohne das Feld also genauso gerankt. Jetzt multipliziert es die Suchrelevanz der Seite (siehe [Ranking](/docs/configuration/search#ranking)). Prüf jede Seite, die es setzt: Ein Boost, den du irgendwann hinzugefügt und dann vergessen hast, schiebt die Seite jetzt nach oben.
 
 ## Komponenten-Überschreibungen [#component-overrides]
 

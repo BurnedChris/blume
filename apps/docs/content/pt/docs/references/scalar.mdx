@@ -34,6 +34,8 @@ reference: [
 ],
 ```
 
+[Overlays](/docs/references/openapi#overlays) também funcionam aqui: liste `overlays` ao lado de `spec` ou em cada fonte. Nesse caso, o embed inclui na página a spec já com os overlays aplicados. Por isso, uma spec remota com overlays é carregada no build, e não pelo navegador. Se um overlay não puder ser aplicado, o build emite um aviso e deixa essa página de fora, em vez de embutir a spec sem ele.
+
 Um embed do Scalar e páginas nativas podem ficar lado a lado na lista, desde que tenham rotas diferentes. Você pode, por exemplo, usar um adaptador `openapi()` para a API atual e um adaptador `scalar()` para uma API legada. Assim como qualquer referência, o embed não cria sozinho uma aba no cabeçalho. Para exibi-lo, aponte uma [aba de navegação](/docs/content/navigation#tabs) para a rota dele.
 
 ## O que o embed não faz [#what-the-embed-doesnt-do]
@@ -44,7 +46,7 @@ O embed acompanha o seletor de modo claro/escuro do Blume. Ao ser montado, ele a
 
 ## Passando opções do Scalar [#passing-scalar-options]
 
-`theme` é a opção que a maioria das pessoas procura, mas o Scalar aceita muitas outras. Além de `spec`, `sources`, `route` e `theme`, qualquer chave que você passar para `scalar()` é repassada sem alterações como [configuração do Scalar](https://github.com/scalar/scalar/blob/main/documentation/configuration.md) para a referência incorporada. O Blume não filtra as chaves, então tudo o que o Scalar aceita é repassado. Só valem valores JSON, porque a configuração é embutida na página gerada:
+`theme` é a opção que a maioria das pessoas procura, mas o Scalar aceita muitas outras. Além de `spec`, `overlays`, `sources`, `route` e `theme`, qualquer chave que você passar para `scalar()` é repassada sem alterações como [configuração do Scalar](https://github.com/scalar/scalar/blob/main/documentation/configuration.md) para a referência incorporada. O Blume não filtra as chaves, então tudo o que o Scalar aceita é repassado. Só valem valores JSON, porque a configuração é embutida na página gerada:
 
 ```ts blume.config.ts lineNumbers
 reference: [

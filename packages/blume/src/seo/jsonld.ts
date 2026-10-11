@@ -19,7 +19,7 @@ export interface PostalAddressIdentity {
 
 /**
  * `seo.organization`: the organization behind the site, emitted on every page
- * as an `Organization` node the WebSite and article nodes cite as publisher.
+ * as an `Organization` node the WebSite and page nodes cite as publisher.
  */
 export interface OrganizationIdentity {
   address?: PostalAddressIdentity;
@@ -64,8 +64,36 @@ export interface StructuredDataIdentity {
   software?: SoftwareIdentity;
 }
 
+/**
+ * `seo.jsonLd`: entities the docs share with a site they live inside
+ * (`example.com/docs`), referenced by `@id` instead of defined again.
+ */
+export interface JsonLdEntities {
+  /** Credited on pages without their own `authors`. */
+  author?: { "@id": string };
+  /** Cited as every page's publisher in place of the Organization's id. */
+  publisher?: { "@id": string };
+  /** The Organization's `@id`, defined here or elsewhere. */
+  organizationId?: string;
+  /** Emit the WebSite node. Defaults to true unless `websiteId` is set. */
+  website?: boolean;
+  /** The WebSite's `@id`, which every page names as `isPartOf`. */
+  websiteId?: string;
+}
+
+/** A front matter `authors` entry: a name, or a name with a profile URL. */
+export type AuthorInput = string | { name: string; url?: string };
+
 /** Inputs for a page's JSON-LD, all known at render time in RootLayout. */
 export interface StructuredDataInput {
+  jsonLd?: JsonLdEntities;
+  /**
+   * The page's `og:image`, emitted as the page node's `image`. Absolute when
+   * `siteUrl` is set, otherwise root-relative like every other URL here.
+   */
+  image?: string | null;
+  /** The page's own byline, which wins over `jsonLd.author`. */
+  authors?: AuthorInput | AuthorInput[];
   siteName: string;
   /** Absolute site origin, or null when `deployment.site` is unset. */
   siteUrl: string | null;
@@ -73,6 +101,12 @@ export interface StructuredDataInput {
   description?: string;
   /** Page route, e.g. `/blog/post`. */
   route: string;
+  /**
+   * The route of this page's homepage: the navigation tree root
+   * (`navigation.root` — `/fr` for a locale, `/docs` under a `basePath`,
+   * `/v1.0` in an archived version). Defaults to `/`.
+   */
+  homeRoute?: string;
   /** Deployment base (`import.meta.env.BASE_URL`); prefixed onto absolute URLs. */
   base?: string;
   /** Content type — `blog` and `changelog` map to richer article types. */
@@ -156,15 +190,17 @@ const organizationNode = (
   context: {
     absolutize: (path: string) => string;
     id: string;
-    rootUrl: string;
-    siteName: string;
+    /** The site's name and root, or null when the id names an outside entity. */
+    defaults: { name: string; url: string } | null;
   }
 ): JsonLdNode => {
   const node: JsonLdNode = {
     "@id": context.id,
     "@type": "Organization",
-    name: organization.name ?? context.siteName,
-    url: organization.url ?? context.rootUrl,
+    ...definedStrings({
+      name: organization.name ?? context.defaults?.name,
+      url: organization.url ?? context.defaults?.url,
+    }),
   };
   if (organization.logo) {
     node.logo = context.absolutize(organization.logo);
@@ -246,24 +282,54 @@ const softwareNode = (
   return node;
 };
 
-/** The page as an article node (`BlogPosting`/`TechArticle`). */
-const articleNode = (
+/** The page's schema.org `@type`: a `WebPage` for a homepage, else an article. */
+const pageSchemaType = (input: StructuredDataInput, home: boolean): string => {
+  if (home) {
+    return "WebPage";
+  }
+  const pageType = input.pageType ?? "";
+  return isArticleType(pageType) ? ARTICLE_TYPES[pageType] : "TechArticle";
+};
+
+/** An `authors` entry is a bare name or a name with a profile URL. */
+const isBareName = (author: AuthorInput): author is string =>
+  typeof author === "string";
+
+/** `Person` nodes for a page's front matter `authors`. */
+const authorNodes = (authors: AuthorInput | AuthorInput[]): JsonLdNode[] =>
+  [authors].flat().map((author): JsonLdNode => ({
+    "@type": "Person",
+    ...(isBareName(author)
+      ? { name: author }
+      : definedStrings({ name: author.name, url: author.url })),
+  }));
+
+/**
+ * The page's own node: a homepage is a `WebPage` (it isn't an article, but it
+ * still needs a machine-readable date, or search engines take whatever other
+ * date the page shows), and every other page an article (`BlogPosting`/
+ * `TechArticle`) with a `headline`. Both carry the language, description,
+ * dates, the WebSite they belong to, and the publisher.
+ */
+const pageNode = (
   input: StructuredDataInput,
   context: {
     base: string | null;
+    home: boolean;
     organizationId: string | null;
     pageUrl: string;
   }
 ): JsonLdNode => {
-  const pageType = input.pageType ?? "";
   const node: JsonLdNode = {
     "@id": `${context.pageUrl}#page`,
-    "@type": isArticleType(pageType) ? ARTICLE_TYPES[pageType] : "TechArticle",
-    headline: input.title,
+    "@type": pageSchemaType(input, context.home),
     inLanguage: input.locale || "en",
     name: input.title,
     url: context.pageUrl,
   };
+  if (!context.home) {
+    node.headline = input.title;
+  }
   if (input.description) {
     node.description = input.description;
   }
@@ -275,11 +341,25 @@ const articleNode = (
   if (modified) {
     node.dateModified = modified;
   }
-  if (context.base) {
-    node.isPartOf = { "@id": `${context.base}#website` };
+  // A shared id is already absolute, so it holds without a site URL too.
+  const websiteId =
+    input.jsonLd?.websiteId ??
+    (context.base ? `${context.base}#website` : null);
+  if (websiteId) {
+    node.isPartOf = { "@id": websiteId };
   }
-  if (context.organizationId) {
-    node.publisher = { "@id": context.organizationId };
+  const publisher = input.jsonLd?.publisher?.["@id"] ?? context.organizationId;
+  if (publisher) {
+    node.publisher = { "@id": publisher };
+  }
+  const authors = input.authors ? authorNodes(input.authors) : [];
+  if (authors.length > 0) {
+    node.author = authors;
+  } else if (input.jsonLd?.author) {
+    node.author = input.jsonLd.author;
+  }
+  if (input.image) {
+    node.image = input.image;
   }
   return node;
 };
@@ -313,16 +393,39 @@ const breadcrumbNode = (
 };
 
 /**
+ * The site's `WebSite` node, which needs the site URL. A shared `websiteId`
+ * names one the parent site defines, so the docs leave it out unless
+ * `jsonLd.website` asks for it — their own name and root would contradict it.
+ */
+const addWebsiteNode = (
+  graph: JsonLdNode[],
+  input: StructuredDataInput,
+  base: string | null,
+  rootUrl: string,
+  organizationId: string | null
+): void => {
+  if (base && (input.jsonLd?.website ?? !input.jsonLd?.websiteId)) {
+    const website: JsonLdNode = {
+      "@id": input.jsonLd?.websiteId ?? `${base}#website`,
+      "@type": "WebSite",
+      name: input.siteName,
+      url: rootUrl,
+    };
+    if (organizationId) {
+      website.publisher = { "@id": organizationId };
+    }
+    graph.push(website);
+  }
+};
+
+/**
  * Build a schema.org JSON-LD `@graph` for a page: site identity (the WebSite,
  * plus the configured Organization everywhere and the SoftwareApplication on
- * the homepage), the page as an article, and its breadcrumb trail. Returns
- * null when there is nothing useful to emit (e.g. the homepage without a
- * configured site). URLs are absolute when `siteUrl` is set, otherwise
- * route-relative.
+ * the homepage), the page itself (a WebPage on the homepage, an article
+ * elsewhere), and an article's breadcrumb trail. URLs are absolute when
+ * `siteUrl` is set, otherwise route-relative.
  */
-export const buildStructuredData = (
-  input: StructuredDataInput
-): JsonLdNode | null => {
+export const buildStructuredData = (input: StructuredDataInput): JsonLdNode => {
   const base = input.siteUrl ? trimSlash(input.siteUrl) : null;
   // Routes carry `basePath`; a `deployment.base` subdirectory is layered on top
   // so JSON-LD URLs match the served location.
@@ -335,20 +438,11 @@ export const buildStructuredData = (
   // the same rule as the WebSite node they attach to.
   const organization = base ? input.identity?.organization : undefined;
   const software = base ? input.identity?.software : undefined;
-  const organizationId = organization ? `${base}#organization` : null;
+  const organizationId =
+    input.jsonLd?.organizationId ??
+    (organization ? `${base}#organization` : null);
 
-  if (base) {
-    const website: JsonLdNode = {
-      "@id": `${base}#website`,
-      "@type": "WebSite",
-      name: input.siteName,
-      url: rootUrl,
-    };
-    if (organizationId) {
-      website.publisher = { "@id": organizationId };
-    }
-    graph.push(website);
-  }
+  addWebsiteNode(graph, input, base, rootUrl, organizationId);
   if (organization && organizationId) {
     graph.push(
       organizationNode(organization, {
@@ -358,16 +452,21 @@ export const buildStructuredData = (
           path.startsWith("/")
             ? absolute(base, withBasePath(deployBase, path))
             : path,
+        // A shared id names an organization defined elsewhere, which the
+        // docs' title and root would contradict; only configured fields go in.
+        defaults: input.jsonLd?.organizationId
+          ? null
+          : { name: input.siteName, url: rootUrl },
         id: organizationId,
-        rootUrl,
-        siteName: input.siteName,
       })
     );
   }
 
-  // The homepage is described by the WebSite node (and the product, when one
-  // is configured); deeper pages get an article node plus a breadcrumb trail.
-  if (input.route === "/") {
+  // The homepage is a WebPage, next to the product when one is configured;
+  // deeper pages are articles with a breadcrumb trail.
+  const home = input.route === (input.homeRoute ?? "/");
+  graph.push(pageNode(input, { base, home, organizationId, pageUrl }));
+  if (home) {
     if (software && base) {
       graph.push(
         softwareNode(software, {
@@ -380,15 +479,11 @@ export const buildStructuredData = (
       );
     }
   } else {
-    graph.push(articleNode(input, { base, organizationId, pageUrl }));
     const breadcrumbs = breadcrumbNode(input.breadcrumbs, base, deployBase);
     if (breadcrumbs) {
       graph.push(breadcrumbs);
     }
   }
 
-  if (graph.length === 0) {
-    return null;
-  }
   return { "@context": "https://schema.org", "@graph": graph };
 };

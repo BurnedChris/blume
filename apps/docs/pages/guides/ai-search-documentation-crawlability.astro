@@ -1,0 +1,545 @@
+---
+// Check whether AI search crawlers can access your documentation: checked
+// against the sitemap and robots, metadata, versioning, OpenAPI (per-source
+// indexing), deployment, rate limiting, and audit docs, and against the
+// robots.txt generator (deploy/robots.ts), the layouts' canonical and robots
+// meta (components/layout/RootLayout.astro, PageLayout.astro), the audit's
+// robots and network checks (audit/checks/robots.ts, network.ts), and its
+// probe client (core/probe.ts) on main. Third-party facts from Google's AI
+// features, robots.txt spec, common crawlers, crawler verification, and URL
+// Inspection pages, OpenAI's crawler overview and publisher FAQ (read in a
+// browser, since it challenges curl), Anthropic's and Perplexity's crawler
+// pages, Cloudflare's AI bot policies, managed robots.txt, AI Crawl Control,
+// and challenge-detection docs, and Vercel's bot management, managed
+// rulesets, Attack Mode, and preview-indexing docs. Extracted every script
+// from this file and ran it on Node 24 and macOS bash: check-robots.mjs
+// (robots-parser 3.0.1) against useblume.dev and the two robots.txt files
+// shown, served locally; check-access.sh against useblume.dev and a
+// Cloudflare-challenged page (the 403 output); check-ip.mjs against in-range
+// and out-of-range addresses; the canonical, log, and awk commands against
+// useblume.dev and a sample combined log; and the host lookups. Not yet run
+// end to end against real crawler traffic on a deployed Blume site.
+// Review pass: re-checked Google's robots.txt error handling, common-crawlers
+// page, OpenAI's bots page and FAQ, and the audit's static dir per adapter.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("ai-search-documentation-crawlability")}>
+  <p>
+    People reach your docs through a browser. AI search products reach them
+    through a crawler, which can be turned away where a browser never is: a
+    robots.txt group that names it, a CDN bot rule or challenge, a{" "}
+    <code>noindex</code> header, or a canonical pointing elsewhere. Google's AI
+    Overviews and AI Mode link only to pages eligible for ordinary Google
+    Search, so they need Googlebot access and an indexed page. ChatGPT search
+    needs OAI-SearchBot, a separate crawler with its own robots.txt rules.
+  </p>
+  <p>
+    This guide checks each layer against your live site and ends with a log of
+    what you observed. It covers access and eligibility only: passing every
+    check doesn't make any assistant show or cite a page.
+  </p>
+  <p>
+    Blume's defaults already let every crawler in: robots.txt allows all user
+    agents, pages have self-referencing canonicals, and nothing is{" "}
+    <code>noindex</code> unless you ask. So the block is usually in front of
+    Blume, at your CDN or host, or in a robots.txt that replaced Blume's. The
+    examples use <code>docs.acme.example</code>; swap in your domain.
+  </p>
+
+  <h2>Which crawler each AI search product uses</h2>
+  <p>
+    Each product runs separate crawlers for search and for training, and
+    robots.txt controls each one:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Where answers appear</th>
+        <th scope="col">Search crawler</th>
+        <th scope="col">Training crawler</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Google AI Overviews and AI Mode</td>
+        <td><code>Googlebot</code></td>
+        <td><code>Google-Extended</code> (a robots.txt token only)</td>
+      </tr>
+      <tr>
+        <td>ChatGPT search</td>
+        <td><code>OAI-SearchBot</code></td>
+        <td><code>GPTBot</code></td>
+      </tr>
+      <tr>
+        <td>Claude</td>
+        <td><code>Claude-SearchBot</code></td>
+        <td><code>ClaudeBot</code></td>
+      </tr>
+      <tr>
+        <td>Perplexity</td>
+        <td><code>PerplexityBot</code></td>
+        <td>None listed: Perplexity says PerplexityBot doesn't crawl for model training</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Google's{" "}
+    <a href="https://developers.google.com/search/docs/appearance/ai-features">AI features</a>{" "}
+    only need a page that's indexed and eligible to be shown with a snippet,
+    and Google says{" "}
+    <a href="https://developers.google.com/crawling/docs/crawlers-fetchers/google-common-crawlers">Google-Extended</a>{" "}
+    doesn't affect inclusion in Search. OpenAI's{" "}
+    <a href="https://developers.openai.com/api/docs/bots">crawler settings</a>{" "}
+    are independent: you can allow OAI-SearchBot and disallow GPTBot.
+  </p>
+  <p>
+    OpenAI, Anthropic, and Perplexity also run fetchers that visit a page when
+    a user asks about it: ChatGPT-User, Claude-User, and Perplexity-User.
+    OpenAI says ChatGPT-User isn't used to decide what appears in search. So
+    when ChatGPT reads a link you paste, you've tested ChatGPT-User, not
+    OAI-SearchBot.
+  </p>
+  <Callout type="warning">
+    None of these proves AI search access: an <code>llms.txt</code> file, an MCP
+    server, the assistant answering from your docs, or a request you send with
+    a crawler's user agent. The first three serve agents and readers who
+    already found your site; the last tests your rules, not the crawler.
+  </Callout>
+
+  <h2>Check the robots.txt crawlers get</h2>
+  <p>
+    Crawlers read the robots.txt your domain serves, which isn't always the one
+    Blume built. Build the deployed commit and compare:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+diff dist/robots.txt <(curl -s https://docs.acme.example/robots.txt)`}
+    lang="bash"
+  />
+  <p>
+    No output means they match. That path is for a static build; a server
+    build writes the file to <code>.vercel/output/static/</code> with{" "}
+    <code>vercel()</code> and <code>dist/client/</code> with{" "}
+    <code>cloudflare()</code> or <code>node()</code>. If your host supplies the
+    site URL at deploy time, a local build lacks the <code>Sitemap:</code>{" "}
+    line; any other difference was added after the build, by your CDN or host.
+  </p>
+  <p>
+    Then test the live file against each crawler with{" "}
+    <code>robots-parser</code>, the parser <code>blume audit</code> uses:
+  </p>
+  <CodeBlock
+    code={`// Check which search and training crawlers the live robots.txt lets in.
+// Usage: node check-robots.mjs https://docs.acme.example / /quickstart
+import robotsParser from "robots-parser";
+
+const crawlers = [
+  ["Googlebot", "search: Google Search, AI Overviews, AI Mode"],
+  ["OAI-SearchBot", "search: ChatGPT search"],
+  ["Claude-SearchBot", "search: Claude"],
+  ["PerplexityBot", "search: Perplexity"],
+  ["GPTBot", "training: OpenAI"],
+  ["ClaudeBot", "training: Anthropic"],
+  ["Google-Extended", "training: Gemini"],
+];
+
+const [origin, ...paths] = process.argv.slice(2);
+if (!origin) {
+  console.error("Usage: node check-robots.mjs <origin> [path ...]");
+  process.exit(1);
+}
+
+const robotsUrl = new URL("/robots.txt", origin).href;
+const response = await fetch(robotsUrl);
+console.log(\`\${robotsUrl}: HTTP \${response.status}\`);
+if (!response.ok) {
+  process.exit(1);
+}
+const robots = robotsParser(robotsUrl, await response.text());
+
+for (const path of paths.length > 0 ? paths : ["/"]) {
+  console.log(\`\\n\${path}\`);
+  for (const [agent, purpose] of crawlers) {
+    const url = new URL(path, origin).href;
+    const verdict = robots.isAllowed(url, agent) ? "allowed" : "BLOCKED";
+    const line = robots.getMatchingLineNumber(url, agent);
+    const where = line > 0 ? \` (robots.txt line \${line})\` : "";
+    console.log(\`  \${verdict}  \${agent.padEnd(16)} \${purpose}\${where}\`);
+  }
+}`}
+    lang="js"
+    title="check-robots.mjs"
+  />
+  <CodeBlock
+    code={`npm install robots-parser@3.0.1
+node check-robots.mjs https://docs.acme.example / /quickstart`}
+    lang="bash"
+  />
+  <p>
+    Here's the output for a robots.txt meant to opt out of training that named
+    OAI-SearchBot in GPTBot's group:
+  </p>
+  <CodeBlock
+    code={`User-agent: *
+Allow: /
+
+User-agent: GPTBot
+User-agent: OAI-SearchBot
+Disallow: /`}
+    lang="txt"
+    title="robots.txt"
+  />
+  <CodeBlock
+    code={`/quickstart
+  allowed  Googlebot        search: Google Search, AI Overviews, AI Mode (robots.txt line 2)
+  BLOCKED  OAI-SearchBot    search: ChatGPT search (robots.txt line 6)
+  allowed  Claude-SearchBot search: Claude (robots.txt line 2)
+  allowed  PerplexityBot    search: Perplexity (robots.txt line 2)
+  BLOCKED  GPTBot           training: OpenAI (robots.txt line 6)
+  allowed  ClaudeBot        training: Anthropic (robots.txt line 2)
+  allowed  Google-Extended  training: Gemini (robots.txt line 2)`}
+    lang="txt"
+  />
+  <p>
+    A crawler follows only the group that names it most specifically, so once
+    a group names OAI-SearchBot, the <code>User-agent: *</code> group stops
+    applying to it.
+  </p>
+  <p>
+    To allow search and opt out of training, ship a{" "}
+    <code>public/robots.txt</code>. It replaces Blume's file, so include the{" "}
+    <code>Sitemap:</code> line:
+  </p>
+  <CodeBlock
+    code={`User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=no
+Allow: /
+
+User-agent: GPTBot
+User-agent: ClaudeBot
+User-agent: Google-Extended
+Disallow: /
+
+Sitemap: https://docs.acme.example/sitemap.xml`}
+    lang="txt"
+    title="public/robots.txt"
+  />
+  <p>
+    Set{" "}
+    <a href="/docs/discoverability/sitemap-and-robots#content-signals"><code>agents.contentSignals</code></a>{" "}
+    to <code>{"{ aiTrain: false }"}</code> too, so{" "}
+    <code>agent-readability.json</code> states the same policy. The{" "}
+    <code>Content-Signal</code> line is a preference; the <code>Disallow</code>{" "}
+    groups are what these crawlers' operators document.
+  </p>
+
+  <h2>Check status codes and bot challenges</h2>
+  <p>
+    Next, request a page as each crawler. Pass a plain sentence from it, with
+    no links or formatting inside, so the script can confirm the text arrived:
+  </p>
+  <CodeBlock
+    code={`#!/usr/bin/env bash
+# Request one page as a browser and as three search crawlers, and print what
+# each got back. Usage: ./check-access.sh <page URL> "<a plain sentence from the page>"
+url="$1"
+phrase="$2"
+
+agents=(
+  "browser|Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+  "Googlebot|Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+  "OAI-SearchBot|Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36; compatible; OAI-SearchBot/1.4; +https://openai.com/searchbot"
+  "PerplexityBot|Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)"
+)
+
+for entry in "\${agents[@]}"; do
+  name="\${entry%%|*}"
+  headers=$(mktemp)
+  body=$(curl -s -A "\${entry#*|}" -D "$headers" "$url")
+  status=$(head -n 1 "$headers" | tr -d '\\r' | sed 's/ *$//')
+  if grep -qF "$phrase" <<<"$body"; then text="text found"; else text="TEXT MISSING"; fi
+  echo "$name: $status, $text"
+  grep -iE '^(server|cf-mitigated|x-robots-tag|retry-after|location):' "$headers" | tr -d '\\r' | sed 's/^/  /'
+  rm -f "$headers"
+done`}
+    lang="bash"
+    title="check-access.sh"
+  />
+  <p>This site's own audit page passes on every row:</p>
+  <CodeBlock
+    code={`$ chmod +x check-access.sh
+$ ./check-access.sh https://useblume.dev/docs/cli/audit "It crawls the HTML in"
+browser: HTTP/2 200, text found
+  server: cloudflare
+Googlebot: HTTP/2 200, text found
+  server: cloudflare
+OAI-SearchBot: HTTP/2 200, text found
+  server: cloudflare
+PerplexityBot: HTTP/2 200, text found
+  server: cloudflare`}
+    lang="txt"
+  />
+  <p>A page behind a Cloudflare bot challenge returns this instead:</p>
+  <CodeBlock
+    code={`OAI-SearchBot: HTTP/2 403, TEXT MISSING
+  cf-mitigated: challenge
+  server: cloudflare`}
+    lang="txt"
+  />
+  <p>
+    Cloudflare sets <code>cf-mitigated: challenge</code> on every challenge
+    page. A <code>429</code> with <code>Retry-After</code> is a rate limit. A{" "}
+    <code>200</code> with <code>TEXT MISSING</code> means the body isn't the
+    page you expected. Blume's own rate limit covers the assistant, the
+    playground proxy, and server-side search, never your pages.
+  </p>
+  <p>
+    Read the results as hints. Real crawlers are verified by IP address, and
+    your request isn't. Vercel's Bot Protection, for example, challenges curl
+    posing as a browser but lets verified bots through, while a rule that
+    matches verified bots or their IP ranges never matches your request. So
+    compare rows. If only one crawler's row fails, a rule on its user agent is
+    the likely cause, and it matches the real crawler too. If every row fails,
+    you've hit a general bot check that may still let verified crawlers
+    through.
+  </p>
+  <p>Then read the settings that decide it:</p>
+  <ul>
+    <li>
+      <strong>Cloudflare.</strong> In <strong>Security Settings</strong>,{" "}
+      <strong>Configure AI bot policies</strong> blocks or allows Search,
+      Agent, and Training crawlers separately. Blocking Training also blocks
+      crawlers classified as both search and training.{" "}
+      <strong>AI Crawl Control</strong> allows or blocks each AI crawler.
+    </li>
+    <li>
+      <strong>Vercel.</strong> In <strong>Firewall</strong>, the{" "}
+      <strong>AI Bots Ruleset</strong> covers training, search, and
+      user-triggered bots together, so <strong>Deny</strong> blocks
+      OAI-SearchBot along with GPTBot. To stop only training, use robots.txt or
+      a custom rule on their user agents.
+    </li>
+    <li>
+      <strong>Elsewhere.</strong> Look for WAF rules on user agent, country,
+      or ASN, and for site-wide bot challenges.
+    </li>
+  </ul>
+
+  <h2>Check indexing and canonical signals</h2>
+  <p>
+    A fetchable page still stays out of results if it says{" "}
+    <code>noindex</code> or its canonical points elsewhere. Check both, plus
+    the header that overrides the HTML:
+  </p>
+  <CodeBlock
+    code={`site=https://docs.acme.example
+url="$site/quickstart"
+curl -s "$url" | grep -oE '<link[^>]*rel="canonical"[^>]*>|<meta[^>]*name="robots"[^>]*>'
+curl -sI "$url" | grep -i '^x-robots-tag' || echo "no X-Robots-Tag header"
+curl -s "$site/sitemap.xml" | grep -c "<loc>$url</loc>"`}
+    lang="bash"
+  />
+  <p>
+    For an indexable page, such as this site's audit page, that prints a
+    self-referencing canonical, no header, and one sitemap entry:
+  </p>
+  <CodeBlock
+    code={`<link rel="canonical" href="https://useblume.dev/docs/cli/audit">
+no X-Robots-Tag header
+1`}
+    lang="txt"
+  />
+  <p>
+    A robots meta tag with <code>noindex</code> instead of a canonical comes
+    from{" "}
+    <a href="/docs/discoverability/metadata#per-page-overrides"><code>seo.noindex</code></a>{" "}
+    in frontmatter, or <code>noindex: true</code> on an{" "}
+    <a href="/docs/content/versioning#seo">archived version</a> or an{" "}
+    <a href="/docs/references/openapi#per-source-indexing">API reference source</a>.
+    A canonical pointing elsewhere comes from <code>seo.canonical</code>, from
+    an archived version, whose pages point at their latest equivalent by
+    default, or from an untranslated page that a{" "}
+    <a href="/docs/content/i18n#fallbacks">locale fallback</a> fills, which
+    points at the page it copies.
+  </p>
+  <p>
+    For Google, inspect the page in Search Console's URL Inspection tool and
+    select <strong>Test live URL</strong>. It fetches with Googlebot, which no
+    spoofed request can stand in for, and reports{" "}
+    <strong>Crawl allowed?</strong>, <strong>Page fetch</strong>, and{" "}
+    <strong>Indexing allowed?</strong>. The indexed result shows the{" "}
+    <strong>Google-selected canonical</strong>. If the page isn't indexed, see{" "}
+    <a href="/guides/documentation-not-indexed">pages that are not indexed</a>.
+  </p>
+  <p>
+    OpenAI has no inspection tool. It says sites blocking OAI-SearchBot can
+    still appear as navigational links, and its{" "}
+    <a href="https://help.openai.com/en/articles/12627856-publishers-and-developers-faq">publisher FAQ</a>{" "}
+    says keeping a page out takes <code>noindex</code>, which its crawler can
+    only read if robots.txt lets it in.
+  </p>
+
+  <h2>Run blume audit against the deployment</h2>
+  <p>
+    <code>blume audit</code> checks every page at once. Build the deployed
+    commit, then point it at your domain:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+npx blume audit --url https://docs.acme.example --only indexability,robots,sitemap,network`}
+    lang="bash"
+  />
+  <p>
+    From <code>dist/</code> it reports noindex pages, canonicals that point at
+    missing or redirecting pages, robots.txt rules that block a sitemap page
+    for every crawler (<code>BLUME_AUDIT_ROBOTS_DISALLOWS_INDEXABLE</code>),
+    and a group that blocks one named crawler from sitemap pages
+    (<code>BLUME_AUDIT_ROBOTS_BLOCKS_CRAWLER</code>, a warning, since
+    shutting out a training crawler is often on purpose). With{" "}
+    <code>--url</code> it fetches every page, robots.txt, and the sitemap from
+    the live site, and reports error responses (<code>BLUME_AUDIT_HTTP_4XX</code>,{" "}
+    <code>BLUME_AUDIT_HTTP_5XX</code>), an unreachable robots.txt or sitemap,
+    and{" "}
+    <a href="/docs/cli/audit#robots-header-conflict"><code>BLUME_AUDIT_ROBOTS_HEADER_CONFLICT</code></a>{" "}
+    for an <code>X-Robots-Tag: noindex</code> header on a page whose HTML is
+    indexable.
+  </p>
+  <p>
+    It has two limits. It fetches as a plain HTTP client, not a crawler, so a
+    clean run means your host serves the pages, not that crawlers get through.
+    And it checks the rules in the robots.txt it built, not the live file, so
+    groups your CDN adds are invisible to it, which is why{" "}
+    <code>check-robots.mjs</code> exists. If your host supplies
+    the site URL at deploy time, expect one{" "}
+    <code>BLUME_AUDIT_SITE_INFERRED_AT_DEPLOY</code>.
+  </p>
+
+  <h2>Record what you observed</h2>
+  <p>
+    Access changes whenever someone edits a CDN rule, so keep dated evidence,
+    and add each URL Inspection result by hand:
+  </p>
+  <CodeBlock
+    code={`{
+  date -u +"%Y-%m-%dT%H:%M:%SZ"
+  node check-robots.mjs https://docs.acme.example / /quickstart
+  ./check-access.sh https://docs.acme.example/quickstart "Install the Acme CLI"
+} | tee -a crawler-access.log`}
+    lang="bash"
+  />
+  <p>
+    Your checks show what a crawler would get; your traffic shows what real
+    crawlers got. Cloudflare's AI Crawl Control lists requests per AI crawler,
+    and Vercel's AI Bots Ruleset in <strong>Log</strong> mode records AI bot
+    traffic without blocking it. With access logs in nginx's default combined
+    format, count a crawler's requests by IP and status:
+  </p>
+  <CodeBlock
+    code={`grep 'OAI-SearchBot' access.log | awk '{ print $1, $9 }' | sort | uniq -c | sort -rn`}
+    lang="bash"
+  />
+  <p>
+    Anyone can send that user agent, so check each IP against OpenAI's
+    published ranges:
+  </p>
+  <CodeBlock
+    code={`// Check whether an IP from your logs is in OAI-SearchBot's published ranges.
+// Usage: node check-ip.mjs 203.0.113.7
+import { BlockList } from "node:net";
+
+const ip = process.argv[2];
+const family = ip?.includes(":") ? "ipv6" : "ipv4";
+const response = await fetch("https://openai.com/searchbot.json");
+const { prefixes } = await response.json();
+
+const ranges = new BlockList();
+for (const prefix of prefixes) {
+  const cidr = prefix.ipv4Prefix ?? prefix.ipv6Prefix;
+  const [address, bits] = cidr.split("/");
+  ranges.addSubnet(address, Number(bits), prefix.ipv4Prefix ? "ipv4" : "ipv6");
+}
+
+console.log(
+  ranges.check(ip, family)
+    ? \`\${ip} is in OAI-SearchBot's published ranges\`
+    : \`\${ip} is not in OAI-SearchBot's published ranges: treat it as unverified\`
+);`}
+    lang="js"
+    title="check-ip.mjs"
+  />
+  <p>
+    For Googlebot,{" "}
+    <a href="https://developers.google.com/crawling/docs/crawlers-fetchers/verify-google-requests">Google's check</a>{" "}
+    is a reverse DNS lookup ending in <code>googlebot.com</code>,{" "}
+    <code>google.com</code>, or <code>googleusercontent.com</code>, then a
+    forward lookup returning the same IP:
+  </p>
+  <CodeBlock
+    code={`$ host 66.249.66.1
+1.66.249.66.in-addr.arpa domain name pointer crawl-66-249-66-1.googlebot.com.
+$ host crawl-66-249-66-1.googlebot.com
+crawl-66-249-66-1.googlebot.com has address 66.249.66.1`}
+    lang="txt"
+  />
+  <p>
+    Verified crawler requests that got a <code>200</code> are the strongest
+    evidence of access you can collect. To see whether access turns into
+    visits, read{" "}
+    <a href="/guides/measure-ai-search-documentation">measuring AI search referrals</a>.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The live robots.txt isn't Blume's generated file</h3>
+  <p>
+    If <code>dist/robots.txt</code> already differs, a{" "}
+    <code>public/robots.txt</code> replaced it; Blume never overwrites one. If
+    only the live file differs, check Cloudflare's managed robots.txt, which
+    prepends groups disallowing training crawlers such as GPTBot, ClaudeBot,
+    and Google-Extended. Rerun <code>check-robots.mjs</code> after any change
+    there.
+  </p>
+  <h3>Your docs live under a subpath of another site</h3>
+  <p>
+    Crawlers only read robots.txt at a host's root, so on a{" "}
+    <a href="/docs/deployment#subpath-deploys">subpath deploy</a> Blume's{" "}
+    <code>/docs/robots.txt</code> is ignored and the main site's file decides.
+    Run <code>check-robots.mjs</code> against the root domain with your docs
+    paths. The{" "}
+    <a href="/guides/nextjs-documentation-subpath">Next.js subpath guide</a>{" "}
+    covers that setup.
+  </p>
+  <h3>Crawlers get 403 or 503 while browsers get 200</h3>
+  <p>
+    That's a WAF rule or bot challenge, not Blume. If robots.txt itself is
+    blocked, Google treats a 4xx other than 429 as no rules. A 5xx stops
+    Google crawling the site for 12 hours; after that Google uses the last good
+    copy for up to 30 days, then acts as if there were no robots.txt, or stops
+    crawling a site that's still generally unavailable. OpenAI recommends
+    allowing its published IP ranges as well as OAI-SearchBot in robots.txt.
+  </p>
+  <h3>Pages send X-Robots-Tag: noindex</h3>
+  <p>
+    The header overrides the HTML. Vercel adds it to preview deployments and
+    to production deployments a newer one replaced. If your domain or a proxy
+    points at one of those, point it at the current production deployment.
+  </p>
+  <h3>You fixed robots.txt, but ChatGPT search still leaves the site out</h3>
+  <p>
+    OpenAI says its search systems can take about 24 hours to adjust to a
+    robots.txt change. After that, rerun <code>check-robots.mjs</code> and{" "}
+    <code>check-access.sh</code>, and confirm the firewall isn't blocking
+    OAI-SearchBot's IP ranges. Access is the part you control; which pages
+    ChatGPT search shows is up to OpenAI.
+  </p>
+  <h3>Google indexes the page, but AI Overviews never link it</h3>
+  <p>
+    If URL Inspection shows the page indexed and nothing limits its snippet, it
+    meets every technical requirement Google lists. Google also says meeting
+    them doesn't guarantee a page is shown, so no access setting is left to
+    change.
+  </p>
+</GuidePage>

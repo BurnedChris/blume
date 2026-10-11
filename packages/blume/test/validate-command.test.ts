@@ -1,13 +1,13 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { stripVTControlCharacters } from "node:util";
 
 import { dirname, join } from "pathe";
 
 /**
  * `blume validate` exercised end-to-end as a subprocess: the exit code is the
- * CLI's CI contract, and `--strict` must escalate warnings — but not info-level
- * notes like BLUME_ASSETS_UNCHECKED — to failures.
+ * CLI's CI contract, and `--strict` must escalate warnings to failures.
  */
 
 const CLI = join(import.meta.dir, "..", "src", "cli", "index.ts");
@@ -46,20 +46,47 @@ const validate = async (
     proc.exited,
     new Response(proc.stderr).text(),
   ]);
-  return { exitCode, stderr };
+  // CI forces color, so read the report as plain text.
+  return { exitCode, stderr: stripVTControlCharacters(stderr) };
 };
 
 describe("blume validate --strict", () => {
-  it("does not fail on info-level diagnostics", async () => {
-    // An asset link with no public/ dir yields only the info-severity
-    // BLUME_ASSETS_UNCHECKED note — documented strict behavior is "treat
-    // warnings as errors", so this must still exit 0.
+  it("fails on an asset link when the project has no public/ folder", async () => {
+    // No `public/` means no public files: the link 404s on the built site.
     const root = await fixture({
       "docs/index.md": "---\ntitle: Home\n---\n\n![logo](/logo.png)\n",
     });
     const { exitCode, stderr } = await validate(root, "--strict");
-    expect(stderr).toContain("BLUME_ASSETS_UNCHECKED");
-    expect(exitCode).toBe(0);
+    expect(stderr).toContain("BLUME_BROKEN_ASSET");
+    expect(stderr).toContain("docs/index.md:5:9");
+    expect(exitCode).toBe(1);
+  });
+
+  it("accepts links to the files the build generates, unless the config turns them off", async () => {
+    const files = {
+      "docs/index.md": [
+        "---",
+        "title: Home",
+        "---",
+        "",
+        "[llms.txt](/llms.txt) and [the API](/openapi.json)",
+        "",
+      ].join("\n"),
+    };
+    const on = await validate(await fixture(files), "--strict");
+    expect(on.stderr).not.toContain("BLUME_BROKEN_ASSET");
+    expect(on.exitCode).toBe(0);
+
+    const off = await validate(
+      await fixture({
+        ...files,
+        "blume.config.ts": "export default { agents: { llmsTxt: false } };\n",
+      }),
+      "--strict"
+    );
+    expect(off.stderr).toContain("Asset /llms.txt was not found");
+    expect(off.stderr).not.toContain("/openapi.json");
+    expect(off.exitCode).toBe(1);
   });
 
   it("fails on warning-level diagnostics", async () => {
@@ -87,6 +114,45 @@ describe("blume validate — routes beyond the content graph", () => {
     });
     const { exitCode, stderr } = await validate(root);
     expect(stderr).not.toContain("BLUME_BROKEN_LINK");
+    expect(exitCode).toBe(0);
+  });
+
+  it("accepts links and redirects to a scalar() reference page", async () => {
+    const root = await fixture({
+      "blume.config.ts": [
+        'import { scalar } from "blume/reference";',
+        "",
+        "export default {",
+        '  redirects: [{ from: "/api-docs", to: "/reference" }],',
+        '  reference: [scalar({ spec: "https://x.dev/openapi.json" })],',
+        "};",
+        "",
+      ].join("\n"),
+      "docs/a.md": "---\ntitle: A\n---\n\n[API](/reference)\n",
+    });
+    const { exitCode, stderr } = await validate(root, "--strict");
+    expect(stderr).not.toContain("BLUME_BROKEN");
+    expect(exitCode).toBe(0);
+  });
+
+  it("warns about a redirect to a page that doesn't exist, at its line", async () => {
+    const root = await fixture({
+      "blume.config.ts": [
+        "export default {",
+        "  redirects: [",
+        '    { from: "/old", to: "/a" },',
+        '    { from: "/older", to: "/b" },',
+        "  ],",
+        "};",
+        "",
+      ].join("\n"),
+      "docs/a.md": "---\ntitle: A\n---\n\nA.\n",
+    });
+    const { exitCode, stderr } = await validate(root);
+    expect(stderr).toContain(
+      "BLUME_BROKEN_REDIRECT The redirect from /older sends readers to /b"
+    );
+    expect(stderr).toContain("blume.config.ts:4:23");
     expect(exitCode).toBe(0);
   });
 
@@ -131,5 +197,51 @@ describe("blume validate — routes beyond the content graph", () => {
     // the reported position must not be the stripped-body line 2.
     expect(stderr).toContain("docs/a.md:5:8");
     expect(exitCode).toBe(1);
+  });
+});
+
+describe("blume validate --ignore", () => {
+  it("never requests an external URL that a repeated --ignore glob matches", async () => {
+    // citty keeps only the last value of a repeated string flag, so this runs
+    // the real CLI: every `--ignore`, in either spelling, has to count.
+    const requested: string[] = [];
+    const server = Bun.serve({
+      fetch(request) {
+        requested.push(new URL(request.url).pathname);
+        return new Response("gone", { status: 404 });
+      },
+      port: 0,
+    });
+    const origin = `http://localhost:${server.port}`;
+    try {
+      const root = await fixture({
+        "docs/a.md": [
+          "---",
+          "title: A",
+          "---",
+          "",
+          `[placeholder](${origin}/placeholder/api)`,
+          "",
+          `[local](${origin}/local)`,
+          "",
+          `[gone](${origin}/gone)`,
+          "",
+        ].join("\n"),
+      });
+      const { exitCode, stderr } = await validate(
+        root,
+        "--external",
+        "--ignore",
+        `${origin}/placeholder/**`,
+        `--ignore=${origin}/local`
+      );
+      expect(stderr).toContain(`External link ${origin}/gone is unreachable`);
+      expect(stderr).not.toContain("/placeholder/api");
+      expect(stderr).not.toContain(`${origin}/local`);
+      expect(requested).toEqual(["/gone"]);
+      expect(exitCode).toBe(1);
+    } finally {
+      server.stop(true);
+    }
   });
 });

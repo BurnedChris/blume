@@ -6,10 +6,13 @@ import { pathToFileURL } from "node:url";
 import { join } from "pathe";
 
 import {
+  anthropic,
   gateway,
+  gemini,
+  grok,
   inkeep,
   llmgateway,
-  openaiCompatible,
+  openai,
   openrouter,
   resolveAskBackend,
 } from "../src/ai/ask.ts";
@@ -57,13 +60,17 @@ import {
 import { hcaptcha, turnstile } from "../src/captcha/index.ts";
 import { mountBasePath, stripBasePath } from "../src/core/base-path.ts";
 import type { BlumeConfig } from "../src/core/config-input.ts";
-import { TOC_HIDDEN_KEY } from "../src/core/heading-markers.ts";
+import { TOC_HIDDEN_KEY, TOC_TEXT_KEY } from "../src/core/heading-markers.ts";
+import { routeSetFor, servesRoute } from "../src/core/locale-links.ts";
 import { blumeConfigSchema } from "../src/core/schema.ts";
 import type { ProjectContext } from "../src/core/types.ts";
+import { getBlumeVersion } from "../src/core/version.ts";
 import { cloudflare, node, vercel } from "../src/deploy/adapters/index.ts";
+import { TITLE_ID_KEY } from "../src/markdown/title-heading.ts";
 import {
   cloudflare as cloudflareRateLimit,
   memory,
+  unkey,
   upstash,
 } from "../src/ratelimit/index.ts";
 import { scalar } from "../src/reference/index.ts";
@@ -162,7 +169,7 @@ describe("catchAllPageTemplate", () => {
     expect(out).toContain(
       "const pageChrome = pageModeLayout(frontmatter.mode).chrome;"
     );
-    expect(out).toContain("{pageChrome && <h1>{title}</h1>}");
+    expect(out).toContain("{pageChrome && <h1 id={titleId}>{title}</h1>}");
     expect(out).toContain("pageMode={frontmatter.mode}");
   });
 
@@ -201,7 +208,7 @@ describe("catchAllPageTemplate", () => {
       'import { mountBasePath, stripBasePath } from "blume/core/base-path.ts"'
     );
     expect(out).toContain(
-      "href: alt ? alt.path : mountLocalized(logicalRoute, l.code)"
+      "const href = alt ? alt.path : mountLocalized(logicalRoute, l.code);"
     );
     // Run the generated locale helpers and the fallback composition to pin
     // their behavior. The two slices are the locale prefix helpers and the
@@ -290,6 +297,82 @@ return i18n.locales.map((l) => mountLocalized(logicalRoute, l.code));
     ]);
   });
 
+  it("leaves a locale out of the switcher when no page is served for it", () => {
+    const out = catchAllPageTemplate({ ...exportOpts, mathEnabled: false });
+    expect(out).toContain(
+      'import { routeSetFor, servesRoute } from "blume/core/locale-links.ts"'
+    );
+    // Run the locale helpers and the switcher block, as above.
+    const localeStart = out.indexOf("const localePrefix");
+    const localeEnd = out.indexOf("// Version resolution");
+    const switchStart = out.indexOf("const mountLocalized");
+    const switchEnd = out.indexOf("// Version switcher");
+    expect(switchEnd).toBeGreaterThan(switchStart);
+    const snippet = new Bun.Transpiler({ loader: "ts" }).transformSync(
+      `const switchFor = (i18n, data, route, locale, alternates, monolingual, mountBasePath, stripBasePath, routeSetFor, servesRoute) => {
+${out.slice(localeStart, localeEnd)}
+${out.slice(switchStart, switchEnd)}
+return localeSwitch.map((option) => [option.code, option.href, option.untranslated]);
+};`
+    );
+    type Switch = (
+      i18n: {
+        defaultLocale: string;
+        hideDefaultLocalePrefix: boolean;
+        locales: { code: string; dir: string; label: string }[];
+      },
+      data: { config: { basePath: string }; routes: { path: string }[] },
+      route: string,
+      locale: string,
+      alternates: { locale: string; path: string }[],
+      monolingual: boolean,
+      mount: typeof mountBasePath,
+      strip: typeof stripBasePath,
+      routeSet: typeof routeSetFor,
+      serves: typeof servesRoute
+    ) => [string, string, boolean][];
+    // SAFETY: the generated snippet wrapped above declares `switchFor` with
+    // exactly the parameter list and return asserted by `Switch`.
+    // oxlint-disable-next-line no-new-func -- evaluating our own generated output
+    const switchFor = new Function(`${snippet}\nreturn switchFor;`)() as Switch;
+    const i18n = {
+      defaultLocale: "en",
+      hideDefaultLocalePrefix: true,
+      locales: [
+        { code: "en", dir: "ltr", label: "English" },
+        { code: "fr", dir: "ltr", label: "Français" },
+        { code: "ja", dir: "ltr", label: "日本語" },
+      ],
+    };
+    const on = (routes: string[]) =>
+      switchFor(
+        i18n,
+        { config: { basePath: "" }, routes: routes.map((path) => ({ path })) },
+        "/guide",
+        "en",
+        [
+          { locale: "en", path: "/guide" },
+          { locale: "fr", path: "/fr/guide" },
+        ],
+        false,
+        mountBasePath,
+        stripBasePath,
+        routeSetFor,
+        servesRoute
+      );
+    // With fallbacks on, the missing Japanese page has a fallback copy to link.
+    expect(on(["/guide", "/fr/guide", "/ja/guide"])).toEqual([
+      ["en", "/guide", false],
+      ["fr", "/fr/guide", false],
+      ["ja", "/ja/guide", true],
+    ]);
+    // With `fallbackLocale: null` nothing is served there, so it's left out.
+    expect(on(["/guide", "/fr/guide"])).toEqual([
+      ["en", "/guide", false],
+      ["fr", "/fr/guide", false],
+    ]);
+  });
+
   it("filters [!toc] slugs through the heading plugin's frontmatter key", () => {
     const out = catchAllPageTemplate({ ...exportOpts, mathEnabled: false });
     // The key is interpolated from the shared constant, so a rename cannot
@@ -297,6 +380,20 @@ return i18n.locales.map((l) => mountLocalized(logicalRoute, l.code));
     // keeps a `frontmatter.extend`-declared value from crashing the render.
     expect(out).toContain(`remarkPluginFrontmatter?.${TOC_HIDDEN_KEY}`);
     expect(out).toContain("Array.isArray(tocHiddenRaw)");
+  });
+
+  it("lists badge-holding headings by the heading plugin's TOC text", () => {
+    const out = catchAllPageTemplate({ ...exportOpts, mathEnabled: false });
+    // Same contract as the hidden list: the key comes from the shared
+    // constant, and only a string under a heading's slug replaces its text.
+    expect(out).toContain(`remarkPluginFrontmatter?.${TOC_TEXT_KEY}`);
+    expect(out).toContain('typeof tocText[heading.slug] === "string"');
+  });
+
+  it("gives the title <h1> the id of the heading the title-heading plugin dropped", () => {
+    const out = catchAllPageTemplate({ ...exportOpts, mathEnabled: false });
+    expect(out).toContain(`remarkPluginFrontmatter?.${TITLE_ID_KEY}`);
+    expect(out).toContain("<h1 id={titleId}>{title}</h1>");
   });
 
   it("serializes the island-hooks snapshot only when React is enabled", () => {
@@ -481,7 +578,7 @@ const componentMapOf = (source: string) =>
 
 describe("changelogIndexTemplate", () => {
   it("imports layout overrides and passes them to RootLayout", () => {
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: false });
+    const out = changelogIndexTemplate(changelogOpts);
     // Only the layout slots: no entry body renders, so no MDX component map.
     expect(out).toContain(
       'import { layoutOverrides } from "../generated/components.ts"'
@@ -490,141 +587,75 @@ describe("changelogIndexTemplate", () => {
     expect(out).toContain("layout={layoutOverrides}");
   });
 
-  it("lists each release as a linked row without rendering its body", () => {
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: false });
+  it("delegates the release list to the Changelog component", () => {
+    const out = changelogIndexTemplate(changelogOpts);
+    // The list is `<Changelog />`, the same component an authored `/changelog`
+    // page places to put prose above it, so both routes to an index render one
+    // implementation. The generated page keeps only the chrome around it.
+    expect(out).toContain(
+      'import Changelog from "blume/components/content/Changelog.astro";'
+    );
+    expect(out).toContain("<Changelog />");
+    // None of the list building is left behind: no collection reads, no route
+    // map, no sorting, no year grouping, no anchor dedupe. This is what stops
+    // the generated page and an authored one from drifting apart.
+    expect(out).not.toContain("getCollection");
+    expect(out).not.toContain("routeByEntry");
+    expect(out).not.toContain("toSorted");
+    expect(out).not.toContain("seenIds");
+    expect(out).not.toContain("groups");
     // The index is title, tag, and date only: a body per release would grow
     // the page past what an agent can read in one context window, and every
     // entry has its own page. So neither the component map nor MDX rendering
     // is wired in.
-    expect(out).not.toContain("import { getCollection, render }");
     expect(out).not.toContain("Update.astro");
     expect(componentMapOf(out)).toBeUndefined();
     expect(out).not.toContain("<Content");
-    expect(out).toContain('href={item.href ?? "#" + item.id}');
-    expect(out).toContain("{item.label}");
-    expect(out).toContain("tag: entry.data.changelog?.category ?? null,");
-    expect(out).toContain("datetime={item.dateTime}");
     // The layout gets no outline: the bare layout has no TOC to feed.
     expect(out).toContain("headings={[]}");
   });
 
-  it("groups the rows by year in the configured date format's zone", () => {
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: false });
-    expect(out).toContain("last.year === item.year");
-    expect(out).toContain("timeZone: dateFormatOptions.timeZone,");
-    expect(out).toContain('year: "numeric",');
-    // A row drops the year its group already shows: a preset style keeps its
-    // month wording, a component format just loses the `year` key.
-    expect(out).toContain(
-      "const { dateStyle, year: _year, ...dateComponents } = dateFormatOptions;"
-    );
-    expect(out).toContain('month: dateStyle === "medium" ? "short" : "long",');
-    expect(out).toContain("<h2 class=");
-    expect(out).toContain("{group.year}");
-  });
-
-  it("reads only the docs collection when no staged sources exist", () => {
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: false });
-    expect(out).toContain('...(await getCollection("docs")),');
-    expect(out).not.toContain('getCollection("staged")');
-  });
-
-  it("folds in the staged collection when staged sources exist", () => {
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: true });
-    expect(out).toContain('...(await getCollection("docs")),');
-    expect(out).toContain('...(await getCollection("staged")),');
-  });
-
   it("leaves the assistant trigger to the header", () => {
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: false });
+    const out = changelogIndexTemplate(changelogOpts);
     expect(out).not.toContain("Assistant");
     expect(out).not.toContain("assistantEnabled");
   });
 
   it("renders through the sidebar-less, TOC-less bare layout", () => {
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: false });
+    const out = changelogIndexTemplate(changelogOpts);
     expect(out).toContain('contentLayout="bare"');
   });
 
   it("canonicalizes under the deployment base, like the catch-all", () => {
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: false });
+    const out = changelogIndexTemplate(changelogOpts);
     expect(out).toContain(
-      'import { withMountedBase } from "blume/components/islands/base-path.ts"'
+      'import { withBase, withMountedBase } from "blume/components/islands/base-path.ts"'
     );
     expect(out).toContain('const basedRoute = withMountedBase("/changelog");');
     expect(out).toContain("const canonical = base ? base + basedRoute : null;");
   });
 
   it("wires the generated OG card, gated on og.enabled", () => {
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: false });
+    const out = changelogIndexTemplate(changelogOpts);
     expect(out).toContain(
       'const ogPath = data.config.og.enabled ? withMountedBase("/og/changelog.png") : null;'
     );
     expect(out).toContain("ogImage={ogImage}");
-    expect(out).toContain("ogGenerated={Boolean(ogImage)}");
+    // A default `seo.og.image` stands in for the card, with no known size.
+    expect(out).toContain("ogGenerated={!defaultOgImage && Boolean(ogImage)}");
     expect(out).not.toContain("ogImage={null}");
   });
 
   it("leaves the site-title suffix to the layout", () => {
     // Prefixing config.title here doubled the brand in the document title
     // ("Acme Changelog - Acme").
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: false });
+    const out = changelogIndexTemplate(changelogOpts);
     expect(out).toContain("const pageTitle = changelogTitle;");
     expect(out).not.toContain('data.config.title + " " + changelogTitle');
   });
 
-  it("links each row to its own generated page, under the deployment base", () => {
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: false });
-    // Route lookup keyed by the collection entry id (matches the manifest);
-    // the manifest route is base-less, so the row rebases it like the
-    // catch-all's canonical does, and falls back to the row's own anchor.
-    // Every locale's route for an entry shares its id (translations and
-    // fallback copies alike), so only the default locale's routes fill the
-    // map — a map over all of them kept the last locale's permalink — and an
-    // entry with no default-locale page (a translated changelog file) is
-    // left off the unlocalized index rather than listed twice.
-    expect(out).toContain(
-      "const defaultLocale = i18n ? i18n.defaultLocale : null;"
-    );
-    expect(out).toContain(
-      "if (defaultLocale === null || route.locale === defaultLocale) {"
-    );
-    expect(out).toContain("routeByEntry.set(route.entryId, route.path);");
-    expect(out).toContain(
-      "(defaultLocale === null || routeByEntry.has(entry.id))"
-    );
-    expect(out).toContain("const route = routeByEntry.get(entry.id);");
-    expect(out).toContain("href: route ? withMountedBase(route) : null,");
-    expect(out).toContain('href={item.href ?? "#" + item.id}');
-  });
-
-  it("suffixes repeated heading slugs so each entry keeps its own anchor", () => {
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: false });
-    const start = out.indexOf("const seenIds");
-    const end = out.indexOf("// Consecutive releases from the same year");
-    expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-    // Run the generated dedupe pass to pin its behavior.
-    // SAFETY: the generated snippet sliced above maps heading items to their
-    // deduplicated id strings — the exact signature asserted below.
-    // oxlint-disable-next-line no-new-func -- evaluating our own generated output
-    const dedupe = new Function(
-      "items",
-      `${out.slice(start, end)}\nreturn items.map((item) => item.id);`
-    ) as (items: { id: string }[]) => string[];
-    const ids = (...slugs: string[]) => dedupe(slugs.map((id) => ({ id })));
-    expect(ids("v1", "v2")).toEqual(["v1", "v2"]);
-    expect(ids("update", "update", "update")).toEqual([
-      "update",
-      "update-2",
-      "update-3",
-    ]);
-    // A generated suffix never collides with a later natural slug.
-    expect(ids("v1", "v1", "v1-2")).toEqual(["v1", "v1-2", "v1-2-2"]);
-  });
-
   it("passes the resolved UI dictionary and default-locale lang/dir to the layout", () => {
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: false });
+    const out = changelogIndexTemplate(changelogOpts);
     // Mirrors the catch-all: default locale under i18n, English baseline
     // otherwise, so /changelog chrome doesn't revert to EN_UI / dir="ltr".
     expect(out).toContain('const htmlLang = i18n ? i18n.defaultLocale : "en";');
@@ -635,7 +666,7 @@ describe("changelogIndexTemplate", () => {
   });
 
   it("localizes the changelog heading, page title, and description", () => {
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: false });
+    const out = changelogIndexTemplate(changelogOpts);
     // The chrome comes from the same translatable `changelog` group as the
     // reveal button, with English fallback for a stale data snapshot.
     expect(out).toContain(
@@ -648,11 +679,14 @@ describe("changelogIndexTemplate", () => {
     expect(out).toContain("<h1>{changelogTitle}</h1>");
     expect(out).toContain("description: changelogDescription,");
     expect(out).not.toContain("<h1>Changelog</h1>");
+    // The empty-state line belongs to the list, so it moved into
+    // `<Changelog />` with it — an authored page gets the same wording
+    // without copying it.
+    expect(out).not.toContain("changelogEmpty");
     // The island-hooks snapshot reuses the same localized page title.
     const reactOut = changelogIndexTemplate({
       ...changelogOpts,
       needsReact: true,
-      staged: false,
     });
     expect(reactOut).toContain(
       'page: { route: "/changelog", title: pageTitle }'
@@ -660,7 +694,7 @@ describe("changelogIndexTemplate", () => {
   });
 
   it("shows the whole history at once, with no major-version reveal", () => {
-    const out = changelogIndexTemplate({ ...changelogOpts, staged: false });
+    const out = changelogIndexTemplate(changelogOpts);
     // Rows are small enough that collapsing older majors buys nothing, so the
     // progressive-reveal element and its localized button are gone.
     expect(out).not.toContain("blume-changelog");
@@ -933,9 +967,9 @@ describe("runtimeDependencies", () => {
     ).toContain("probe-analytics-sdk");
   });
 
-  it("never declares the React Compiler plugin as a runtime dep (it's resolved by absolute path)", () => {
+  it("never declares the React Compiler as a runtime dep (it's a build-time transform)", () => {
     expect(runtimeDependencies({ config, needsReact: true })).not.toContain(
-      "babel-plugin-react-compiler"
+      "oxc-transform-react"
     );
   });
 });
@@ -1042,9 +1076,11 @@ describe("astroConfigTemplate", () => {
     // pages that splice it, and the runtime-modules plugin serves the data
     // snapshots (`blume:data`, the search index, …) from memory.
     expect(out).toContain(
-      'import { blumeIntegration, includeHmrPlugin, prerenderDepsPlugin, runtimeModulesPlugin } from "blume/astro"'
+      'import { blumeIntegration, includeHmrPlugin, mdxSourceErrorsPlugin, prerenderDepsPlugin, runtimeModulesPlugin } from "blume/astro"'
     );
     expect(out).toContain("prerenderDepsPlugin()");
+    // An error an `.mdx` page throws while it renders names the page.
+    expect(out).toContain("mdxSourceErrorsPlugin(), prerenderDepsPlugin()");
     expect(out).toContain("plugins: [runtimeModulesPlugin(), tailwindcss()");
     // In-memory modules need no file aliases — only the file-backed ids keep
     // one.
@@ -1157,13 +1193,61 @@ describe("astroConfigTemplate", () => {
     expect(out).toContain('import react from "@astrojs/react"');
     expect(out).toContain('import vue from "@astrojs/vue"');
     expect(out).toContain('import svelte from "@astrojs/svelte"');
-    // No reactCompilerPath passed, so react() carries no babel block
-    // (compiler off) — only the pre-bundle exclude.
+    // No reactCompiler passed, so react() leaves the compiler off — only the
+    // pre-bundle exclude.
     expect(out).toContain(
-      String.raw`react({ exclude: [/\/node_modules\/\.vite\//, /\/\.cache\/vite\//] })`
+      String.raw`react({ exclude: [/\/\.cache\/vite\//] })`
     );
     expect(out).toContain("vue()");
     expect(out).toContain("svelte()");
+    // Without `allowedDomains`, Astro trusts no forwarded header.
+    expect(out).not.toContain("security:");
+  });
+
+  it("sets node()'s allowedDomains as Astro's, not as an adapter option", () => {
+    const out = astroConfigTemplate({
+      askPath: ASK_PATH,
+      config: blumeConfigSchema.parse({
+        deployment: node({
+          allowedDomains: [{ hostname: "docs.example.com", protocol: "https" }],
+          site: "https://docs.example.com",
+          staticHeaders: true,
+        }),
+      }),
+      contentRoutes: [],
+      context: context(),
+      examplesPath: EXAMPLES_PATH,
+      examplesThemePath: EXAMPLES_THEME_PATH,
+      featuresPath: FEATURES_PATH,
+      needsReact: false,
+      pages: [],
+      searchClientPath: SEARCH_CLIENT_PATH,
+      themePath: THEME_PATH,
+    });
+    // Behind a proxy, Astro reads the reader's address from X-Forwarded-For
+    // only for a host `security.allowedDomains` lists.
+    expect(out).toContain(
+      'security: {"allowedDomains":[{"hostname":"docs.example.com","protocol":"https"}]},'
+    );
+    expect(out).toContain(
+      'adapter: adapter({"mode":"standalone","staticHeaders":true})'
+    );
+  });
+
+  it("rejects an allowedDomains entry Astro wouldn't take", () => {
+    // A misspelled field, as a JavaScript config could pass it.
+    const result = blumeConfigSchema.safeParse({
+      deployment: {
+        ...node(),
+        options: { allowedDomains: [{ host: "docs.example.com" }] },
+      },
+    });
+    expect(result.error?.issues[0]?.path).toStrictEqual([
+      "deployment",
+      "options",
+      "allowedDomains",
+      0,
+    ]);
   });
 
   it("writes deployment.base into a redirect destination, not into `from`", () => {
@@ -1222,9 +1306,7 @@ describe("astroConfigTemplate", () => {
     expect(out).toContain('"/manual/new"');
   });
 
-  it("carries the React Compiler babel plugin when a compiler path is given", () => {
-    const compilerPath =
-      "/abs/node_modules/babel-plugin-react-compiler/dist/index.js";
+  it("turns the React Compiler on when asked", () => {
     const out = astroConfigTemplate({
       askPath: ASK_PATH,
       config,
@@ -1235,21 +1317,21 @@ describe("astroConfigTemplate", () => {
       featuresPath: FEATURES_PATH,
       needsReact: true,
       pages: [],
-      reactCompilerPath: compilerPath,
+      reactCompiler: true,
       searchClientPath: SEARCH_CLIENT_PATH,
       themePath: THEME_PATH,
     });
     expect(out).toContain(
-      `react({ babel: { plugins: [[${JSON.stringify(compilerPath)}, { target: "19" }]] }, ${String.raw`exclude: [/\/node_modules\/\.vite\//, /\/\.cache\/vite\//]`} })`
+      String.raw`react({ compiler: true, exclude: [/\/\.cache\/vite\//] })`
     );
-    // The Babel-injected `react/compiler-runtime` import is invisible to the
+    // The compiler-injected `react/compiler-runtime` import is invisible to the
     // optimizer's source scan, so it must ride the include list — otherwise its
     // first request triggers a mid-session re-optimization whose new generation
     // duplicates React and tears down every hydrated island (#157).
     expect(out).toContain('"react/compiler-runtime"');
   });
 
-  it("omits the compiler babel plugin when no compiler path is given", () => {
+  it("leaves the React Compiler off when not asked", () => {
     const out = astroConfigTemplate({
       askPath: ASK_PATH,
       config,
@@ -1265,9 +1347,9 @@ describe("astroConfigTemplate", () => {
     });
     expect(out).toContain('import react from "@astrojs/react"');
     expect(out).toContain(
-      String.raw`react({ exclude: [/\/node_modules\/\.vite\//, /\/\.cache\/vite\//] })`
+      String.raw`react({ exclude: [/\/\.cache\/vite\//] })`
     );
-    expect(out).not.toContain("babel-plugin-react-compiler");
+    expect(out).not.toContain("compiler: true");
     // No compiler, no injected runtime import — keep it out of the optimizer.
     expect(out).not.toContain('"react/compiler-runtime"');
   });
@@ -1663,6 +1745,27 @@ describe("astroConfigTemplate", () => {
   });
 });
 
+const fsAllowFor = (root: string): string => {
+  const out = astroConfigTemplate({
+    askPath: ASK_PATH,
+    config,
+    contentRoutes: [],
+    context: context({
+      contentRoot: join(root, "docs"),
+      outDir: join(root, ".blume"),
+      root,
+    }),
+    examplesPath: EXAMPLES_PATH,
+    examplesThemePath: EXAMPLES_THEME_PATH,
+    featuresPath: FEATURES_PATH,
+    needsReact: false,
+    pages: [],
+    searchClientPath: SEARCH_CLIENT_PATH,
+    themePath: THEME_PATH,
+  });
+  return out;
+};
+
 describe("astroConfigTemplate workspace root", () => {
   const dirs: string[] = [];
 
@@ -1677,27 +1780,6 @@ describe("astroConfigTemplate workspace root", () => {
       dirs.map((dir) => rm(dir, { force: true, recursive: true }))
     );
   });
-
-  const fsAllowFor = (root: string): string => {
-    const out = astroConfigTemplate({
-      askPath: ASK_PATH,
-      config,
-      contentRoutes: [],
-      context: context({
-        contentRoot: join(root, "docs"),
-        outDir: join(root, ".blume"),
-        root,
-      }),
-      examplesPath: EXAMPLES_PATH,
-      examplesThemePath: EXAMPLES_THEME_PATH,
-      featuresPath: FEATURES_PATH,
-      needsReact: false,
-      pages: [],
-      searchClientPath: SEARCH_CLIENT_PATH,
-      themePath: THEME_PATH,
-    });
-    return out;
-  };
 
   it("uses a package.json workspaces field as the workspace root", async () => {
     const root = await makeRoot();
@@ -1731,6 +1813,10 @@ describe("contentConfigTemplate", () => {
       'import { pageCollectionSchema } from "blume/core/schema.ts";'
     );
     expect(out).toContain("schema: pageCollectionSchema,");
+    // Astro's content store re-parses an unchanged entry only when this
+    // config changes, so naming the version makes an upgrade re-parse every
+    // entry against the new page schema.
+    expect(out).toContain(`(${getBlumeVersion()})`);
   });
 
   it("adds a staged collection when staged sources materialize", () => {
@@ -1752,6 +1838,24 @@ describe("contentConfigTemplate", () => {
     });
     // Absolute bases are emitted as `file://` URLs (Windows drive-letter safety).
     expect(out).toContain(JSON.stringify(pathToFileURL("/custom/base").href));
+  });
+
+  it("leaves the pages a build dropped as unparsable out of the docs glob", () => {
+    // Astro compiles every `.mdx` file the collection holds, routed or not,
+    // so a dropped page left in would still fail a `--no-strict` build.
+    const ctx = context();
+    const out = contentConfigTemplate({
+      config,
+      context: ctx,
+      unparsable: [
+        join(ctx.root, "docs/(guides)/broken [1].mdx"),
+        "/elsewhere/outside.mdx",
+      ],
+    });
+    expect(out).toContain(
+      JSON.stringify(String.raw`!\(guides\)/broken \[1\].mdx`)
+    );
+    expect(out).not.toContain("outside.mdx");
   });
 
   it("excludes dependency, output, and cache trees from the docs glob", () => {
@@ -1821,7 +1925,11 @@ const EVERY_ADAPTER = [
   openrouter({ model: "x/y" }),
   llmgateway({ model: "m" }),
   inkeep({ model: "m" }),
-  openaiCompatible(COMPATIBLE),
+  openai({ model: "m" }),
+  openai(COMPATIBLE),
+  anthropic({ model: "m" }),
+  gemini({ model: "m" }),
+  grok({ model: "m" }),
 ];
 
 describe("askEndpointTemplate", () => {
@@ -2001,11 +2109,50 @@ describe("askEndpointTemplate", () => {
     expect(out).not.toContain("reasoning");
   });
 
+  it("generates the OpenAI route through OpenAI's own SDK", () => {
+    const out = askEndpointTemplate(
+      backendFor({
+        enabled: true,
+        provider: openai({ model: "gpt-5.5", reasoning: "low" }),
+      })
+    );
+    expect(out).toContain('import { createOpenAI } from "@ai-sdk/openai";');
+    expect(out).not.toContain("@ai-sdk/openai-compatible");
+    expect(out).toContain(
+      'const provider = createOpenAI({\n  apiKey: getSecret("OPENAI_API_KEY"),\n});'
+    );
+    expect(out).toContain('if (!getSecret("OPENAI_API_KEY"))');
+    expect(out).toContain("const ground = createAskContext(askData);");
+    expect(out).toContain(
+      'model: provider("gpt-5.5"),\n      instructions,\n      messages,\n      reasoning: "low",\n      onError({ error })'
+    );
+  });
+
+  it("generates the Anthropic, Gemini, and Grok routes through their own SDKs", () => {
+    for (const [provider, factory, pkg] of [
+      [
+        anthropic({ model: "claude-sonnet-5" }),
+        "createAnthropic",
+        "@ai-sdk/anthropic",
+      ],
+      [gemini({ model: "gemini-3.5-flash" }), "createGoogle", "@ai-sdk/google"],
+      [grok({ model: "grok-4.7" }), "createXai", "@ai-sdk/xai"],
+    ] as const) {
+      const out = askEndpointTemplate(backendFor({ enabled: true, provider }));
+      expect(out).toContain(`import { ${factory} } from "${pkg}";`);
+      expect(out).toContain(`const provider = ${factory}({`);
+      expect(out).toContain(
+        `model: provider(${JSON.stringify(provider.options.model)}),`
+      );
+      expect(out).toContain("const ground = createAskContext(askData);");
+    }
+  });
+
   it("generates the OpenAI-compatible route from the configured endpoint", () => {
     const out = askEndpointTemplate(
       backendFor({
         enabled: true,
-        provider: openaiCompatible({
+        provider: openai({
           ...COMPATIBLE,
           name: "acme",
           reasoning: "low",
@@ -2032,7 +2179,9 @@ describe("askEndpointTemplate", () => {
       openrouter({ model: "x/y", providerOptions, reasoning: "low" }),
       llmgateway({ model: "m", providerOptions }),
       inkeep({ model: "m", providerOptions }),
-      openaiCompatible({ ...COMPATIBLE, providerOptions }),
+      openai({ model: "m", providerOptions }),
+      openai({ ...COMPATIBLE, providerOptions }),
+      anthropic({ model: "m", providerOptions }),
     ]) {
       expect(
         askEndpointTemplate(backendFor({ enabled: true, provider }))
@@ -2075,7 +2224,7 @@ describe("askEndpointTemplate", () => {
     const compatible = askEndpointTemplate(
       backendFor({
         enabled: true,
-        provider: openaiCompatible({ ...COMPATIBLE, headers }),
+        provider: openai({ ...COMPATIBLE, headers }),
       })
     );
     // Sits between the key and the name so the API key's `Authorization`
@@ -2306,22 +2455,23 @@ describe("static endpoint templates", () => {
   });
 
   it("proxies mixedbread queries with the store id and every other option", () => {
-    const out = mixedbreadSearchEndpointTemplate({
-      search_options: { rerank: true },
-      storeId: "store_42",
-      top_k: 3,
-    });
-    expect(out).toContain(
-      'const OPTIONS = {"search_options":{"rerank":true},"storeId":"store_42","top_k":3}'
+    const out = mixedbreadSearchEndpointTemplate(
+      {
+        search_options: { rerank: true },
+        storeId: "store_42",
+        top_k: 3,
+      },
+      [["docs/index.md", { title: "Home", url: "/" }]]
     );
+    expect(out).toContain('const STORE_ID = "store_42";');
+    expect(out).toContain('const SEARCH_OPTIONS = {"top_k":3};');
+    expect(out).toContain('const SEARCH_TUNING = {"rerank":true};');
+    expect(out).toContain('[["docs/index.md",{"title":"Home","url":"/"}]]');
     // Every option but the store reaches the search call: `top_k` only
     // defaults to 8, while the query and store stay the request's and
-    // `storeId`'s.
+    // `storeId`'s, and file metadata is always returned.
     expect(out).toContain(
-      "const { storeId: STORE_ID, ...SEARCH_OPTIONS } = OPTIONS;"
-    );
-    expect(out).toContain(
-      "client.stores.search({\n    top_k: 8,\n    ...SEARCH_OPTIONS,\n    query,\n    store_identifiers: [STORE_ID],\n  })"
+      "client.stores.search({\n    top_k: 8,\n    ...SEARCH_OPTIONS,\n    query,\n    search_options: { ...SEARCH_TUNING, return_metadata: true },\n    store_identifiers: [STORE_ID],\n  })"
     );
   });
 
@@ -2535,7 +2685,7 @@ describe("package / tsconfig templates", () => {
     // Plain `astro build` scans the project root for the deploy artifacts.
     expect(out).toContain('"buildArtifactsRoot":"."');
     expect(out).toContain(
-      'import { blumeIntegration, includeHmrPlugin, prerenderDepsPlugin } from "blume/astro"'
+      'import { blumeIntegration, includeHmrPlugin, mdxSourceErrorsPlugin, prerenderDepsPlugin } from "blume/astro"'
     );
   });
 
@@ -2555,22 +2705,22 @@ describe("package / tsconfig templates", () => {
   });
 });
 
-describe("astroConfigTemplate image config", () => {
-  const render = (parsed: typeof config) =>
-    astroConfigTemplate({
-      askPath: ASK_PATH,
-      config: parsed,
-      contentRoutes: [],
-      context: context(),
-      examplesPath: EXAMPLES_PATH,
-      examplesThemePath: EXAMPLES_THEME_PATH,
-      featuresPath: FEATURES_PATH,
-      needsReact: false,
-      pages: [],
-      searchClientPath: SEARCH_CLIENT_PATH,
-      themePath: THEME_PATH,
-    });
+const render = (parsed: typeof config) =>
+  astroConfigTemplate({
+    askPath: ASK_PATH,
+    config: parsed,
+    contentRoutes: [],
+    context: context(),
+    examplesPath: EXAMPLES_PATH,
+    examplesThemePath: EXAMPLES_THEME_PATH,
+    featuresPath: FEATURES_PATH,
+    needsReact: false,
+    pages: [],
+    searchClientPath: SEARCH_CLIENT_PATH,
+    themePath: THEME_PATH,
+  });
 
+describe("astroConfigTemplate image config", () => {
   it("emits no image block by default", () => {
     expect(render(config)).not.toContain("image:");
   });
@@ -2634,12 +2784,14 @@ describe(rateLimitTemplate, () => {
     );
   });
 
-  it("hands Upstash its secrets and Cloudflare its binding", () => {
-    const shared = rateLimitTemplate(upstash(), "search");
-    expect(shared.imports).toContain(
-      'import { getSecret } from "astro:env/server";'
-    );
-    expect(shared.setup).toContain(", { secret: getSecret });");
+  it("hands a store that names secrets getSecret, and Cloudflare its binding", () => {
+    for (const adapter of [upstash(), unkey()]) {
+      const shared = rateLimitTemplate(adapter, "search");
+      expect(shared.imports).toContain(
+        'import { getSecret } from "astro:env/server";'
+      );
+      expect(shared.setup).toContain(", { secret: getSecret });");
+    }
     const bound = rateLimitTemplate(cloudflareRateLimit(), "api-proxy");
     expect(bound.imports).toContain(
       'import { env } from "cloudflare:workers";'
@@ -2665,6 +2817,7 @@ describe(rateLimitTemplate, () => {
     expect(proxy).toContain("return handler(context.request);");
     const search = mixedbreadSearchEndpointTemplate(
       { storeId: "s" },
+      [],
       upstash()
     );
     expect(search.match(/from "astro:env\/server"/gu)).toHaveLength(1);

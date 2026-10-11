@@ -1,7 +1,7 @@
 ---
 title: Arquivo de configuração
 description: >-
-  Todas as opções em blume.config.ts, desde os metadados do site e as fontes de conteúdo até os links que levam a cada guia de configuração de funcionalidade.
+  Todas as opções em blume.config.ts, desde os metadados do site e as fontes de conteúdo até os links que levam a cada guia individual de configuração de funcionalidade.
 sidebar:
   label: blume.config.ts
 ---
@@ -69,6 +69,8 @@ export default defineConfig({
     llmsTxt: true,
     // AI Catalog / ARD manifest at /.well-known/ai-catalog.json (needs deployment.site)
     catalog: true,
+    // Your site's agent skill at /skill.md (needs deployment.site)
+    skillMd: true,
     // MCP server (needs server output)
     mcp: {
       enabled: false,
@@ -100,6 +102,7 @@ export default defineConfig({
 | `description` | — | Meta descrição padrão, usada para SEO e OG. |
 | `logo` | — | Marca gráfica e/ou logotipo textual exibido no cabeçalho. |
 | `banner` | — | Barra de anúncios para todo o site, acima do cabeçalho. |
+| `footer` | — | Um aviso de copyright, uma linha de links e ícones de perfis sociais abaixo do conteúdo. |
 
 ### Logotipo [#logo]
 
@@ -186,6 +189,43 @@ banner: {
 
 Quando `dismissible` está ativo, a barra mostra um botão de fechar e permanece oculta para aquele visitante daí em diante. A chave de dispensa assume por padrão o texto do conteúdo, então editar a mensagem faz a faixa reaparecer; defina um `id` estável para mantê-la dispensada entre edições.
 
+Em um site [multilíngue](/docs/content/i18n), `content` e o `text` do link também aceitam um mapa de código de locale para texto. Cada página mostra a entrada do próprio locale, recorrendo à do locale padrão, e o link passa para o locale do leitor sempre que esse locale serve a página:
+
+```ts blume.config.ts lineNumbers
+banner: {
+  content: { en: "Version 2.0 is here!", fr: "La version 2.0 est là !" },
+  link: {
+    text: { en: "Read the release notes", fr: "Lire les notes de version" },
+    href: "/changelog",
+  },
+},
+```
+
+Uma faixa traduzida usa o texto do locale padrão como chave de dispensa, então dispensá-la uma vez a oculta em todos os idiomas.
+
+### Rodapé [#footer]
+
+Toda página termina com um rodapé: uma única linha, da mesma altura do cabeçalho, com seus links de um lado, ícones de perfis sociais do outro e um aviso de copyright centralizado entre eles. O rodapé é o único lugar onde o Blume coloca links para seus perfis sociais e seu repositório, então o repositório do [`github`](#github) vem primeiro entre os ícones sempre que estiver definido. O `footer` adiciona o resto:
+
+```ts blume.config.ts lineNumbers
+footer: {
+  copyright: "© 2026 Acme, Inc.",
+  links: [
+    { label: "Pricing", href: "https://acme.dev/pricing" },
+    { label: "Changelog", href: "/changelog" },
+    { label: "Blog", href: "https://acme.dev/blog" },
+  ],
+  socials: {
+    x: "https://x.com/acme",
+    discord: "https://discord.gg/acme",
+  },
+},
+```
+
+`copyright` é texto simples, então escreva o próprio `©` em vez de `&copy;`. Para que o ano se mantenha sempre atualizado, use um template literal: `` `© ${new Date().getFullYear()} Acme, Inc.` ``. Os `links` aparecem na ordem em que você os escreve. Escreva os links internos como se o site estivesse montado na raiz; um link externo abre em uma nova aba. Em um site [multilíngue](/docs/content/i18n#per-locale-navigation), tanto o `copyright` quanto um `label` podem ser um mapa de código de locale para texto, e um link interno passa para o locale do leitor sempre que esse locale serve a página. `socials` associa cada plataforma à URL do seu perfil, e os ícones aparecem na ordem em que você os escreve. As plataformas são `bluesky`, `discord`, `facebook`, `github`, `hacker-news`, `instagram`, `linkedin`, `medium`, `podcast`, `reddit`, `slack`, `telegram`, `threads`, `website`, `x` e `youtube`. Uma entrada `github` em `socials` substitui o link para o repositório; oculte esse link com [`navigation.repo`](/docs/content/navigation#repository-link).
+
+Um site sem copyright, links, perfis ou repositório não tem rodapé. As páginas personalizadas construídas sobre o `PageLayout` também o exibem, a menos que preencham o próprio slot `footer` do layout. Para substituí-lo por completo, sobrescreva o [slot de layout `Footer`](/docs/configuration/customization#layout-slots).
+
 ## Conteúdo [#content]
 
 Onde seu conteúdo fica e como o Blume o descobre. Consulte [Páginas](/docs/content) para saber como os arquivos viram rotas.
@@ -200,7 +240,7 @@ content: {
 | --- | --- | --- |
 | `root` | `"docs"` | Pasta que o Blume analisa em busca de conteúdo. Forma abreviada para uma única fonte `filesystem()`; não é permitida junto com `sources`. |
 | `include` | `["**/*.{md,mdx}"]` | Globs que correspondem a arquivos de conteúdo. Forma abreviada, como `root`. |
-| `exclude` | `["**/_*", "**/.*"]` | Globs a ignorar (arquivos com underscore e com ponto). Forma abreviada, como `root`. |
+| `exclude` | `["**/_*", "**/.*"]` | Globs a ignorar. Os seus se somam aos padrões, que pulam arquivos com underscore e com ponto; uma entrada com `!` remove um padrão, então `"!**/_*"` publica os arquivos com prefixo `_`. Forma abreviada, como `root`. |
 | `sources` | uma `filesystem()` | Adaptadores de fontes de conteúdo de `blume/sources`, que substituem a forma abreviada. Consulte [Fontes de conteúdo](/docs/content/sources). |
 | `pages` | `"pages"` | Pasta para páginas `.astro` personalizadas. |
 | `defaultType` | `"doc"` | `type` de página usado quando o frontmatter o omite. |
@@ -273,7 +313,7 @@ Uma chave pode ser declarada para todo o site ou por tipo, não os dois. Consult
 
 ## GitHub
 
-Aponte o Blume para o seu repositório com `github`. É o que alimenta o [link para o repositório](/docs/content/navigation#repository-link) no cabeçalho e a [ação de página](/docs/content/navigation#page-actions) **Editar no GitHub**:
+Aponte o Blume para o seu repositório com `github`. É o que alimenta o [link para o repositório](/docs/content/navigation#repository-link) no rodapé e a [ação de página](/docs/content/navigation#page-actions) **Editar no GitHub**:
 
 ```ts blume.config.ts lineNumbers
 github: {
@@ -327,7 +367,7 @@ lastModified: "git",
 | `"git"` | Lê a data do histórico do git (datas dos commits). |
 | `"frontmatter"` | Nunca executa o git — usa apenas o campo `lastModified` do frontmatter. |
 
-A fonte git lê o commit mais recente que tocou em cada arquivo, então funciona em qualquer repositório git — incluindo monorepos — e precisa do histórico do repositório no momento da build. As plataformas de CI costumam fazer checkout de um clone raso, o que descarta silenciosamente a maioria das datas (a build avisa com `BLUME_SHALLOW_GIT_HISTORY` quando isso acontece): na Vercel, defina a variável de ambiente `VERCEL_DEEP_CLONE=true`; com o `actions/checkout`, defina `fetch-depth: 0`. O `lastModified` do frontmatter da própria página sempre prevalece, o que é útil para fixar uma data ou para arquivos que ainda não foram commitados:
+A fonte git lê o commit mais recente que tocou em cada arquivo, então funciona em qualquer repositório git — incluindo monorepos — e precisa do histórico do repositório no momento da build. Ela acompanha renomeações, como o `git log --follow` faz: renomear `page.md` para `page.mdx`, ou mover um arquivo para outra pasta dentro da mesma raiz de conteúdo, mantém a data da página, desde que o commit não altere o conteúdo do arquivo. Uma renomeação que também edita o arquivo faz a página assumir a data desse commit, e o mesmo acontece ao mover para a raiz de conteúdo um arquivo que estava fora dela. As plataformas de CI costumam fazer checkout de um clone raso, o que descarta silenciosamente a maioria das datas (a build avisa com `BLUME_SHALLOW_GIT_HISTORY` quando isso acontece): na Vercel, defina a variável de ambiente `VERCEL_DEEP_CLONE=true`; com o `actions/checkout`, defina `fetch-depth: 0`. O `lastModified` do frontmatter da própria página sempre prevalece, o que é útil para fixar uma data ou para arquivos que ainda não foram commitados:
 
 ```mdx page.mdx
 ---
@@ -421,7 +461,21 @@ export default defineConfig({
 });
 ```
 
-A resposta do leitor é enviada como um [evento personalizado](/docs/configuration/analytics#custom-events) `feedback` — com `helpful` (`"yes"` ou `"no"`), `path` e `title` — por meio de cada adaptador de analytics configurado que tenha uma API de eventos, e como um evento `blume:track` em `window`. Sem um adaptador de analytics, a resposta não é registrada em lugar nenhum. A pergunta e o texto de agradecimento são strings da interface que você pode traduzir com [`i18n.ui`](/docs/content/i18n#translated-ui).
+A resposta do leitor é enviada como um [evento personalizado](/docs/configuration/analytics#custom-events) `feedback` — com `helpful` (`"yes"` ou `"no"`), `path` e `title` — por meio de cada adaptador de analytics configurado que tenha uma API de eventos, e como um evento `blume:track` em `window`. O Fathom, o Microsoft Clarity e o Hotjar recebem apenas o nome do evento, sem as propriedades, então eles contam as avaliações, mas não conseguem distinguir um sim de um não. Sem um adaptador de analytics, a resposta não é registrada em lugar nenhum e, com o [consentimento de cookies](/docs/configuration/consent) ativado, a avaliação só aparece para os leitores que permitiram analytics, já que a resposta de qualquer outro leitor não chegaria a lugar algum. A pergunta e o texto de agradecimento são strings da interface que você pode traduzir com [`i18n.ui`](/docs/content/i18n#translated-ui).
+
+### Feedback por escrito [#written-feedback]
+
+Para ouvir mais do que sim ou não, ative os comentários. Depois de avaliar uma página, o leitor recebe uma caixa para dizer o que funcionou ou o que está faltando:
+
+```ts blume.config.ts
+export default defineConfig({
+  feedback: { comments: true },
+});
+```
+
+Um comentário é enviado como um evento `feedback_comment` com os mesmos `helpful`, `path` e `title` da avaliação, além do `comment` do leitor (até 1.000 caracteres). Ele passa pelos mesmos adaptadores que a avaliação, então leia os comentários onde você lê os eventos. Os provedores limitam o tamanho do valor de uma propriedade, então um comentário longo pode chegar cortado: o Google Analytics mantém 100 caracteres, o Mixpanel, 255 bytes (menos caracteres em um sistema de escrita que usa vários bytes por caractere, como o japonês), e o Vercel Web Analytics aceita valores de até 255 caracteres, enquanto o PostHog e o Segment repassam os comentários inteiros. O Fathom, o Clarity e o Hotjar não recebem nenhum texto do comentário. O Plausible agrupa valores idênticos em vez de listar cada comentário, então ele serve melhor para avaliações do que para comentários. Os leitores podem escrever qualquer coisa na caixa, então trate os comentários como algo que pode conter dados pessoais.
+
+O rótulo e o botão da caixa também são strings da interface (`feedback.comment` e `feedback.send`).
 
 ## Opções de funcionalidades [#feature-options]
 
@@ -433,13 +487,18 @@ Cada uma delas tem seu próprio guia. O campo de configuração é o ponto de en
 | `navigation` | Barra lateral explícita e abas do cabeçalho | [Navegação](/docs/content/navigation) |
 | `search` | Provedor (Orama, Pagefind, Algolia, entre outros) e indexação | [Busca](/docs/configuration/search) |
 | `markdown` | Opções de renderização de Markdown — blocos de código, âncoras de títulos, zoom em imagens | [Sintaxe](/docs/content/syntax) |
-| `agents` | `llms.txt`, espelhos em Markdown, a API JSON, o servidor MCP hospedado, skills e manifestos de descoberta para agentes de programação | [SEO e AEO](/docs/discoverability) |
+| `agents` | `llms.txt`, espelhos em Markdown, a API JSON, o servidor MCP hospedado, skills e manifestos de descoberta para agentes de programação | [SEO e GEO](/docs/discoverability) |
 | `ai` | O assistente dentro da página e a ação Abrir no chat | [Assistente](/docs/configuration/assistant) |
+| `rateLimit` | Com que frequência um mesmo leitor pode chamar o assistente, o proxy do playground e a busca no servidor, com um adaptador de `blume/ratelimit` (ativo por padrão) | [Limitação de taxa](/docs/configuration/rate-limiting) |
+| `narration` | O player "Ouça esta página", com vozes do navegador ou vozes geradas na build | [Narração](/docs/configuration/narration) |
 | `reference` | Referências de API: adaptadores `openapi()`, `asyncapi()`, `graphql()` e `scalar()` de `blume/reference` | [OpenAPI](/docs/references/openapi), [AsyncAPI](/docs/references/asyncapi), [GraphQL](/docs/references/graphql), [Scalar](/docs/references/scalar) |
+| `api` | O servidor, a autenticação e o painel Experimente das páginas de endpoint escritas à mão | [Páginas de API escritas à mão](/docs/references/api-pages) |
 | `analytics` | Adaptadores de `blume/analytics` — PostHog, Google Analytics, Plausible, Mixpanel, Segment, entre outros — além de scripts personalizados | [Analytics](/docs/configuration/analytics) |
-| `seo` | Metadados, imagens OG, feeds, dados estruturados, sitemap, robots | [SEO e AEO](/docs/discoverability) |
+| `consent` | Um adaptador de consentimento de cookies de `blume/consent` — o banner do próprio Blume, o Osano ou o Ethyca — que segura o analytics até o leitor permiti-lo | [Consentimento de cookies](/docs/configuration/consent) |
+| `seo` | Metadados, imagens OG, feeds, dados estruturados, sitemap, robots | [SEO e GEO](/docs/discoverability) |
 | `deployment` | Um adaptador de host de `blume/deploy`, ou `{ site, base }` para uma build estática | [Deploy](/docs/deployment) |
 | `redirects` | Redirecionamentos permanentes e temporários | [Deploy](/docs/deployment#redirects) |
+| `poweredBy` | O cabeçalho de resposta `X-Powered-By: Blume` (padrão `true`) | [Deploy](/docs/deployment#powered-by-header) |
 | `integrations` | Integrações do Astro adicionadas depois das integradas do Blume | [Personalização](/docs/configuration/customization#astro-integrations) |
 | `basePath` | Um caminho sob o qual todas as rotas geradas são montadas (p. ex. `/docs`), invisível para a barra lateral | [Deploy](/docs/deployment#mount-the-docs-under-a-path) |
 | `i18n` | Locales, o locale padrão e as strings da interface traduzidas | [Internacionalização](/docs/content/i18n) |
@@ -447,7 +506,9 @@ Cada uma delas tem seu próprio guia. O campo de configuração é o ponto de en
 | `export` | Downloads em PDF e EPUB para os leitores | [Exportação](/docs/configuration/export) |
 | `examples` | Onde ficam as prévias de exemplo de `<Component path>` e o CSS injetado nos frames delas | [Component](/docs/content/components#component) |
 | `react` | Comportamento das ilhas React — a memoização automática do React Compiler | [Ilhas](/docs/content/islands#frameworks) |
-| `feedback` | A avaliação "Esta página foi útil?" no rodapé de cada página (padrão `true`) | [Feedback da página](#page-feedback) |
+| `variables` | Valores que `{{name}}` lê em qualquer página | [Variáveis](/docs/content/variables) |
+| `feedback` | A avaliação "Esta página foi útil?" no rodapé de cada página (padrão `true`) e os comentários por escrito opcionais depois dela | [Feedback da página](#page-feedback) |
+| `changelog` | O título e a descrição do índice `/changelog` gerado, cada um sendo uma string ou um mapa por locale | [Changelogs](/docs/advanced/changelog#the-index-page) |
 
 ## Precedência [#precedence]
 

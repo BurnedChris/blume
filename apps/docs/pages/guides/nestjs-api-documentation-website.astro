@@ -1,0 +1,807 @@
+---
+// Publish NestJS API documentation from Swagger metadata: checked against the
+// OpenAPI, navigation, and deployment docs, the init command
+// (cli/init/scaffold.ts, cli/commands/init.ts), and the OpenAPI loader and
+// route builder (openapi/source.ts, openapi/model.ts, openapi/parse.ts) and
+// security labels (components/openapi/security.ts) on main; and against the
+// NestJS OpenAPI, CLI plugin, SWC, devtools CI/CD, and v12 migration docs.
+// Ran: a Nest 12 fixture (@nestjs/core 12.1.0, @nestjs/swagger 12.0.2,
+// @nestjs/cli 12.0.7, class-validator 0.15.1, TypeScript 6.0.3, Node 24)
+// built with `nest build`, exported with the script below, and served with
+// curl checks for 202/400/401/404 and CORS preflight; the plain-tsc build
+// (empty schemas), a non-.dto.ts file name, the global-prefix default, and a
+// failing provider with and without preview mode. The exported spec was
+// parsed with Blume's parseSpec and extractOperations to confirm the routes.
+// Not yet run end to end: no `blume build` or `blume dev` on the fixture.
+// Review: moved the docs project from docs/ (content root content/) to
+// docs-site/ with the default docs/ folder, to match the other framework
+// guides; Nest 12's tsconfig.build.json includes only src/, so nest build
+// ignores it.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("nestjs-api-documentation-website")}>
+  <p>
+    To publish NestJS API documentation, let <code>@nestjs/swagger</code> build
+    the OpenAPI document from your controllers and DTOs, write it to a JSON
+    file with a short export script, and point Blume's <code>openapi()</code>{" "}
+    adapter at that file. Blume turns every operation into its own page, with
+    its schemas, auth requirements, code samples, and a Try it panel, and puts
+    those pages next to guides you write in Markdown.
+  </p>
+  <p>
+    By the end, you have a NestJS app whose DTOs and guards describe
+    themselves, a spec export that runs without a database, and a docs site
+    with a first-request guide beside the reference. The example is the
+    fictional Acme Messages API. It was tested with NestJS 12.1.0,{" "}
+    <code>@nestjs/swagger</code> 12.0.2, and the Nest CLI 12.0.7.
+  </p>
+  <p>
+    If you only need an interactive console for your own team, the Swagger UI
+    that <code>SwaggerModule.setup()</code> serves already covers it. Blume is
+    for a public site where readers find endpoints through search, land on
+    each one at its own URL, and read guides in the same sidebar. If you
+    already have a spec file, start with{" "}
+    <a href="/guides/openapi-documentation-website">Generate API docs from an OpenAPI spec</a>{" "}
+    instead.
+  </p>
+
+  <h2>How the pieces fit</h2>
+  <p>
+    The docs site lives in a <code>docs-site/</code> folder inside the Nest
+    repository, as its own Blume project. The Nest app writes{" "}
+    <code>docs-site/openapi.json</code>, and Blume reads it at build time.
+    Blume builds its site into <code>dist/</code>, the same folder name Nest
+    uses, which is why it needs a folder of its own.
+  </p>
+  <CodeBlock
+    code={`acme-api/
+├── nest-cli.json
+├── package.json
+├── src/
+│   ├── app.module.ts
+│   ├── auth/
+│   │   ├── api-key.guard.ts
+│   │   └── authenticated.decorator.ts
+│   ├── export-openapi.ts
+│   ├── main.ts
+│   ├── messages/
+│   │   ├── dto/
+│   │   │   ├── message.dto.ts
+│   │   │   └── send-message.dto.ts
+│   │   └── messages.controller.ts
+│   └── openapi.ts
+└── docs-site/
+    ├── blume.config.ts
+    ├── docs/
+    │   ├── api/quickstart.mdx
+    │   └── index.mdx
+    ├── openapi.json
+    └── package.json`}
+    lang="txt"
+  />
+  <p>
+    The code uses the ESM layout, one of the two that <code>nest new</code>{" "}
+    offers in NestJS 12, with <code>.js</code> extensions on relative imports.
+    In a CommonJS project, drop those extensions and wrap the export script's
+    top-level <code>await</code>s in an async function.
+  </p>
+
+  <h2>Add Swagger and its CLI plugin</h2>
+  <p>
+    Install the Swagger module and the validation packages the DTOs use:
+  </p>
+  <CodeBlock
+    code="npm install @nestjs/swagger@12.0.2 class-validator@0.15.1 class-transformer@0.5.1"
+    lang="bash"
+  />
+  <p>
+    Then turn on the Swagger CLI plugin. It runs while TypeScript compiles and
+    writes the schema metadata for every DTO property, so you don't repeat
+    each type in an <code>@ApiProperty()</code> decorator. With{" "}
+    <code>introspectComments</code>, it also turns doc comments into
+    descriptions and examples:
+  </p>
+  <CodeBlock
+    code={`{
+  "$schema": "https://json.schemastore.org/nest-cli",
+  "collection": "@nestjs/schematics",
+  "sourceRoot": "src",
+  "compilerOptions": {
+    "deleteOutDir": true,
+    "plugins": [
+      {
+        "name": "@nestjs/swagger",
+        "options": { "introspectComments": true }
+      }
+    ]
+  }
+}`}
+    lang="json"
+    title="nest-cli.json"
+  />
+  <p>
+    The plugin only runs when the Nest CLI compiles your code, with{" "}
+    <code>nest build</code> or <code>nest start</code>. Plain{" "}
+    <code>tsc</code>, <code>tsx</code>, and <code>ts-node</code> skip it, and
+    the schemas come out empty. It also only reads files named{" "}
+    <code>*.dto.ts</code> or <code>*.entity.ts</code> by default.
+  </p>
+
+  <h2>Describe the DTOs</h2>
+  <p>
+    Write DTOs as plain classes. The plugin reads the TypeScript types,
+    the <code>?</code> on optional properties, the class-validator decorators,
+    and the doc comments:
+  </p>
+  <CodeBlock
+    code={`import { IsIn, IsObject, IsOptional, IsString } from 'class-validator';
+
+export class SendMessageDto {
+  /**
+   * How to deliver the message.
+   * @example 'email'
+   */
+  @IsIn(['email', 'sms'])
+  channel: 'email' | 'sms';
+
+  /**
+   * An email address, or a phone number in E.164 format.
+   * @example 'ada@example.com'
+   */
+  @IsString()
+  to: string;
+
+  /**
+   * The ID of the template to send.
+   * @example 'welcome'
+   */
+  @IsString()
+  template: string;
+
+  /**
+   * Values for the template's variables.
+   * @example { "firstName": "Ada" }
+   */
+  @IsOptional()
+  @IsObject()
+  variables?: Record<string, string>;
+}`}
+    lang="ts"
+    title="src/messages/dto/send-message.dto.ts"
+  />
+  <CodeBlock
+    code={`export class MessageDto {
+  /**
+   * The message ID.
+   * @example 'msg_8f2k'
+   */
+  id: string;
+
+  /** Where the message is in delivery. */
+  status: 'queued' | 'sent' | 'delivered' | 'failed';
+
+  /** How the message is delivered. */
+  channel: 'email' | 'sms';
+}`}
+    lang="ts"
+    title="src/messages/dto/message.dto.ts"
+  />
+  <p>
+    From <code>SendMessageDto</code>, the plugin produces this schema. The
+    union becomes an <code>enum</code>, the record becomes{" "}
+    <code>additionalProperties</code>, and only <code>variables</code> is left
+    out of <code>required</code>:
+  </p>
+  <CodeBlock
+    code={`"SendMessageDto": {
+  "type": "object",
+  "properties": {
+    "channel": {
+      "type": "string",
+      "description": "How to deliver the message.",
+      "example": "email",
+      "enum": ["email", "sms"]
+    },
+    "to": {
+      "type": "string",
+      "description": "An email address, or a phone number in E.164 format.",
+      "example": "ada@example.com"
+    },
+    "template": {
+      "type": "string",
+      "description": "The ID of the template to send.",
+      "example": "welcome"
+    },
+    "variables": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Values for the template's variables.",
+      "example": { "firstName": "Ada" }
+    }
+  },
+  "required": ["channel", "to", "template"]
+}`}
+    lang="json"
+  />
+  <p>
+    Blume renders those descriptions in the schema tables and uses the
+    examples to fill the Try it form, so the comments you write here are the
+    reference readers see.
+  </p>
+
+  <h2>Protect the controller and document it once</h2>
+  <p>
+    A guard enforces authentication, and <code>@ApiBearerAuth()</code>{" "}
+    documents it. NestJS doesn't connect the two, so a route can require a key
+    without saying so in the spec, or the other way around. Put both in one
+    decorator, and they can't drift apart. First, the guard:
+  </p>
+  <CodeBlock
+    code={`import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
+import type { Request } from 'express';
+
+@Injectable()
+export class ApiKeyGuard implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    const request = context.switchToHttp().getRequest<Request>();
+    const [scheme, token] = request.headers.authorization?.split(' ') ?? [];
+    if (scheme !== 'Bearer' || !token || token !== process.env.ACME_API_KEY) {
+      throw new UnauthorizedException('Send a valid API key as a bearer token.');
+    }
+    return true;
+  }
+}`}
+    lang="ts"
+    title="src/auth/api-key.guard.ts"
+  />
+  <p>Then the decorator that applies the guard and documents it together:</p>
+  <CodeBlock
+    code={`import { applyDecorators, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiUnauthorizedResponse } from '@nestjs/swagger';
+import { ApiKeyGuard } from './api-key.guard.js';
+
+export const Authenticated = () =>
+  applyDecorators(
+    UseGuards(ApiKeyGuard),
+    ApiBearerAuth(),
+    ApiUnauthorizedResponse({ description: 'The API key is missing or invalid.' }),
+  );`}
+    lang="ts"
+    title="src/auth/authenticated.decorator.ts"
+  />
+  <p>
+    Use it on the controller, so every route in it is protected and
+    documented as protected:
+  </p>
+  <CodeBlock
+    code={`import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  NotFoundException,
+  Param,
+  Post,
+} from '@nestjs/common';
+import {
+  ApiAcceptedResponse,
+  ApiBadRequestResponse,
+  ApiNotFoundResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
+import { Authenticated } from '../auth/authenticated.decorator.js';
+import { MessageDto } from './dto/message.dto.js';
+import { SendMessageDto } from './dto/send-message.dto.js';
+
+@ApiTags('Messages')
+@Authenticated()
+@Controller('messages')
+export class MessagesController {
+  private readonly messages = new Map<string, MessageDto>();
+
+  @Post()
+  @HttpCode(202)
+  @ApiOperation({
+    summary: 'Send a message',
+    description: 'Queues an email or SMS for delivery and returns its ID right away.',
+  })
+  @ApiAcceptedResponse({ description: 'The message is queued.', type: MessageDto })
+  @ApiBadRequestResponse({ description: 'The body failed validation.' })
+  sendMessage(@Body() body: SendMessageDto): MessageDto {
+    const message: MessageDto = {
+      id: \`msg_\${crypto.randomUUID().slice(0, 8)}\`,
+      status: 'queued',
+      channel: body.channel,
+    };
+    this.messages.set(message.id, message);
+    return message;
+  }
+
+  @Get(':id')
+  @ApiOperation({
+    summary: 'Get a message',
+    description: 'Returns a message and its delivery status.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The message ID, from the response to Send a message.',
+    example: 'msg_8f2k',
+  })
+  @ApiOkResponse({ description: 'The message.', type: MessageDto })
+  @ApiNotFoundResponse({ description: 'No message has that ID.' })
+  getMessage(@Param('id') id: string): MessageDto {
+    const message = this.messages.get(id);
+    if (!message) {
+      throw new NotFoundException(\`No message has the ID \${id}.\`);
+    }
+    return message;
+  }
+}`}
+    lang="ts"
+    title="src/messages/messages.controller.ts"
+  />
+  <p>
+    The in-memory map stands in for your database. Each operation's{" "}
+    <code>summary</code> becomes its page title and sidebar label in Blume,
+    and its <code>description</code> becomes the page's introduction and
+    search description, so keep the summary to a few words. The tag becomes
+    the sidebar group and part of every page URL.
+  </p>
+
+  <h2>Build the OpenAPI document</h2>
+  <p>
+    Put the document settings in one function, so the running server and the
+    export script produce the same spec:
+  </p>
+  <CodeBlock
+    code={`import type { INestApplication } from '@nestjs/common';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+
+export function createOpenApiDocument(app: INestApplication) {
+  const config = new DocumentBuilder()
+    .setTitle('Acme Messages API')
+    .setDescription('Send transactional email and SMS, and check whether they arrived.')
+    .setVersion('1.0.0')
+    .addServer('https://api.acme.example/v1')
+    .addTag('Messages', 'Send a message and check whether it arrived.')
+    .addBearerAuth({
+      type: 'http',
+      scheme: 'bearer',
+      bearerFormat: 'API key',
+      description: 'An API key, sent as a bearer token.',
+    })
+    .build();
+
+  return SwaggerModule.createDocument(app, config, {
+    ignoreGlobalPrefix: true,
+    operationIdFactory: (_controllerKey, methodKey) => methodKey,
+  });
+}`}
+    lang="ts"
+    title="src/openapi.ts"
+  />
+  <p>Three of these settings decide how the Blume site turns out:</p>
+  <ul>
+    <li>
+      <strong><code>operationIdFactory</code></strong> sets the operation IDs
+      that Blume builds page URLs from. NestJS defaults to{" "}
+      <code>MessagesController_sendMessage</code>, which becomes{" "}
+      <code>/api/messages/messages-controller-send-message</code>. Using the
+      method name gives <code>/api/messages/send-message</code>. Method names
+      must then be unique across the whole API.
+    </li>
+    <li>
+      <strong><code>ignoreGlobalPrefix</code></strong> keeps{" "}
+      <code>/v1</code> out of the paths, because the server URL already ends
+      in <code>/v1</code>. Put the prefix in one place or the other, never
+      both.
+    </li>
+    <li>
+      <strong><code>bearerFormat</code></strong> labels the credential.{" "}
+      <code>addBearerAuth()</code> defaults it to <code>JWT</code>, and Blume
+      shows it in each operation's Authorization section, as "Bearer token
+      (API key)" here.
+    </li>
+  </ul>
+  <p>Register the controller, then use the function in <code>main.ts</code>:</p>
+  <CodeBlock
+    code={`import { Module } from '@nestjs/common';
+import { MessagesController } from './messages/messages.controller.js';
+
+@Module({
+  controllers: [MessagesController],
+})
+export class AppModule {}`}
+    lang="ts"
+    title="src/app.module.ts"
+  />
+  <CodeBlock
+    code={`import { ValidationPipe } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import { SwaggerModule } from '@nestjs/swagger';
+import { AppModule } from './app.module.js';
+import { createOpenApiDocument } from './openapi.js';
+
+const app = await NestFactory.create(AppModule);
+app.setGlobalPrefix('v1');
+app.enableCors({ origin: 'https://docs.acme.example' });
+app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
+SwaggerModule.setup('swagger', app, () => createOpenApiDocument(app));
+await app.listen(process.env.PORT ?? 3000);`}
+    lang="ts"
+    title="src/main.ts"
+  />
+  <p>
+    <code>enableCors</code> lets the docs site's Try it panel call the API
+    from a reader's browser. The Swagger UI at <code>/swagger</code> is
+    optional: the docs site doesn't use it. Start the server with an API key
+    and check that the guard holds:
+  </p>
+  <CodeBlock
+    code={`ACME_API_KEY=test_key npm run start:dev
+
+curl -i -X POST http://localhost:3000/v1/messages \\
+  -H "Content-Type: application/json" \\
+  -d '{"channel":"email","to":"ada@example.com","template":"welcome"}'`}
+    lang="bash"
+  />
+  <p>
+    Without the key, the API answers <code>401</code>. Add{" "}
+    <code>-H "Authorization: Bearer test_key"</code> and it answers{" "}
+    <code>202</code> with the queued message.
+  </p>
+
+  <h2>Export the Swagger JSON without starting the server</h2>
+  <p>
+    While the server runs, the spec is at{" "}
+    <code>http://localhost:3000/swagger-json</code>. A build shouldn't depend on
+    a running server, though, so add a script that writes the file directly:
+  </p>
+  <CodeBlock
+    code={`import { writeFile } from 'node:fs/promises';
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module.js';
+import { createOpenApiDocument } from './openapi.js';
+
+// Preview mode maps controllers and routes without running any constructors,
+// so the export needs no database or other services.
+const app = await NestFactory.create(AppModule, {
+  logger: ['error'],
+  preview: true,
+});
+// Repeat anything from main.ts that changes routes.
+app.setGlobalPrefix('v1');
+
+const document = createOpenApiDocument(app);
+await writeFile('docs-site/openapi.json', \`\${JSON.stringify(document, null, 2)}\\n\`);
+await app.close();`}
+    lang="ts"
+    title="src/export-openapi.ts"
+  />
+  <p>
+    In preview mode, NestJS builds the module graph but doesn't run the
+    constructors or lifecycle hooks of your providers and controllers. A
+    TypeORM or Prisma module stays disconnected, and the document still lists
+    every route. Add a script to the Nest app's <code>package.json</code>{" "}
+    that builds with the plugin first:
+  </p>
+  <CodeBlock
+    code={`"scripts": {
+  "openapi": "nest build && node dist/export-openapi.js"
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <p>
+    Keep your existing scripts beside it. You'll run it once the{" "}
+    <code>docs-site/</code> folder exists, in the next section. The output is
+    the same on every run, so the file only changes when your API does.
+  </p>
+
+  <h2>Create the docs site</h2>
+  <p>
+    From the root of the Nest repository, scaffold a Blume project in{" "}
+    <code>docs-site/</code>, then export the spec into it:
+  </p>
+  <CodeBlock
+    code={`npx blume init docs-site --template docs --yes
+npm run openapi`}
+    lang="bash"
+  />
+  <p>
+    <code>init</code> writes <code>docs-site/package.json</code>, a config, a
+    home page at <code>docs-site/docs/index.mdx</code>, and a{" "}
+    <code>.gitignore</code>, then installs Blume. The second command writes{" "}
+    <code>docs-site/openapi.json</code>. Replace the generated config with
+    this one:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  description: "Guides and API reference for the Acme Messages API.",
+  deployment: { site: "https://docs.acme.example" },
+  navigation: {
+    tabs: [
+      { label: "Docs", path: "/" },
+      { label: "API reference", path: "/api" },
+    ],
+  },
+  reference: [openapi({ route: "/api", spec: "./openapi.json" })],
+});`}
+    lang="ts"
+    title="docs-site/blume.config.ts"
+  />
+  <p>
+    The reference doesn't add a header tab on its own, so the tab pointing at{" "}
+    <code>/api</code> is what makes it reachable. NestJS writes OpenAPI 3.0,
+    which Blume upgrades to 3.1 as it reads the file. Start the docs:
+  </p>
+  <CodeBlock
+    code={`cd docs-site
+npm run dev`}
+    lang="bash"
+  />
+  <p>The API reference tab now holds three pages built from your code:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Page</th>
+        <th scope="col">URL</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Overview, with the API's description and its Messages section</td>
+        <td><code>/api</code></td>
+      </tr>
+      <tr>
+        <td>Send a message</td>
+        <td><code>/api/messages/send-message</code></td>
+      </tr>
+      <tr>
+        <td>Get a message</td>
+        <td><code>/api/messages/get-message</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Because the controller carries <code>@ApiBearerAuth()</code>, both
+    operations show an Authorization section, and their code samples send{" "}
+    <code>Authorization: Bearer YOUR_TOKEN</code>. A route without it gets
+    neither, so a public health check stays public in the docs too. The dev
+    server watches the spec file, so when you run <code>npm run openapi</code>{" "}
+    again, the pages update without a restart.
+  </p>
+
+  <h2>Add a first-request guide</h2>
+  <p>
+    The reference says what each endpoint takes. A new reader also needs to
+    know how to make the first call and what an error looks like. Put that
+    page in <code>docs/api/</code>, a folder named after the reference route,
+    and it joins the API reference tab's sidebar beside the generated pages:
+  </p>
+  <CodeBlock
+    code={`---
+title: Send your first message
+description: Authenticate with an API key, send an email through the Acme Messages API, and check whether it was delivered.
+---
+
+Every request needs an API key, sent in the \`Authorization\` header as a
+bearer token. Set it in your shell first:
+
+\`\`\`bash
+export ACME_API_KEY="your-api-key"
+\`\`\`
+
+## Send a message
+
+\`\`\`bash
+curl https://api.acme.example/v1/messages \\
+  -H "Authorization: Bearer $ACME_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"channel":"email","to":"ada@example.com","template":"welcome"}'
+\`\`\`
+
+The API queues the message and answers \`202 Accepted\` with its ID:
+
+\`\`\`json
+{ "id": "msg_8f2k", "status": "queued", "channel": "email" }
+\`\`\`
+
+## Check whether it arrived
+
+Pass the ID to [Get a message](/api/messages/get-message):
+
+\`\`\`bash
+curl https://api.acme.example/v1/messages/msg_8f2k \\
+  -H "Authorization: Bearer $ACME_API_KEY"
+\`\`\`
+
+Its \`status\` is one of \`queued\`, \`sent\`, \`delivered\`, or \`failed\`.
+
+## Read an error
+
+Every error is JSON with the status code, its name, and a message. A body
+that fails validation lists each problem:
+
+\`\`\`json
+{
+  "message": [
+    "channel must be one of the following values: email, sms",
+    "template must be a string"
+  ],
+  "error": "Bad Request",
+  "statusCode": 400
+}
+\`\`\`
+
+A missing or wrong API key returns \`401\` with the message
+"Send a valid API key as a bearer token."`}
+    lang="mdx"
+    title="docs-site/docs/api/quickstart.mdx"
+  />
+  <p>
+    The error bodies are the ones NestJS sends: <code>ValidationPipe</code>{" "}
+    writes the list of problems, and the guard's{" "}
+    <code>UnauthorizedException</code> writes the 401. Copy them from your own
+    API's responses, so the guide matches what readers will see.
+  </p>
+
+  <h2>Keep the spec current</h2>
+  <p>
+    Commit <code>docs-site/openapi.json</code>. API changes then show up in pull
+    requests as a readable diff, and the docs host never has to build or boot
+    your Nest app. To make sure nobody forgets to regenerate it, run the
+    export in CI and fail when the file changes:
+  </p>
+  <CodeBlock
+    code={`name: OpenAPI spec
+
+on:
+  pull_request:
+
+jobs:
+  spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run openapi
+      - run: git diff --exit-code -- docs-site/openapi.json`}
+    lang="yaml"
+    title=".github/workflows/openapi.yml"
+  />
+  <p>
+    When the check fails, run <code>npm run openapi</code> locally and commit
+    the result. For breaking-change detection and more, see{" "}
+    <a href="/guides/openapi-documentation-ci">Keep API documentation in sync with backend changes in CI</a>.
+  </p>
+
+  <h2>Deploy</h2>
+  <p>
+    The docs build to static files, so any static host works. Create a project
+    on your host from the same repository and point it at the{" "}
+    <code>docs-site/</code> folder:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Setting</th>
+        <th scope="col">Value</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Root directory</td>
+        <td><code>docs-site</code></td>
+      </tr>
+      <tr>
+        <td>Build command</td>
+        <td><code>npm run build</code></td>
+      </tr>
+      <tr>
+        <td>Output directory</td>
+        <td><code>dist</code></td>
+      </tr>
+      <tr>
+        <td>Node.js version</td>
+        <td>22.19 or later</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Vercel calls the first setting Root Directory, and Netlify calls it Base
+    directory. <code>deployment.site</code> in the config gives the sitemap,
+    canonical links, and Open Graph images their absolute URLs. Before you
+    point your domain at it, run <code>npm run build</code> and{" "}
+    <code>npx blume validate</code> in <code>docs-site/</code>, which checks every
+    internal link, including the guide's link to Get a message.
+  </p>
+  <p>
+    Then deploy the API with its <code>enableCors</code> change. The Try it
+    panel sends requests from the reader's browser straight to the server in
+    your spec, so without it, Send fails while the same request works from
+    curl. If you can't change the API's CORS rules, Blume can{" "}
+    <a href="/docs/references/openapi#cors-and-the-proxy">proxy the requests</a>{" "}
+    instead, and{" "}
+    <a href="/guides/api-documentation-cors-errors">Fix CORS errors in an API documentation playground</a>{" "}
+    walks through both options.
+  </p>
+  <Callout type="info">
+    The <code>api.acme.example</code> and <code>docs.acme.example</code>{" "}
+    domains don't exist. Use your own API's public URL in{" "}
+    <code>addServer()</code> and your docs origin in <code>enableCors()</code>.
+  </Callout>
+
+  <h2>Troubleshooting</h2>
+  <h3>Schemas have no properties</h3>
+  <p>
+    If <code>docs-site/openapi.json</code> shows <code>"properties": {"{}"}</code>{" "}
+    for a DTO, the Swagger plugin didn't process it. Check that the export
+    ran on code built with <code>nest build</code>, not <code>tsc</code>,{" "}
+    <code>tsx</code>, or <code>ts-node</code>, and that the DTO's file name
+    ends in <code>.dto.ts</code> or <code>.entity.ts</code>. With the SWC
+    builder, the plugin needs type checking turned on; see the{" "}
+    <a href="https://docs.nestjs.com/recipes/swc">NestJS SWC recipe</a>. If
+    you can't use the plugin, add <code>@ApiProperty()</code> to every DTO
+    property instead.
+  </p>
+  <h3>Page titles are whole paragraphs</h3>
+  <p>
+    With <code>introspectComments</code>, the plugin copies a controller
+    method's entire doc comment into <code>summary</code>, and Blume uses the
+    summary as the page title. Set <code>summary</code> and{" "}
+    <code>description</code> in <code>@ApiOperation()</code> as shown above,
+    or move everything after the first line under a <code>@remarks</code>{" "}
+    tag, which the plugin maps to <code>description</code>.
+  </p>
+  <h3>URLs read messages-controller-send-message</h3>
+  <p>
+    That's NestJS's default operation ID, <code>ControllerName_methodName</code>.
+    Set <code>operationIdFactory</code> as in <code>src/openapi.ts</code>. If
+    the old URLs are already public, add a redirect for each one in{" "}
+    <code>docs-site/blume.config.ts</code>.
+  </p>
+  <h3>Try it sends requests to /v1/v1/messages</h3>
+  <p>
+    The global prefix is in both the paths and the server URL. Without{" "}
+    <code>ignoreGlobalPrefix: true</code>, NestJS writes the paths as{" "}
+    <code>/v1/messages</code>. Keep the option, or drop <code>/v1</code> from{" "}
+    <code>addServer()</code>.
+  </p>
+  <h3>The export fails while connecting to a database</h3>
+  <p>
+    Without <code>preview: true</code>, <code>NestFactory.create()</code>{" "}
+    instantiates every provider, so a database module tries to connect. Keep
+    preview mode on. Keep <code>logger: ['error']</code> too: with{" "}
+    <code>logger: false</code>, a failed startup exits with code 1 and prints
+    nothing.
+  </p>
+  <h3>The build fails with BLUME_OPENAPI_UNAVAILABLE</h3>
+  <p>
+    Blume couldn't read <code>docs-site/openapi.json</code>. Usually the file was
+    never generated or never committed, so a fresh clone on the docs host
+    doesn't have it. <code>blume dev</code> only warns and leaves the
+    reference out, so a working dev server can hide this. Run{" "}
+    <code>npm run openapi</code> and commit the file.
+  </p>
+</GuidePage>

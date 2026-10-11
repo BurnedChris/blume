@@ -69,6 +69,8 @@ export default defineConfig({
     llmsTxt: true,
     // AI Catalog / ARD manifest at /.well-known/ai-catalog.json (needs deployment.site)
     catalog: true,
+    // Your site's agent skill at /skill.md (needs deployment.site)
+    skillMd: true,
     // MCP server (needs server output)
     mcp: {
       enabled: false,
@@ -100,6 +102,7 @@ export default defineConfig({
 | `description` | — | डिफ़ॉल्ट मेटा विवरण, जो SEO और OG के लिए उपयोग होता है। |
 | `logo` | — | हेडर में दिखने वाला ब्रांड चिह्न और/या वर्डमार्क। |
 | `banner` | — | हेडर के ऊपर साइट-व्यापी घोषणा पट्टी। |
+| `footer` | — | कंटेंट के नीचे एक कॉपीराइट पंक्ति, लिंक्स की एक पंक्ति, और सोशल प्रोफ़ाइल आइकॉन। |
 
 ### लोगो [#logo]
 
@@ -186,6 +189,43 @@ banner: {
 
 जब `dismissible` चालू होता है, तो पट्टी एक क्लोज़ बटन दिखाती है और उसके बाद उस विज़िटर के लिए छिपी रहती है। डिसमिस की कुंजी डिफ़ॉल्ट रूप से कंटेंट टेक्स्ट होती है, इसलिए संदेश संपादित करने पर बैनर वापस आ जाता है; संपादनों के बाद भी उसे डिसमिस बनाए रखने के लिए एक स्थिर `id` सेट करें।
 
+किसी [बहुभाषी](/docs/content/i18n) साइट पर, `content` और लिंक का `text` लोकेल कोड से टेक्स्ट तक का एक मैप भी स्वीकार करते हैं। हर पेज अपनी लोकेल की प्रविष्टि दिखाता है, और उसके न होने पर डिफ़ॉल्ट लोकेल की प्रविष्टि पर लौट आता है, और जब भी पाठक की लोकेल उस पेज को सर्व करती है, लिंक उसी लोकेल में चला जाता है:
+
+```ts blume.config.ts lineNumbers
+banner: {
+  content: { en: "Version 2.0 is here!", fr: "La version 2.0 est là !" },
+  link: {
+    text: { en: "Read the release notes", fr: "Lire les notes de version" },
+    href: "/changelog",
+  },
+},
+```
+
+अनूदित बैनर डिसमिस की कुंजी डिफ़ॉल्ट लोकेल के टेक्स्ट पर आधारित रखता है, इसलिए एक बार डिसमिस करने पर वह हर भाषा में छिप जाता है।
+
+### फ़ुटर [#footer]
+
+हर पेज एक फ़ुटर के साथ समाप्त होता है: हेडर जितनी ऊँची एक पंक्ति, जिसके एक ओर आपके लिंक्स, दूसरी ओर सोशल प्रोफ़ाइल आइकॉन, और उनके बीच में केंद्रित एक कॉपीराइट पंक्ति होती है। फ़ुटर ही वह एकमात्र जगह है जहाँ Blume आपकी सोशल प्रोफ़ाइलों और रिपॉज़िटरी से लिंक करता है, इसलिए जब भी [`github`](#github) रिपॉज़िटरी सेट हो, वह आइकॉन में सबसे पहले आती है। बाकी `footer` जोड़ता है:
+
+```ts blume.config.ts lineNumbers
+footer: {
+  copyright: "© 2026 Acme, Inc.",
+  links: [
+    { label: "Pricing", href: "https://acme.dev/pricing" },
+    { label: "Changelog", href: "/changelog" },
+    { label: "Blog", href: "https://acme.dev/blog" },
+  ],
+  socials: {
+    x: "https://x.com/acme",
+    discord: "https://discord.gg/acme",
+  },
+},
+```
+
+`copyright` सादा टेक्स्ट है, इसलिए `&copy;` के बजाय सीधे `©` ही लिखें। ऐसे वर्ष के लिए जो अपने आप अद्यतन बना रहे, एक टेम्पलेट लिटरल का उपयोग करें: `` `© ${new Date().getFullYear()} Acme, Inc.` ``। `links` उसी क्रम में दिखते हैं जिसमें आप उन्हें लिखते हैं। आंतरिक लिंक्स ऐसे लिखें मानो साइट रूट पर माउंट हो; बाहरी लिंक नए टैब में खुलता है। किसी [बहुभाषी](/docs/content/i18n#per-locale-navigation) साइट पर, `copyright` और `label` में से हर एक लोकेल कोड से टेक्स्ट तक का एक मैप हो सकता है, और जब भी पाठक की लोकेल उस पेज को सर्व करती है, आंतरिक लिंक उसी लोकेल में चला जाता है। `socials` किसी प्लेटफ़ॉर्म को उसके प्रोफ़ाइल URL से मैप करता है, और आइकॉन उसी क्रम में दिखते हैं जिसमें आप उन्हें लिखते हैं। प्लेटफ़ॉर्म ये हैं: `bluesky`, `discord`, `facebook`, `github`, `hacker-news`, `instagram`, `linkedin`, `medium`, `podcast`, `reddit`, `slack`, `telegram`, `threads`, `website`, `x`, और `youtube`। `github` सोशल रिपॉज़िटरी लिंक की जगह ले लेता है; उस लिंक को [`navigation.repo`](/docs/content/navigation#repository-link) से छिपाएँ।
+
+जिस साइट में न कॉपीराइट हो, न लिंक्स, न प्रोफ़ाइलें, न रिपॉज़िटरी, उसमें कोई फ़ुटर नहीं होता। `PageLayout` पर बने कस्टम पेज भी इसे दिखाते हैं, जब तक कि वे लेआउट का अपना `footer` स्लॉट न भरें। इसे पूरी तरह बदलने के लिए, [`Footer` लेआउट स्लॉट](/docs/configuration/customization#layout-slots) को ओवरराइड करें।
+
 ## कंटेंट [#content]
 
 आपका कंटेंट कहाँ रहता है और Blume उसे कैसे खोजता है। फ़ाइलें रूट्स कैसे बनती हैं, इसके लिए [पेज](/docs/content) देखें।
@@ -200,7 +240,7 @@ content: {
 | --- | --- | --- |
 | `root` | `"docs"` | वह फ़ोल्डर जिसे Blume कंटेंट के लिए स्कैन करता है। एकल `filesystem()` स्रोत के लिए शॉर्टहैंड; `sources` के साथ इसकी अनुमति नहीं है। |
 | `include` | `["**/*.{md,mdx}"]` | वे ग्लोब्स जो कंटेंट फ़ाइलों से मेल खाते हैं। `root` की तरह शॉर्टहैंड। |
-| `exclude` | `["**/_*", "**/.*"]` | नज़रअंदाज़ करने के लिए ग्लोब्स (अंडरस्कोर- और डॉट-फ़ाइलें)। `root` की तरह शॉर्टहैंड। |
+| `exclude` | `["**/_*", "**/.*"]` | नज़रअंदाज़ करने के लिए ग्लोब्स। आपके ग्लोब्स डिफ़ॉल्ट्स में जुड़ जाते हैं, जो अंडरस्कोर- और डॉट-फ़ाइलों को छोड़ देते हैं; `!` वाली प्रविष्टि किसी पैटर्न को हटा देती है, इसलिए `"!**/_*"` `_` से शुरू होने वाली फ़ाइलों को प्रकाशित करता है। `root` की तरह शॉर्टहैंड। |
 | `sources` | एक `filesystem()` | `blume/sources` से कंटेंट स्रोत अडैप्टर, जो शॉर्टहैंड की जगह लेते हैं। [कंटेंट स्रोत](/docs/content/sources) देखें। |
 | `pages` | `"pages"` | कस्टम `.astro` पेजों के लिए फ़ोल्डर। |
 | `defaultType` | `"doc"` | जब फ़्रंटमैटर में `type` न हो तो उपयोग किया जाने वाला पेज `type`। |
@@ -273,7 +313,7 @@ export default defineConfig({
 
 ## GitHub
 
-`github` के ज़रिए Blume को अपनी रिपॉज़िटरी की ओर इंगित करें। यह हेडर के [रिपॉज़िटरी लिंक](/docs/content/navigation#repository-link) और **Edit on GitHub** [पेज एक्शन](/docs/content/navigation#page-actions) को संचालित करता है:
+`github` के ज़रिए Blume को अपनी रिपॉज़िटरी की ओर इंगित करें। यह फ़ुटर के [रिपॉज़िटरी लिंक](/docs/content/navigation#repository-link) और **Edit on GitHub** [पेज एक्शन](/docs/content/navigation#page-actions) को संचालित करता है:
 
 ```ts blume.config.ts lineNumbers
 github: {
@@ -327,7 +367,7 @@ lastModified: "git",
 | `"git"` | तिथि git इतिहास (कमिट तिथियों) से पढ़ें। |
 | `"frontmatter"` | git कभी न चलाएँ — केवल `lastModified` फ़्रंटमैटर फ़ील्ड का उपयोग करें। |
 
-git स्रोत हर फ़ाइल को छूने वाला सबसे हालिया कमिट पढ़ता है, इसलिए यह किसी भी git रिपॉज़िटरी में काम करता है — मोनोरिपो सहित — और बिल्ड समय पर रिपो का इतिहास चाहिए। CI प्लेटफ़ॉर्म आम तौर पर उथला (shallow) क्लोन चेकआउट करते हैं, जो चुपचाप ज़्यादातर तिथियाँ गिरा देता है (ऐसा होने पर बिल्ड `BLUME_SHALLOW_GIT_HISTORY` के साथ चेतावनी देता है): Vercel पर `VERCEL_DEEP_CLONE=true` एनवायरनमेंट वेरिएबल सेट करें; `actions/checkout` के साथ `fetch-depth: 0` सेट करें। पेज का अपना `lastModified` फ़्रंटमैटर हमेशा जीतता है, जो किसी तिथि को पिन करने या अभी तक कमिट न हुई फ़ाइलों के लिए उपयोगी है:
+git स्रोत हर फ़ाइल को छूने वाला सबसे हालिया कमिट पढ़ता है, इसलिए यह किसी भी git रिपॉज़िटरी में काम करता है — मोनोरिपो सहित — और बिल्ड समय पर रिपो का इतिहास चाहिए। यह `git log --follow` की तरह नाम-परिवर्तनों का अनुसरण करता है: `page.md` का नाम बदलकर `page.mdx` करने पर, या किसी फ़ाइल को उसी कंटेंट रूट के अंतर्गत किसी दूसरे फ़ोल्डर में ले जाने पर, पेज की तिथि तब तक बनी रहती है जब तक वह कमिट उसके कंटेंट को अपरिवर्तित छोड़ता है। जो नाम-परिवर्तन फ़ाइल को संपादित भी करता है, वह पेज की तिथि उसी कमिट की कर देता है, और कंटेंट रूट के बाहर से किसी फ़ाइल को अंदर लाने पर भी ऐसा ही होता है। CI प्लेटफ़ॉर्म आम तौर पर उथला (shallow) क्लोन चेकआउट करते हैं, जो चुपचाप ज़्यादातर तिथियाँ गिरा देता है (ऐसा होने पर बिल्ड `BLUME_SHALLOW_GIT_HISTORY` के साथ चेतावनी देता है): Vercel पर `VERCEL_DEEP_CLONE=true` एनवायरनमेंट वेरिएबल सेट करें; `actions/checkout` के साथ `fetch-depth: 0` सेट करें। पेज का अपना `lastModified` फ़्रंटमैटर हमेशा जीतता है, जो किसी तिथि को पिन करने या अभी तक कमिट न हुई फ़ाइलों के लिए उपयोगी है:
 
 ```mdx page.mdx
 ---
@@ -421,7 +461,21 @@ export default defineConfig({
 });
 ```
 
-पाठक का उत्तर एक `feedback` [कस्टम इवेंट](/docs/configuration/analytics#custom-events) के रूप में — `helpful` (`"yes"` या `"no"`), `path`, और `title` के साथ — हर उस कॉन्फ़िगर किए गए एनालिटिक्स अडैप्टर के ज़रिए भेजा जाता है जिसके पास इवेंट API है, और साथ ही `window` पर एक `blume:track` इवेंट के रूप में भी। एनालिटिक्स अडैप्टर के बिना, उत्तर कहीं भी दर्ज नहीं होता। प्रश्न और धन्यवाद वाला टेक्स्ट UI स्ट्रिंग्स हैं, जिनका अनुवाद आप [`i18n.ui`](/docs/content/i18n#translated-ui) के साथ कर सकते हैं।
+पाठक का उत्तर एक `feedback` [कस्टम इवेंट](/docs/configuration/analytics#custom-events) के रूप में — `helpful` (`"yes"` या `"no"`), `path`, और `title` के साथ — हर उस कॉन्फ़िगर किए गए एनालिटिक्स अडैप्टर के ज़रिए भेजा जाता है जिसके पास इवेंट API है, और साथ ही `window` पर एक `blume:track` इवेंट के रूप में भी। Fathom, Microsoft Clarity, और Hotjar किसी इवेंट का केवल नाम लेते हैं, उसकी प्रॉपर्टीज़ के बिना, इसलिए वे रेटिंग तो गिनते हैं लेकिन हाँ और ना में अंतर नहीं कर सकते। एनालिटिक्स अडैप्टर के बिना, उत्तर कहीं भी दर्ज नहीं होता, और [कुकी सहमति](/docs/configuration/consent) चालू होने पर, रेटिंग केवल उन्हीं पाठकों को दिखती है जिन्होंने एनालिटिक्स की अनुमति दी है, क्योंकि किसी और से मिला उत्तर कहीं नहीं पहुँचता। प्रश्न और धन्यवाद वाला टेक्स्ट UI स्ट्रिंग्स हैं, जिनका अनुवाद आप [`i18n.ui`](/docs/content/i18n#translated-ui) के साथ कर सकते हैं।
+
+### लिखित फ़ीडबैक [#written-feedback]
+
+हाँ या ना से अधिक जानने के लिए, टिप्पणियाँ चालू करें। किसी पेज को रेटिंग देने के बाद, पाठक को एक बॉक्स मिलता है जिसमें वे बता सकते हैं कि क्या अच्छा रहा या क्या कमी रह गई:
+
+```ts blume.config.ts
+export default defineConfig({
+  feedback: { comments: true },
+});
+```
+
+टिप्पणी एक `feedback_comment` इवेंट के रूप में भेजी जाती है, जिसमें रेटिंग वाले ही `helpful`, `path`, और `title` होते हैं, साथ ही पाठक की `comment` (अधिकतम 1,000 वर्ण)। यह रेटिंग वाले ही अडैप्टर्स के ज़रिए जाती है, इसलिए टिप्पणियाँ वहीं पढ़ें जहाँ आप इवेंट पढ़ते हैं। प्रोवाइडर किसी प्रॉपर्टी मान की लंबाई सीमित करते हैं, इसलिए लंबी टिप्पणी कटकर पहुँच सकती है: Google Analytics 100 वर्ण रखता है, Mixpanel 255 बाइट (जापानी जैसी किसी लिपि में, जिसमें एक वर्ण कई बाइट लेता है, इससे कम वर्ण), और Vercel Web Analytics 255 वर्णों तक के मान स्वीकार करता है, जबकि PostHog और Segment टिप्पणियों को पूरा भेजते हैं। Fathom, Clarity, और Hotjar तक टिप्पणी का कोई टेक्स्ट पहुँचता ही नहीं। Plausible हर टिप्पणी को सूचीबद्ध करने के बजाय समान मानों को समूहित करता है, इसलिए यह टिप्पणियों की तुलना में रेटिंग के लिए अधिक उपयुक्त है। पाठक बॉक्स में कुछ भी लिख सकते हैं, इसलिए टिप्पणियों को ऐसे बरतें मानो उनमें व्यक्तिगत जानकारी हो सकती है।
+
+बॉक्स का लेबल और बटन भी UI स्ट्रिंग्स हैं (`feedback.comment` और `feedback.send`)।
 
 ## फ़ीचर विकल्प [#feature-options]
 
@@ -433,13 +487,18 @@ export default defineConfig({
 | `navigation` | स्पष्ट साइडबार और हेडर टैब्स | [नेविगेशन](/docs/content/navigation) |
 | `search` | प्रोवाइडर (Orama, Pagefind, Algolia, और अन्य) और इंडेक्सिंग | [खोज](/docs/configuration/search) |
 | `markdown` | मार्कडाउन रेंडरिंग विकल्प — कोड ब्लॉक्स, हेडिंग एंकर, इमेज ज़ूम | [सिंटैक्स](/docs/content/syntax) |
-| `agents` | कोडिंग एजेंट्स के लिए `llms.txt`, Markdown मिरर, JSON API, होस्टेड MCP सर्वर, स्किल्स, और डिस्कवरी मैनिफ़ेस्ट | [SEO और AEO](/docs/discoverability) |
+| `agents` | कोडिंग एजेंट्स के लिए `llms.txt`, Markdown मिरर, JSON API, होस्टेड MCP सर्वर, स्किल्स, और डिस्कवरी मैनिफ़ेस्ट | [SEO और GEO](/docs/discoverability) |
 | `ai` | पेज के भीतर मौजूद सहायक और Open in chat एक्शन | [सहायक](/docs/configuration/assistant) |
+| `rateLimit` | एक पाठक कितनी बार सहायक, प्लेग्राउंड प्रॉक्सी, और सर्वर-साइड खोज को कॉल कर सकता है — `blume/ratelimit` के एक अडैप्टर के साथ (डिफ़ॉल्ट रूप से चालू) | [रेट लिमिटिंग](/docs/configuration/rate-limiting) |
+| `narration` | "Listen to this page" प्लेयर, ब्राउज़र की आवाज़ों या बिल्ड के समय जनरेट की गई आवाज़ों के साथ | [नैरेशन](/docs/configuration/narration) |
 | `reference` | API संदर्भ: `blume/reference` से `openapi()`, `asyncapi()`, `graphql()`, और `scalar()` अडैप्टर | [OpenAPI](/docs/references/openapi), [AsyncAPI](/docs/references/asyncapi), [GraphQL](/docs/references/graphql), [Scalar](/docs/references/scalar) |
+| `api` | हाथ से लिखे गए एंडपॉइंट पेजों का सर्वर, ऑथ, और Try it पैनल | [हाथ से लिखे गए API पेज](/docs/references/api-pages) |
 | `analytics` | `blume/analytics` से अडैप्टर — PostHog, Google Analytics, Plausible, Mixpanel, Segment, और अन्य — साथ ही कस्टम स्क्रिप्ट्स | [एनालिटिक्स](/docs/configuration/analytics) |
-| `seo` | मेटाडेटा, OG इमेज, फ़ीड्स, स्ट्रक्चर्ड डेटा, साइटमैप, robots | [SEO और AEO](/docs/discoverability) |
+| `consent` | `blume/consent` से एक कुकी सहमति अडैप्टर — Blume का अपना बैनर, Osano, या Ethyca — जो पाठक की अनुमति मिलने तक एनालिटिक्स को रोके रखता है | [कुकी सहमति](/docs/configuration/consent) |
+| `seo` | मेटाडेटा, OG इमेज, फ़ीड्स, स्ट्रक्चर्ड डेटा, साइटमैप, robots | [SEO और GEO](/docs/discoverability) |
 | `deployment` | `blume/deploy` से एक होस्ट अडैप्टर, या स्टैटिक बिल्ड के लिए `{ site, base }` | [डिप्लॉयमेंट](/docs/deployment) |
 | `redirects` | स्थायी और अस्थायी रीडायरेक्ट्स | [डिप्लॉयमेंट](/docs/deployment#redirects) |
+| `poweredBy` | `X-Powered-By: Blume` रिस्पॉन्स हेडर (डिफ़ॉल्ट `true`) | [डिप्लॉयमेंट](/docs/deployment#powered-by-header) |
 | `integrations` | Blume के अंतर्निर्मित इंटीग्रेशन के बाद जोड़े गए Astro इंटीग्रेशन | [कस्टमाइज़ेशन](/docs/configuration/customization#astro-integrations) |
 | `basePath` | एक पाथ जिसके अंतर्गत हर जनरेट किया गया रूट माउंट होता है (जैसे `/docs`), और जो साइडबार में दिखाई नहीं देता | [डिप्लॉयमेंट](/docs/deployment#mount-the-docs-under-a-path) |
 | `i18n` | लोकेल्स, डिफ़ॉल्ट लोकेल, और अनूदित UI स्ट्रिंग्स | [अंतर्राष्ट्रीयकरण](/docs/content/i18n) |
@@ -447,7 +506,9 @@ export default defineConfig({
 | `export` | पाठकों के लिए PDF और EPUB डाउनलोड | [एक्सपोर्ट](/docs/configuration/export) |
 | `examples` | `<Component path>` उदाहरण प्रीव्यू कहाँ रहते हैं, और उनके फ़्रेम्स में इंजेक्ट की जाने वाली CSS | [Component](/docs/content/components#component) |
 | `react` | React आइलैंड का व्यवहार — React Compiler का ऑटो-मेमोइज़ेशन | [आइलैंड्स](/docs/content/islands#frameworks) |
-| `feedback` | हर पेज के अंत में "Was this page helpful?" रेटिंग (डिफ़ॉल्ट `true`) | [पेज फ़ीडबैक](#page-feedback) |
+| `variables` | वे मान जिन्हें `{{name}}` किसी भी पेज में पढ़ता है | [वेरिएबल्स](/docs/content/variables) |
+| `feedback` | हर पेज के अंत में "Was this page helpful?" रेटिंग (डिफ़ॉल्ट `true`), और उसके बाद वैकल्पिक लिखित टिप्पणियाँ | [पेज फ़ीडबैक](#page-feedback) |
+| `changelog` | जनरेट किए गए `/changelog` इंडेक्स का शीर्षक और विवरण, हर एक कोई स्ट्रिंग या प्रति-लोकेल मैप | [चेंजलॉग](/docs/advanced/changelog#the-index-page) |
 
 ## प्राथमिकता [#precedence]
 

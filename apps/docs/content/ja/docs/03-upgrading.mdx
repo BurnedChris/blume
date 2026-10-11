@@ -7,7 +7,7 @@ sidebar:
   order: 2.5
 ---
 
-Blume 2 で変わるのは設定だけで、コンテンツは変わりません。削除された `search.boost` フロントマターフィールドを設定しているページを除き（[フロントマター](#frontmatter) を参照）、Markdown や MDX のページを編集する必要はありません。以前は名前付きの文字列やキー付きのブロックで指定していた設定は、`blume/*` サブパスからインポートして呼び出す**アダプター**になりました。対象は検索プロバイダー、デプロイ先、コンテンツソース、API リファレンス、アナリティクス、アシスタントのモデルバックエンドです。Ask AI はアシスタントに名称が変わったため、`ai.ask` は `ai.assistant` になります。機械可読な設定は `ai` から新しい `agents` キーに移動しました。また、`components.ts` のオーバーライドはビルド前にチェックされるようになりました。ゼロコンフィグのサイトや、これらの設定をどれも使っていないサイトでは、バージョンを上げるだけで済みます。
+Blume 2 で変わるのは設定だけで、コンテンツは変わりません。Markdown や MDX のページを編集する必要はありません（ただし、効果を持つようになったフィールドが 1 つあります。[フロントマター](#frontmatter) を参照してください）。以前は名前付きの文字列やキー付きのブロックで指定していた設定は、`blume/*` サブパスからインポートして呼び出す**アダプター**になりました。対象は検索プロバイダー、デプロイ先、コンテンツソース、API リファレンス、アナリティクス、アシスタントのモデルバックエンドです。Ask AI はアシスタントに名称が変わったため、`ai.ask` は `ai.assistant` になります。機械可読な設定は `ai` から新しい `agents` キーに移動しました。また、`components.ts` のオーバーライドはビルド前にチェックされるようになりました。ゼロコンフィグのサイトや、これらの設定をどれも使っていないサイトでは、バージョンを上げるだけで済みます。
 
 ## 1 つのコマンドでアップグレードする [#upgrade-with-one-command]
 
@@ -88,8 +88,8 @@ export default defineConfig({
 
 - `netlify()`、`cloudflare()`、`node()` も同じように使います。ホストアダプターを指定すると、サーバー出力に切り替わります。静的ビルドのまま、そのホスト向けのプラットフォームファイルも出力したい場合は、`output: "static"` を渡します。
 - `site` または `base` だけを設定している場合は、変更不要です。`deployment: { site, base }` は今後も静的ビルドの書き方です。
-- `redirects` には完全一致のパスを指定します。`from` や `to` に `:param` セグメントや `*` ワイルドカードが含まれていると、検証エラーになるようになりました。Blume 1 もパターンをサポートしておらず、ホストによって扱いが異なっていました。パターンを使うルールは、ホスト側の設定（`vercel.json`、`_redirects`）に移してください。
-- `blume build` の `--adapter`、`--output`、`--base` フラグは廃止されました。いずれかを渡すとビルドはエラーで停止し、代わりに使う `deployment` の設定が表示されます。アダプターは `blume.config.ts` で明示的に指定してください。サーバー出力をプラットフォームの環境から推測する動作はなくなりました。
+- `redirects` は `:name` セグメントと末尾の `*` をパターンとして解釈し、どのホストでも同じ方法でマッチさせるようになりました（[パターンリダイレクト](/docs/deployment#pattern-redirects) を参照）。Blume 1 はパターンをサポートしておらず、記述どおりに各ホストへ渡していたため、パターンを含む `from` や `to` があれば確認してください。
+- `blume build` の `--adapter`、`--output`、`--base` フラグは廃止されました。いずれかを渡すとビルドはエラーで停止し、代わりに使う `deployment` の設定が表示されます。アダプターは `blume.config.ts` で明示的に指定してください。サーバー出力をプラットフォームの環境から推測する動作はなくなりました。デプロイごとに異なる `--base` を渡していた CI のステップでは、代わりに設定内で [環境変数から読み込む](/docs/deployment#a-different-base-per-deploy) ことができます。
 
 各アダプターのオプションについては、[デプロイ](/docs/deployment) を参照してください。
 
@@ -134,6 +134,7 @@ export default defineConfig({
 - `mdx-remote`、`sanity`、`notion`、`obsidian` は、それぞれ `mdxRemote()`、`sanity()`、`notion()`、`obsidian()` になります。その他のフィールドは、そのまま呼び出しの引数に移します。`{ type: "custom", source }` は `custom(source)` になります。
 - `content.root`、`content.include`、`content.exclude` は、フォルダーが 1 つだけの場合の省略形として引き続き使えます。ただし、`sources` と一緒には使えなくなりました。併用している場合は、`filesystem()` エントリーに移してください。
 - `githubReleases()` のリリースページは、1 つの言語でのみ公開されるようになりました。そのため多言語サイトでも、他のロケールの URL（`/de/changelog/…`）にはコピーされません。外部サイトがそれらのコピーにリンクしている場合は、デフォルトロケールのページへの [リダイレクト](/docs/deployment#redirects) を追加してください。
+- Notion で入力したテキストは、入力したとおりに表示されるようになりました。`notion()` のページ内のコンポーネント、`{`、Markdown の文字は、MDX として解釈されず、入力どおりに表示されます。Notion のページにテキストとして入力したコンポーネントや Markdown がある場合は、ソースに [`mdx: true`](/docs/content/sources/notion#writing-mdx-in-notion) を設定してください。
 
 ## API リファレンス [#api-references]
 
@@ -240,7 +241,7 @@ export default defineConfig({
 
 </CodeGroup>
 
-使用できるアダプターは `gateway()`、`openrouter()`、`llmgateway()`、`inkeep()`、`openaiCompatible({ baseUrl, name, model, apiKeyEnv })` です。`model`、`apiKeyEnv`、`baseUrl`、`headers`、`reasoning` はアダプターに移動します。`enabled`、`instructions`、`retrieval`、`suggestions`、`cors`、`endpoint` は、そのまま `ai.assistant` に移動します。`provider` を指定しない場合は、これまでどおり AI Gateway が使われます。
+1.x の `provider` 名は `gateway()`、`openrouter()`、`llmgateway()`、`inkeep()` のいずれかに対応し、`openai-compatible` は `openai({ baseUrl, name, model, apiKeyEnv })` に対応します。その他のアダプターについては [アダプター一覧](/docs/configuration/assistant#adapters) を参照してください。`model`、`apiKeyEnv`、`baseUrl`、`headers`、`reasoning` はアダプターに移動します。`enabled`、`instructions`、`retrieval`、`suggestions`、`cors`、`endpoint` は、そのまま `ai.assistant` に移動します。`provider` を指定しない場合は、これまでどおり AI Gateway が使われます。
 
 この名前の変更は、Ask AI を指していたすべての名前に及びます：
 
@@ -291,7 +292,7 @@ export default defineConfig({
 
 ## フロントマター [#frontmatter]
 
-フロントマターのフィールドが 1 つ廃止されました: `search.boost` です。Blume 1 では指定できましたが、検索では一度も使われておらず、指定してもページの順位は変わりませんでした。使用している箇所はすべて削除してください。削除していないページはヒント付きの検証エラーになり、`blume upgrade` はその箇所をファイルと行とともに一覧表示します。
+ページのフロントマターはそのまま使えます。動作が変わるフィールドが 1 つあります: `search.boost` です。Blume 1 では指定できましたが、検索では一度も使われておらず、指定してもページの順位は変わりませんでした。今後は、この値がページの検索での関連度に掛け合わされます（[ランキング](/docs/configuration/search#ranking) を参照）。このフィールドを設定しているページを確認してください。追加したまま忘れていた boost があると、そのページの順位が上がります。
 
 ## コンポーネントのオーバーライド [#component-overrides]
 

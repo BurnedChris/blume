@@ -1,0 +1,110 @@
+---
+title: Rate Limiting
+description: >-
+  Begrenze, wie oft ein einzelner Leser den Assistenten, den Proxy des API-Playgrounds und die serverseitige Suche aufrufen kann. Das ist standardmäßig aktiv, und die Zählung liegt im Speicher, bei Upstash, bei Cloudflare oder bei Unkey.
+---
+
+Die Server-Routen, die ein Leser aufrufen kann, kosten dich bei jedem Aufruf etwas: Der [Assistent](/docs/configuration/assistant) verbraucht Modell-Tokens, der Proxy des [API-Playgrounds](/docs/references/openapi#cors-and-the-proxy) leitet Anfragen an deine API weiter, und die [Mixedbread-Suche](/docs/configuration/search#mixedbread) führt eine kostenpflichtige Abfrage aus. Blume begrenzt, wie oft ein einzelner Leser jede dieser Routen aufrufen kann. Erkannt wird er an seiner IP-Adresse. Überschreitet ein Leser das Limit, erhält er `429 Too Many Requests` mit einem `Retry-After`-Header, und der Assistent bittet ihn, es in ein paar Minuten erneut zu versuchen.
+
+Rate Limiting ist standardmäßig aktiv, mit 30 Anfragen pro Leser und Route alle 10 Minuten. Das liegt weit über dem, was ein Mensch an den Assistenten oder den Playground sendet, und ist niedrig genug, um ein Skript zu stoppen. Bei der Suche sieht das anders aus. Der Suchdialog sendet jedes Mal eine Abfrage, wenn der Leser beim Tippen kurz innehält. Eine einzelne Suche kann also mehrere Anfragen auslösen, und ein Leser, der ein paar Minuten lang durchgehend sucht, kann das Limit erreichen. Wenn deine Seite die Mixedbread-Suche nutzt, erhöhe `requests`. Der Wert gilt für alle Routen. Rate Limiting spielt nur bei einem Server-Build eine Rolle, denn eine statische Seite hat keine Server-Routen, die begrenzt werden müssten.
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { upstash } from "blume/ratelimit";
+
+export default defineConfig({
+  rateLimit: upstash({ requests: 30, window: 600 }), // window in seconds
+});
+```
+
+Jede Route zählt für sich. Eine intensive Playground-Sitzung verbraucht also nicht die Fragen, die der Leser dem Assistenten stellen kann.
+
+## Wo die Zählung liegt [#where-the-count-lives]
+
+| Adapter | Zählung liegt in | Limit gilt |
+| --- | --- | --- |
+| `memory()` | Im Speicher des Servers (Standard) | Exakt auf einem Server, auf Serverless-Hosts pro Instanz |
+| `upstash()` | [Upstash Redis](https://upstash.com) | Exakt, auf jedem Host |
+| `cloudflare()` | Workers Rate Limiting von Cloudflare | Pro Cloudflare-Standort |
+| `unkey()` | [Unkey](https://unkey.com) | Auf jedem Host, die Regionen gleichen sich innerhalb weniger Augenblicke ab |
+
+### Speicher [#memory]
+
+`memory()` braucht keine Einrichtung. Auf einem Server, der als einzelner Prozess läuft, etwa mit `deployment: node()`, ist die Zählung exakt. Vercel, Netlify und Cloudflare betreiben viele kurzlebige Instanzen, von denen jede ihre eigene Zählung führt. Dort bremst es also einen plötzlichen Ansturm von Anfragen eines einzelnen Lesers, setzt das Limit aber nicht exakt durch. Für ein exaktes Limit auf diesen Hosts nutzt du einen der gemeinsamen Stores weiter unten.
+
+```ts blume.config.ts lineNumbers
+import { memory } from "blume/ratelimit";
+
+rateLimit: memory({ requests: 60, window: 600 }),
+```
+
+### Upstash
+
+`upstash()` speichert die Zählung in Upstash Redis, das alle Instanzen gemeinsam nutzen. Erstelle eine Datenbank und setze dann ihren REST-Endpunkt und ihr Token als `UPSTASH_REDIS_REST_URL` und `UPSTASH_REDIS_REST_TOKEN`. Blume spricht direkt mit der REST-API von Upstash, du musst also nichts installieren. Solange nicht beide gesetzt sind, zählen die Routen im Speicher, und `blume build` gibt eine Warnung aus.
+
+```ts blume.config.ts lineNumbers
+import { upstash } from "blume/ratelimit";
+
+rateLimit: upstash(),
+```
+
+Eine Datenbank, die du über den Marketplace von Vercel hinzufügst, setzt ihren Endpunkt und ihr Token stattdessen als `KV_REST_API_URL` und `KV_REST_API_TOKEN`, jeweils mit dem Präfix, das du beim Verbinden gewählt hast. Gib die Namen der Variablen mit `urlEnv` und `tokenEnv` an:
+
+```ts blume.config.ts lineNumbers
+rateLimit: upstash({ urlEnv: "KV_REST_API_URL", tokenEnv: "KV_REST_API_TOKEN" }),
+```
+
+### Cloudflare
+
+`cloudflare()` zählt mit [Workers Rate Limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) und ist für Seiten gedacht, die mit `deployment: cloudflare()` deployt werden. Blume deklariert das Binding beim Build in der Konfiguration des Workers, du musst also nichts einrichten. Cloudflare zählt pro Standort und erlaubt nur ein Zeitfenster von 10 oder 60 Sekunden. Deshalb liegen die Standardwerte hier bei 10 Anfragen pro 60 Sekunden.
+
+```ts blume.config.ts lineNumbers
+import { cloudflare } from "blume/deploy";
+import { cloudflare as cloudflareRateLimit } from "blume/ratelimit";
+
+export default defineConfig({
+  deployment: cloudflare(),
+  rateLimit: cloudflareRateLimit({ requests: 10, window: 60 }),
+});
+```
+
+Der Namespace des Bindings wird aus dem Namen des Workers abgeleitet, sodass sich zwei Seiten in einem Account keine Zählung teilen. Mit `namespaceId` legst du ihn selbst fest.
+
+### Unkey
+
+`unkey()` speichert die Zählung im [Rate Limiting von Unkey](https://www.unkey.com/docs/api-management/ratelimiting/overview), das alle Instanzen gemeinsam nutzen. Erstelle einen Root Key mit der Berechtigung `ratelimit.*.limit` und zusätzlich `ratelimit.*.create_namespace`, damit Unkey den Namespace bei der ersten Anfrage anlegen kann. Setze ihn dann als `UNKEY_ROOT_KEY`. Blume spricht direkt mit der REST-API von Unkey, du musst also nichts installieren. Solange der Key nicht gesetzt ist, zählen die Routen im Speicher, und `blume build` gibt eine Warnung aus.
+
+```ts blume.config.ts lineNumbers
+import { unkey } from "blume/ratelimit";
+
+rateLimit: unkey(),
+```
+
+Der Namespace heißt `docs`, sofern du mit `namespace` keinen anderen angibst. Den Namen der Variable, die den Key enthält, gibst du mit `rootKeyEnv` an:
+
+```ts blume.config.ts lineNumbers
+rateLimit: unkey({ namespace: "acme-docs", rootKeyEnv: "DOCS_UNKEY_ROOT_KEY" }),
+```
+
+Unkey zählt in jeder Region und gleicht die Zählungen innerhalb weniger Augenblicke zwischen den Regionen ab. Verteilt sich ein kurzer Ansturm von Anfragen auf mehrere Regionen, können also ein paar Anfragen mehr durchkommen, als das Limit erlaubt. Mit einem Key, den Unkey ablehnt, etwa weil ihm diese Berechtigungen fehlen, schlägt jede Zählung fehl. Eine Anfrage, die ein gemeinsamer Store nicht zählen kann, wird durchgelassen. Wenn der Server also `Rate limiting failed` loggt, prüfe den Key.
+
+## Hinter einem Reverse Proxy [#behind-a-reverse-proxy]
+
+Vercel, Netlify und Cloudflare teilen Blume die Adresse jedes Lesers mit. Ein `node()`-Server hinter einem Reverse Proxy wie nginx oder Caddy sieht dagegen jede Anfrage so, als käme sie vom Proxy. Dann teilen sich alle Leser eine einzige Zählung, und auf einer viel besuchten Seite greift das Limit für alle. Trage den Host, für den der Proxy antwortet, in `allowedDomains` ein:
+
+```ts blume.config.ts lineNumbers
+import { node } from "blume/deploy";
+
+deployment: node({
+  site: "https://docs.example.com",
+  allowedDomains: [{ hostname: "docs.example.com" }],
+}),
+```
+
+Das ist [`security.allowedDomains`](https://docs.astro.build/en/reference/configuration-reference/#securityalloweddomains) von Astro: Bei einer Anfrage, deren `Host`- oder `X-Forwarded-Host`-Header zu einem Eintrag passt, übernimmt Astro die Adresse des Lesers aus dem ersten Eintrag von `X-Forwarded-For`. Lass den Proxy den Host der Seite durchreichen und jeden `X-Forwarded-For`-Header, den der Leser mitschickt, durch die Adresse ersetzen, die der Proxy selbst sieht, etwa mit `proxy_set_header X-Forwarded-For $remote_addr;` in nginx. Hängt ein Proxy stattdessen nur etwas an den Header an, kann ein Leser seine Adresse selbst wählen und bei jeder Anfrage eine neue Zählung bekommen. Lass `allowedDomains` weg, wenn Leser den Server direkt erreichen.
+
+## Deaktivieren [#turning-it-off]
+
+Setze `rateLimit: false`, um jede Anfrage durchzulassen, zum Beispiel wenn die Firewall deines Hosts diese Routen bereits begrenzt. Eine Anfrage, deren Adresse der Host nicht ermitteln kann, wird immer durchgelassen. Dasselbe gilt für eine Anfrage, die ein gemeinsamer Store nicht zählen kann. Der Fehler wird dann geloggt, und ein Ausfall des Stores sperrt nie Leser aus.
+
+Kombiniere Rate Limiting beim Assistenten mit einer [Bot-Prüfung](/docs/configuration/assistant#bot-protection), um Skripte zu stoppen, die ihre Anfragen auf viele Adressen verteilen.

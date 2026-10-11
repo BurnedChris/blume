@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 
 import { resolve } from "pathe";
+import type { SourceFormat } from "satteri";
 
 import type { IncludeStatement } from "../core/includes.ts";
 import {
@@ -8,7 +9,11 @@ import {
   expandIncludeTarget,
   hasIncludeStatements,
   matchIncludeStatement,
+  withDefinitions,
 } from "../core/includes.ts";
+import { escapePinnedIds } from "../core/pinned-ids.ts";
+import { linkDefinitions } from "../core/sources/normalize.ts";
+import type { LinkDefinition } from "../core/sources/normalize.ts";
 import { substituteVariables } from "../core/variables.ts";
 import type { ContentVariables } from "../core/variables.ts";
 import type { MdastNode, MdastValue } from "./mdast.ts";
@@ -68,6 +73,7 @@ interface PositionedNode extends MdastNode {
 interface IncludeVisitorContext {
   fileURL: URL | undefined;
   source: string;
+  sourceFormat: SourceFormat;
   replaceNode: (node: MdastNode, replacement: { raw: string }) => void;
   textContent: (node: MdastNode) => string;
   report: (report: {
@@ -125,6 +131,17 @@ export const includePlugin = (options: IncludePluginOptions = {}) => {
     ? resolve(options.contentRoot)
     : undefined;
 
+  // The page's link-reference definitions, read once per source: its own
+  // and, appended before the parse (see `withIncludedDefinitions`), every
+  // partial's.
+  let cached: { definitions: LinkDefinition[]; source: string } | undefined;
+  const pageDefinitions = (source: string): LinkDefinition[] => {
+    if (cached?.source !== source) {
+      cached = { definitions: linkDefinitions(source), source };
+    }
+    return cached.definitions;
+  };
+
   const splice = async (
     node: MdastNode,
     statement: IncludeStatement,
@@ -155,9 +172,19 @@ export const includePlugin = (options: IncludePluginOptions = {}) => {
     for (const nested of expanded.errors) {
       ctx.report({ message: nested.message, node, severity: "warning" });
     }
-    // Substituted here, before the spliced text is parsed: in an MDX page it
-    // parses as MDX, where `{{name}}` would be a JavaScript expression.
-    return substituteVariables(expanded.text, options.variables);
+    // The splice parses on its own, so a reference in it to a definition
+    // elsewhere in the page (the page's, or another partial's) is resolved
+    // through a copy of that definition. Substituted here, before the
+    // spliced text is parsed: in an MDX page it parses as MDX, where
+    // `{{name}}` would be a JavaScript expression. Its pinned heading ids
+    // are escaped the way the page's own are (see `escapePinnedIds`).
+    return escapePinnedIds(
+      substituteVariables(
+        withDefinitions(expanded.text, pageDefinitions(ctx.source)),
+        options.variables
+      ),
+      ctx.sourceFormat
+    );
   };
 
   /**

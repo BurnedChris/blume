@@ -33,6 +33,7 @@ export const sr: UIStringsOverride = {
     error: "Жао нам је, нешто је пошло наопако.",
     explainCode: "Објасни овај код.",
     label: "Постави питање",
+    open: "Отвори асистента",
     placeholder: "Поставите питање…",
     rateLimited:
       "Поставили сте много питања. Покушајте поново за неколико минута.",
@@ -48,6 +49,7 @@ export const sr: UIStringsOverride = {
   banner: { dismiss: "Затвори обавештење" },
   changelog: {
     description: "Ажурирања производа и белешке о издањима.",
+    empty: "У дневнику измена још нема уноса.",
     title: "Дневник измена",
   },
   consent: {
@@ -69,6 +71,7 @@ export const sr: UIStringsOverride = {
     preview: "Преглед",
     prop: "Својство",
     selectTab: "Изабери картицу",
+    selectView: "Изабери приказ",
     showLess: "Прикажи мање",
     showMore: "Прикажи више",
     stars: "Звездице",

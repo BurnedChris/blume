@@ -33,6 +33,7 @@ export const da: UIStringsOverride = {
     error: "Beklager, noget gik galt.",
     explainCode: "Forklar denne kode.",
     label: "Stil et spørgsmål",
+    open: "Åbn assistenten",
     placeholder: "Stil et spørgsmål…",
     rateLimited:
       "Du har stillet mange spørgsmål. Prøv igen om et par minutter.",
@@ -48,6 +49,7 @@ export const da: UIStringsOverride = {
   banner: { dismiss: "Luk meddelelsen" },
   changelog: {
     description: "Produktopdateringer og udgivelsesnoter.",
+    empty: "Ingen poster i ændringsloggen endnu.",
     title: "Ændringslog",
   },
   consent: {
@@ -69,6 +71,7 @@ export const da: UIStringsOverride = {
     preview: "Forhåndsvisning",
     prop: "Egenskab",
     selectTab: "Vælg fane",
+    selectView: "Vælg visning",
     showLess: "Vis mindre",
     showMore: "Vis mere",
     stars: "Stjerner",

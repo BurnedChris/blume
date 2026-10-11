@@ -33,6 +33,7 @@ export const ar: UIStringsOverride = {
     error: "عذراً، حدث خطأ ما.",
     explainCode: "اشرح هذه الشيفرة.",
     label: "اطرح سؤالاً",
+    open: "فتح المساعد",
     placeholder: "اطرح سؤالاً…",
     rateLimited: "لقد طرحت الكثير من الأسئلة. حاول مرة أخرى بعد بضع دقائق.",
     removeCode: "إزالة الشيفرة",
@@ -47,6 +48,7 @@ export const ar: UIStringsOverride = {
   banner: { dismiss: "إغلاق الإعلان" },
   changelog: {
     description: "تحديثات المنتج وملاحظات الإصدارات.",
+    empty: "لا توجد إدخالات في سجل التغييرات بعد.",
     title: "سجل التغييرات",
   },
   consent: {
@@ -67,6 +69,7 @@ export const ar: UIStringsOverride = {
     preview: "معاينة",
     prop: "الخاصية",
     selectTab: "اختيار علامة تبويب",
+    selectView: "اختيار طريقة العرض",
     showLess: "عرض أقل",
     showMore: "عرض المزيد",
     stars: "النجوم",

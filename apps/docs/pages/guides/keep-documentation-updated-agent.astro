@@ -1,0 +1,583 @@
+---
+// Keep documentation updated from merged code changes: checked against the
+// skills, CLI, and validate docs, skills/blume-update-docs (SKILL.md and
+// references/audit-checklist.md), and the build, validate, and dev-lock
+// source on main; the Claude Code GitHub Actions, skills, permissions, CLI,
+// and tools reference docs; claude-code-action at 756cc22 (agent mode, token
+// setup, and claude_args parsing, which parsed the allowlist below as
+// intended); GitHub's schedule and ruleset docs; gh 2.101.0 (both gh
+// commands ran against a real repository); and skills CLI 1.7.0 (installed
+// the skill into .claude/skills; the copy matched main). Ran the skill with
+// Claude Code 2.1.283 on a scratch git fixture of the Acme example (commits
+// standing in for merged PRs, the SDK typechecked with tsc): the dry run
+// produced the patch and verdicts below, and a second run after the fix
+// merged was a clean no-op. In the fixture, blume build and blume validate
+// were not run, nothing was pushed, and no PR was opened; the workflow was
+// not run. Review: the workflow uses actions/checkout@v7 like every other
+// guide. Claude's GitHub Actions docs and the action's examples show
+// checkout@v6 but require no major, and v7's one behavior change (refusing
+// fork PR checkouts under pull_request_target and workflow_run) doesn't
+// touch a scheduled job; agent mode configures git with its own token either
+// way (src/modes/agent/index.ts). Not yet run end to end.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const docsDriftYmlCode = `name: Docs drift
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: docs-drift
+
+jobs:
+  update-docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: \${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Use the blume-update-docs skill.
+
+            Scope: the pull requests merged into main in the last 7 days. List them with gh pr list --state merged --base main --limit 100 and a merged:>= date search.
+            Feature flags live in src/flags.ts. A change gated by a flag that is false there is unreleased: skip it and say why.
+            Verify with npx blume build and npx blume validate --strict.
+
+            If docs need updates, open or update a blume/* pull request. Its body lists the command you used to read history and every pull request in scope with one verdict: docs updated, already accurate, or skipped (with the reason).
+            If nothing needs updating, report the same list and don't create a branch, commit, or pull request.
+          claude_args: |
+            --max-turns 60
+            --allowedTools "Skill,Edit,Write,Bash(git *),Bash(gh pr list *),Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checkout *),Bash(gh pr create *),Bash(gh pr edit *),Bash(npx blume build *),Bash(npx blume validate *)"`;
+---
+
+<GuidePage guide={guideById("keep-documentation-updated-agent")}>
+  <p>
+    To keep docs current as code merges, give a coding agent a narrow job and
+    review what it produces. Blume ships an agent skill for exactly this,{" "}
+    <code>blume-update-docs</code>. You point the agent at a set of merged
+    pull requests.
+    It pulls out the user-facing changes, compares them with your docs, and
+    edits only the pages that are now factually wrong. Then it runs{" "}
+    <code>blume build</code> and <code>blume validate</code> and opens a pull
+    request for a person to review. When nothing drifted, it reports what it
+    checked and opens nothing.
+  </p>
+  <p>
+    In this guide you test the skill on a drift you planted, read its patch
+    against the code change behind it, turn the patch into a pull request that
+    shows its evidence, and confirm that a second run is a clean no-op. Only
+    then do you schedule it in GitHub Actions. The agent and the scheduler are
+    yours: Blume ships the skill and the checks, not a hosted runner.
+  </p>
+  <p>
+    The skill reads merged pull requests from the repository it runs in, so
+    this guide assumes your code and your Blume docs share one. It keeps
+    hand-written pages current: a reference generated from an OpenAPI spec
+    already rebuilds on every build (see{" "}
+    <a href="/guides/openapi-documentation-ci">keeping API docs in sync in CI</a>).
+    If your team reliably updates docs in the same pull request as the code, a
+    review checklist may be enough, and the skill is a backstop.
+  </p>
+
+  <h2>What the skill changes, and what it leaves alone</h2>
+  <p>
+    The skill treats this as maintenance, not authorship. Its checklist spells
+    out when an edit is warranted:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">It edits a page when</th>
+        <th scope="col">It leaves the page alone when</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>
+          A command, flag, config option, environment variable, route, prop, or
+          default changed
+        </td>
+        <td>The only possible change is wording, polish, or formatting</td>
+      </tr>
+      <tr>
+        <td>A documented workflow no longer works or misses a step</td>
+        <td>The work is behind a feature flag that's off for your readers</td>
+      </tr>
+      <tr>
+        <td>A shipped capability is missing from the page that should cover it</td>
+        <td>The merged change isn't user-facing, like a refactor</td>
+      </tr>
+      <tr>
+        <td>A link points at moved or removed documentation</td>
+        <td>The edit would only duplicate another page or guess at future work</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    It keeps diffs small, copies names and values from the code instead of
+    paraphrasing them, and never touches <code>.blume/</code> or{" "}
+    <code>dist/</code>. Every run ends one of two ways: a <code>blume/*</code>{" "}
+    pull request, or a report with no branch, commit, or pull request.
+  </p>
+
+  <h2>Install the skill</h2>
+  <p>From the root of the repository, install it for Claude Code:</p>
+  <CodeBlock
+    code="npx skills add haydenbleasel/blume --skill blume-update-docs --agent claude-code"
+    lang="bash"
+  />
+  <p>
+    That puts the skill in <code>.claude/skills/blume-update-docs/</code>{" "}
+    and records it in <code>skills-lock.json</code>. Commit both, so every
+    clone and the CI runner later use the same copy, and run{" "}
+    <code>npx skills update</code> when you want a newer one. For another
+    agent, pass its name instead, like <code>--agent codex</code> or{" "}
+    <code>--agent cursor</code>. The skill also ships inside the{" "}
+    <code>blume</code> package, at{" "}
+    <code>node_modules/blume/skills/blume-update-docs/SKILL.md</code>, so you
+    can point any agent at that file instead.
+  </p>
+
+  <h2>Plant a drift you can check</h2>
+  <p>
+    Your first run needs a known right answer. Pick a recent pull request that
+    you know changed documented behavior, or make a small one for the test.
+    This guide's example is the fictional Acme Messages SDK, with its code in{" "}
+    <code>src/</code> and its Blume docs in <code>docs/</code>. This is the page
+    the test targets:
+  </p>
+  <CodeBlock
+    code={`---
+title: Configuration
+description: The options you can pass to createClient.
+---
+
+Create one client and reuse it across your app:
+
+\`\`\`ts
+import { createClient } from "@acme/messages";
+
+const acme = createClient({
+  apiKey: process.env.ACME_API_KEY,
+  retries: 3,
+});
+\`\`\`
+
+| Option | Default | Description |
+| --- | --- | --- |
+| \`apiKey\` | none | Your secret API key. Required. |
+| \`timeout\` | \`10000\` | Milliseconds before a request is aborted. |
+| \`retries\` | \`2\` | How many times to retry a failed request. |`}
+    lang="mdx"
+    title="docs/configuration.mdx"
+  />
+  <p>Three pull requests then merge without touching <code>docs/</code>:</p>
+  <ul>
+    <li>
+      <strong>#41</strong> renames the <code>retries</code> option to{" "}
+      <code>maxRetries</code> and raises the default timeout. This is the
+      drift.
+    </li>
+    <li>
+      <strong>#42</strong> adds <code>messages.sendBatch()</code> behind a flag
+      that is off. The docs should stay silent about it.
+    </li>
+    <li>
+      <strong>#43</strong> moves the retry backoff into its own file. Nothing a
+      user sees changes.
+    </li>
+  </ul>
+  <p>This is #41, the change the docs have to follow:</p>
+  <CodeBlock
+    code={`@@ -3,10 +3,10 @@ import { flags } from "./flags.ts";
+ export interface ClientOptions {
+   /** Your secret API key. */
+   apiKey: string;
+-  /** Milliseconds before a request is aborted. Defaults to 10000. */
++  /** Milliseconds before a request is aborted. Defaults to 30000. */
+   timeout?: number;
+   /** How many times to retry a failed request. Defaults to 2. */
+-  retries?: number;
++  maxRetries?: number;
+ }
+@@ -20,8 +20,8 @@ const delay = (attempt: number) =>
+ export function createClient({
+   apiKey,
+-  timeout = 10_000,
+-  retries = 2,
++  timeout = 30_000,
++  maxRetries = 2,
+ }: ClientOptions) {`}
+    lang="diff"
+    title="src/client.ts"
+  />
+  <p>
+    And this is the flag file from #42. The new <code>sendBatch()</code> throws
+    unless <code>batchSend</code> is on:
+  </p>
+  <CodeBlock
+    code={`export const flags = {
+  /** Batch sending. Off until the batch endpoint is generally available. */
+  batchSend: false,
+};`}
+    lang="ts"
+    title="src/flags.ts"
+  />
+  <p>
+    The agent can't tell a released feature from a hidden one unless you say
+    where your flags live. Put that in the file your agents already read, so
+    every run sees it, local or scheduled. The skill reads{" "}
+    <code>AGENTS.md</code> and <code>CLAUDE.md</code> before it does anything
+    else:
+  </p>
+  <CodeBlock
+    code={`# AGENTS.md
+
+- Product code is in \`src/\`. Docs are Blume pages in \`docs/\`.
+- Feature flags live in \`src/flags.ts\`. A flag set to \`false\` means the feature is unreleased.`}
+    lang="markdown"
+    title="AGENTS.md"
+  />
+  <p>
+    If your flags live in a service the agent can't read, list the flags that
+    are on in production in <code>AGENTS.md</code>, or state there that every
+    flagged change is unreleased.
+  </p>
+
+  <h2>Run it on a bounded change set</h2>
+  <p>
+    Open your agent at the repository root and give it a scope you can check
+    by hand. Name the pull requests, keep the first run a dry run, and ask for
+    the evidence:
+  </p>
+  <CodeBlock
+    code={`Use the blume-update-docs skill.
+
+Scope: only pull requests #41, #42, and #43. Don't review any other history.
+Feature flags live in src/flags.ts. A change gated by a flag that is false there is unreleased: skip it and say why.
+This is a dry run: edit the docs in the working tree, but don't create a branch, commit, push, or open a pull request.
+
+In your report, list the exact commands you used to read history, then every pull request in scope with one verdict: docs updated, already accurate, or skipped (with the reason).`}
+    lang="text"
+  />
+  <p>
+    Named pull requests replace the skill's default window of the last 7 days.
+    The dry-run line stops the skill before it creates a branch, so the result
+    is a working-tree diff. The last line makes the agent show what it read and
+    a verdict for each pull request, which is what you check it against.
+  </p>
+  <p>
+    Once you move from named pull requests to a date window, list the same
+    history yourself with the GitHub CLI:
+  </p>
+  <CodeBlock
+    code={`gh pr list --state merged --base main --search "merged:>=2026-09-21" --limit 100 \\
+  --json number,title --jq '.[] | "#\\(.number) \\(.title)"'`}
+    lang="bash"
+  />
+  <p>
+    Every number in that list should appear in the agent's report, with a
+    verdict.
+  </p>
+
+  <h2>Inspect the proposed patch</h2>
+  <p>In a test run of this example, the agent changed one page:</p>
+  <CodeBlock
+    code={`@@ -10,12 +10,12 @@ import { createClient } from "@acme/messages";
+
+ const acme = createClient({
+   apiKey: process.env.ACME_API_KEY,
+-  retries: 3,
++  maxRetries: 3,
+ });
+ \`\`\`
+
+ | Option | Default | Description |
+ | --- | --- | --- |
+ | \`apiKey\` | none | Your secret API key. Required. |
+-| \`timeout\` | \`10000\` | Milliseconds before a request is aborted. |
+-| \`retries\` | \`2\` | How many times to retry a failed request. |
++| \`timeout\` | \`30000\` | Milliseconds before a request is aborted. |
++| \`maxRetries\` | \`2\` | How many times to retry a failed request. |`}
+    lang="diff"
+    title="docs/configuration.mdx"
+  />
+  <p>Its report gave one verdict per pull request (shortened here):</p>
+  <CodeBlock
+    code={`| PR  | Verdict             | Details |
+| --- | ------------------- | ------- |
+| #41 | Docs updated        | The example used \`retries: 3\`, and the table listed \`retries\` and a \`timeout\` default of \`10000\`. The code now uses \`maxRetries\` (default \`2\`) and \`timeout = 30_000\`. |
+| #42 | Skipped: unreleased | \`sendBatch\` only works when \`flags.batchSend\` is on, and it is \`false\` in \`src/flags.ts\`. |
+| #43 | Already accurate    | Code moved, the backoff formula is unchanged, and the docs don't describe backoff timing. |`}
+    lang="markdown"
+  />
+  <p>Review the patch the way you'd review a teammate's, against its evidence:</p>
+  <ul>
+    <li>
+      Every changed line should trace to a line in a merged diff. Here,{" "}
+      <code>maxRetries</code> and <code>30000</code> both come from{" "}
+      <code>src/client.ts</code> in #41. A value you can't find in any diff is
+      a guess, so reject it.
+    </li>
+    <li>
+      Search for anything the patch missed. <code>grep -rn "retries" docs/</code>{" "}
+      should print nothing, since the old name is gone.
+    </li>
+    <li>
+      Check the skips. #42 is skipped because its flag is off, which is the
+      boundary you set. If a skip reason is vague, ask the agent for the file
+      and line.
+    </li>
+    <li>
+      Make the calls the agent leaves to you. Renaming an option breaks
+      existing code. The agent noted that the repository has no upgrade page,
+      so it added no upgrade note. Whether this release needs one is your call.
+    </li>
+  </ul>
+  <Callout type="info">
+    Two runs on the same input can differ, because the agent is using
+    judgment, not running a script. Check every run against its evidence.
+  </Callout>
+
+  <h2>Verify and open the pull request</h2>
+  <p>Run the same checks the skill runs:</p>
+  <CodeBlock
+    code={`npx blume build
+npx blume validate --strict`}
+    lang="bash"
+  />
+  <p>
+    <code>blume build</code> fails on invalid frontmatter and duplicate
+    routes. <code>blume validate --strict</code> fails on any broken internal
+    link, anchor, or asset (see <a href="/docs/cli/validate">Validate</a>). When
+    both pass and the patch is right, tell the agent to deliver:
+  </p>
+  <CodeBlock
+    code="The edits are right. Deliver as the skill describes: commit only the docs edits on a blume/ branch, push it, and open a pull request with the per-PR verdicts from your report in the body."
+    lang="text"
+  />
+  <p>
+    The skill names the branch <code>blume/docs-refresh-YYYY-MM-DD</code> and
+    titles the pull request <code>blume: refresh docs for YYYY-MM-DD</code>.
+    Its body has five sections: sources checked, docs changed, verification
+    run, skipped checks, and remaining risk. For this example, a good body
+    reads like this:
+  </p>
+  <CodeBlock
+    code={`## Sources checked
+
+History: \`gh pr view\` and \`gh pr diff\` for #41, #42, and #43 (the scope set in the prompt).
+
+| PR | Verdict |
+| --- | --- |
+| #41 Rename retries to maxRetries and raise the default timeout | Docs updated |
+| #42 Add batch sending behind the batchSend flag | Skipped: \`flags.batchSend\` is \`false\` in \`src/flags.ts\` |
+| #43 Move retry backoff into its own module | Already accurate: no user-facing change |
+
+## Docs changed
+
+- \`docs/configuration.mdx\`: \`retries\` is now \`maxRetries\` in the example and the options table, and the \`timeout\` default is \`30000\` (was \`10000\`). Source: \`src/client.ts\` in #41.
+
+## Verification run
+
+- \`npx blume build\`: passed
+- \`npx blume validate --strict\`: passed
+
+## Skipped checks
+
+- None.
+
+## Remaining risk
+
+- Renaming \`retries\` breaks existing code. The docs have no upgrade page, so this PR adds no upgrade note.
+- \`messages.sendBatch()\` needs docs once \`batchSend\` is on.`}
+    lang="markdown"
+  />
+  <p>
+    A reviewer can check every claim in that body without rerunning the agent:
+    the history it read, the diff each edit cites, and the checks it ran.
+  </p>
+
+  <h2>Confirm a clean no-op</h2>
+  <p>
+    A skill that always finds something to change is noise. Merge the docs
+    pull request, then run the skill again over a window that covers the same
+    changes, this time without the dry-run line:
+  </p>
+  <CodeBlock
+    code={`Use the blume-update-docs skill.
+
+Scope: the pull requests merged into main since 2026-09-21.
+Feature flags live in src/flags.ts. A change gated by a flag that is false there is unreleased: skip it and say why.
+
+In your report, list the exact commands you used to read history, then every pull request in scope with one verdict: docs updated, already accurate, or skipped (with the reason).`}
+    lang="text"
+  />
+  <p>
+    In a test run of this example, the second run marked #41, #43, and the
+    merged docs pull request as already accurate. It skipped #42 for its flag
+    again, skipped the pull request that added the skill as not a product
+    change, and made no edits. A no-op leaves nothing behind, which you can
+    confirm:
+  </p>
+  <CodeBlock
+    code={`git status --short
+gh pr list --state open --json number,headRefName \\
+  --jq '.[] | select(.headRefName | startswith("blume/")) | "#\\(.number) \\(.headRefName)"'`}
+    lang="bash"
+  />
+  <p>
+    Both should print nothing. If a run ever opens a pull request whose only
+    changes are rewording, that's outside the skill's rules: close it and
+    tighten the prompt instead of merging the churn.
+  </p>
+
+  <h2>Keep review and flags in human hands</h2>
+  <p>
+    The skill stops at opening a pull request, but a scheduled agent can do
+    whatever its token allows. Put the boundaries in GitHub, not only in the
+    prompt:
+  </p>
+  <ul>
+    <li>
+      Add a ruleset on <code>main</code> with{" "}
+      <strong>Require a pull request before merging</strong> and at least one
+      required approval. Nothing the agent pushes then reaches{" "}
+      <code>main</code> without a person approving it.
+    </li>
+    <li>
+      Add a <code>CODEOWNERS</code> entry for <code>docs/</code> and require
+      review from code owners in the same rule, so the people who own the docs
+      review the docs pull requests.
+    </li>
+    <li>
+      Keep the flag rule in <code>AGENTS.md</code> current. When you turn a
+      flag on, name that feature in the next run's scope so the agent
+      documents it.
+    </li>
+  </ul>
+
+  <h2>Schedule it in GitHub Actions</h2>
+  <p>
+    Automate only after a local run and a no-op both came out right. This
+    section uses the Claude Code GitHub Action. The{" "}
+    <a href="/docs/advanced/skills#self-updating-docs">skills page</a> lists
+    other runners, like a Codex or Cursor automation or plain cron, and the
+    prompt carries over to any of them.
+  </p>
+  <p>
+    Install the <a href="https://github.com/apps/claude">Claude GitHub App</a>{" "}
+    on the repository and add an <code>ANTHROPIC_API_KEY</code> repository
+    secret. Running <code>/install-github-app</code> in Claude Code does both.
+    Then add the workflow:
+  </p>
+  <CodeBlock
+    code={docsDriftYmlCode}
+    lang="yaml"
+    title=".github/workflows/docs-drift.yml"
+  />
+  <p>What each part is for:</p>
+  <ul>
+    <li>
+      <strong>Triggers</strong>: Mondays at 07:00 UTC, plus manual runs
+      through <code>workflow_dispatch</code>. Both need the workflow file on
+      the default branch.
+    </li>
+    <li>
+      <strong><code>fetch-depth: 0</code></strong>: a full clone, so{" "}
+      <code>git log</code> and <code>git show</code> reach every commit in the
+      window. The default checkout has one commit.
+    </li>
+    <li>
+      <strong><code>--allowedTools</code></strong>: with a prompt, the action
+      runs in automation mode, where Claude can't edit files, run shell
+      commands, or load the skill until you allow it. This list covers reading
+      history, editing pages, the two Blume checks, and opening or updating a
+      pull request. It leaves out <code>gh pr merge</code> on purpose.
+    </li>
+    <li>
+      <strong><code>--max-turns</code> and <code>timeout-minutes</code></strong>:
+      caps on how long one run can go.
+    </li>
+    <li>
+      <strong>No <code>github_token</code> input</strong>: the action then
+      authenticates as the Claude GitHub App, which is what{" "}
+      <code>id-token: write</code> is for. Pull requests it opens run your CI;
+      ones opened with the default <code>GITHUB_TOKEN</code> don't.
+    </li>
+  </ul>
+  <p>
+    When a run changes docs, the result is a <code>blume/*</code> pull request
+    with the same body as your local one, and later runs update it while it's
+    open instead of opening another. When nothing drifted, the report is in
+    the run's log. The <a href="/pricing">pricing page</a> covers what running
+    this costs.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The scheduled run doesn't start, or fails before Claude runs</h3>
+  <p>
+    GitHub only schedules workflows from the default branch, and in a public
+    repository it disables them after 60 days without activity; re-enable the
+    workflow from the Actions tab. GitHub attributes a scheduled run to a
+    repository user, usually the one who last changed the <code>cron</code>{" "}
+    line, and the action rejects bot actors. If a bot made that change, list it in the action's{" "}
+    <code>allowed_bots</code> input.
+  </p>
+  <h3>The run log shows permission denials</h3>
+  <p>
+    A command that no <code>--allowedTools</code> rule matches is denied.
+    Rules match the command as written, so <code>Bash(npx blume build *)</code>{" "}
+    doesn't cover <code>npm run build</code>. Either add a rule for the form
+    the agent used, or name the exact command in the prompt, as the workflow
+    above does.
+  </p>
+  <h3>The report misses pull requests</h3>
+  <p>
+    <code>gh pr list</code> returns 30 results unless you pass{" "}
+    <code>--limit</code>, and a shallow checkout hides older commits from{" "}
+    <code>git log</code>. Keep <code>--limit 100</code> in the prompt and{" "}
+    <code>fetch-depth: 0</code> in the checkout, then compare the report with
+    your own <code>gh pr list</code> output.
+  </p>
+  <h3>The docs pull request has no CI checks</h3>
+  <p>
+    GitHub doesn't start workflows for events made with the default{" "}
+    <code>GITHUB_TOKEN</code>. If you passed{" "}
+    <code>{"github_token: ${{ secrets.GITHUB_TOKEN }}"}</code>{" "}
+    to the action, remove it so the action uses the Claude GitHub App.
+  </p>
+  <h3>The build fails on the agent's edit</h3>
+  <p>
+    Blume's frontmatter schema is strict, so a key the agent invents fails{" "}
+    <code>blume build</code> with <code>BLUME_FRONTMATTER_INVALID</code>,
+    naming the page and the unrecognized key. The skill fixes
+    failures its own edits caused and reports ones that were already there.
+    If <code>main</code> was already failing the build, fix that first, or no
+    run can pass verification.
+  </p>
+  <h3><code>blume build</code> refuses to run locally</h3>
+  <p>
+    While <code>blume dev</code> runs, <code>blume build</code> refuses to
+    touch its <code>.blume/</code> runtime. Add <code>--isolated</code>, or set{" "}
+    <code>BLUME_RUNTIME_DIR=.blume-verify</code> in the agent's shell (see{" "}
+    <a href="/docs/cli#verifying-while-the-dev-server-runs">verifying while the dev server runs</a>).
+  </p>
+</GuidePage>

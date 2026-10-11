@@ -1,0 +1,49 @@
+---
+title: リモート MDX
+description: >-
+  mdxRemote() ソースを使って、GitHub リポジトリまたは raw URL から HTTP 経由で Markdown と MDX を取得し、すべての Blume コンポーネントでレンダリングします。
+---
+
+組み込みの `mdxRemote()` アダプターは、生の `.md`/`.mdx` を HTTP 経由で取得します。ファイルは、GitHub リポジトリのサブツリーから列挙する方法（`github`）と、raw のベース URL に対して明示的に指定する方法（`url` + `files`）のどちらかで指定できます。
+
+```ts blume.config.ts
+import { defineConfig } from "blume";
+import { filesystem, mdxRemote } from "blume/sources";
+
+export default defineConfig({
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      // The docs/ subtree of acme/sdk, mounted under /sdk
+      mdxRemote({
+        prefix: "sdk",
+        github: { owner: "acme", repo: "sdk", ref: "main", path: "docs" },
+      }),
+    ],
+  },
+});
+```
+
+ファイルを自分で列挙する場合は、`url` に raw のベース URL を指定します。
+
+```ts blume.config.ts
+mdxRemote({
+  prefix: "sdk",
+  url: "https://raw.githubusercontent.com/acme/sdk/main/docs",
+  files: ["intro.mdx", "guide.mdx"],
+});
+```
+
+`include`（デフォルトは `["**/*.{md,mdx}"]`）は、`filesystem()` ソースの `include` と同じように、`path` 配下のパスでファイルを絞り込みます。`!` で始まるパターンは、一致したものを除外します（`["**/*.mdx", "!drafts/**"]`）。`github` を使う場合、ソースは `ref` 時点のリポジトリのツリー全体を列挙し、`path` 配下のファイルだけを残します。その ref で `path` 配下に何もない場合、ソースはページを読み込まず、`BLUME_SOURCE_PATH_MISSING` の警告を表示します。GitHub は一覧の取得に上限を設けており（`path` の指定にかかわらず、リポジトリ全体で 100,000 エントリまたは 7 MB）、これを超えるとソースは `BLUME_SOURCE_TRUNCATED` の警告を表示します。その場合は、代わりに `url` と `files` でファイルを列挙してください。
+
+リモートファイル間の相対リンク（`[Errors](./02-errors.mdx)`）は、リンク先のファイルが公開されるページに解決されます。その際、ルートからは並び順のプレフィックスが取り除かれます。これは、レンダリングされたページ、ページの [Markdown コピー](/docs/discoverability/markdown#raw-markdown) と `llms-full.txt`、そしてアシスタントが読み取る内容のいずれにも当てはまります。`blume validate` も同じ方法でリンクを検証します。
+
+プライベートリポジトリのトークンは `GITHUB_TOKEN` 環境変数から読み込まれます。トークンが設定ファイルや生成された出力にインライン化されることはありません。また、送信先は GitHub 自身のホスト（`api.github.com`、`raw.githubusercontent.com`）に限られ、カスタムの `url` ベースに送信されることはありません。パブリックリポジトリであれば、トークンなしで動作します。`github` を使う場合はアダプターがこの変数を宣言しているため、未設定のときは `blume dev` と `blume build` が `BLUME_MISSING_SECRET` の警告を表示します。ファイルの一覧は GitHub の API 経由で取得され、認証なしのリクエストは 1 時間あたり 60 回までに制限されているためです。raw の `url` はファイルを読み込むだけなので、事前の警告は表示されません。`GITHUB_TOKEN` が未設定の状態で GitHub がファイルを 401、403、404 のいずれかで拒否した場合は、スキップされたファイルの警告に、この変数が設定されていないことが示されます。
+
+GitHub 上で読むために書かれたファイルは、多くの場合 `# Heading` で始まりますが、Blume はページの `title` を `<h1>` としてレンダリングします。リモートページの最初の行がフロントマターの `title` と一致する h1 である場合、またはフロントマターで `title` が設定されていない場合は、その見出しが削除され、そのテキストがタイトルになります。そのため、ページに表示される `<h1>` は 1 つだけになります。最初の見出しが `title` と異なる場合は、そのまま残ります。
+
+リモートページは、MDX とコンポーネントを完全に再現した形でレンダリングされます。本文は非表示のステージングディレクトリに書き出され、ローカルのドキュメントと一緒に Astro でレンダリングされるため、コールアウト、タブ、その他すべての Blume コンポーネントがそのまま機能します。
+
+他のリモートソースと同様に、取得したページはオフラインビルド用にキャッシュされ、`blume sync` で更新されます。詳しくは [キャッシュとオフラインビルド](/docs/content/sources#caching-and-offline-builds) を参照してください。
+
+[複数の GitHub リポジトリから 1 つのドキュメントポータルを構築する](/guides/documentation-multiple-repositories) では、このアダプターを使って各リポジトリの docs フォルダーを 1 つのサイトに取り込み、自分で変更したときにだけ切り替わるリリースに固定しています。

@@ -1,0 +1,101 @@
+---
+title: कुकी सहमति
+description: >-
+  एनालिटिक्स चलने से पहले पाठकों से अनुमति लें। इसके लिए Blume का अपना बैनर या Osano या Ethyca जैसा होस्टेड सहमति प्रबंधक इस्तेमाल करें, जिसे blume.config.ts में एडैप्टर के रूप में सेट किया जाता है।
+---
+
+आपका [एनालिटिक्स](/docs/configuration/analytics) चलने से पहले पाठकों से अनुमति लेने के लिए `blume.config.ts` में `consent` सेट करें। इसमें `blume/consent` से कोई एक एडैप्टर दिया जाता है। यह Blume का अपना बैनर हो सकता है, या कोई होस्टेड सहमति प्रबंधक जिसे आप पहले से इस्तेमाल करते हैं।
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { googleAnalytics, posthog } from "blume/analytics";
+import { native } from "blume/consent";
+
+export default defineConfig({
+  analytics: [
+    googleAnalytics({ id: "G-XXXXXXXXXX" }),
+    posthog({ key: "phc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }),
+  ],
+  consent: native({ policy: "/privacy" }),
+});
+```
+
+`consent` सेट होने पर हर एनालिटिक्स एडैप्टर इंतज़ार करता है। उसके टैग पेज में रहते हैं, लेकिन पाठक के एनालिटिक्स की अनुमति देने तक नहीं चलते। अनुमति मिलने पर वे उसी क्रम में चलते हैं जिसमें आपने उन्हें लिखा है। अगर पाठक अनुमति नहीं देते, तो ये टैग कभी लोड नहीं होते। उन्हें [पेज रेटिंग](/docs/configuration#page-feedback) और उसका टिप्पणी बॉक्स भी नहीं दिखता, क्योंकि उनके जवाब कहीं भेजे नहीं जा सकते। Vercel Web Analytics हर हाल में लोड होता है, क्योंकि उसका कंपोनेंट ऐसा टैग नहीं है जिसे Blume रोक सके। फिर भी, पाठक के एनालिटिक्स की अनुमति देने तक यह कोई डेटा नहीं भेजता।
+
+:::note
+सहमति वैकल्पिक सुविधा है। `consent` सेट न करने पर एनालिटिक्स पहले की तरह पेज लोड होते ही चलता है।
+:::
+
+## एडैप्टर [#adapters]
+
+| एडैप्टर    | सहमति प्रबंधक                        | आवश्यक                   |
+| ---------- | ------------------------------------ | ------------------------ |
+| `native()` | [Blume का अपना बैनर](#blumes-banner) | —                        |
+| `osano()`  | [Osano](#osano)                      | `customerId`, `configId` |
+| `ethyca()` | [Ethyca](#ethyca)                    | `privacyCenter`          |
+
+## Blume का बैनर [#blumes-banner]
+
+`native()` पेज के निचले हिस्से में एक छोटा कार्ड दिखाता है, जो पाठक के जवाब देने तक बना रहता है। इसमें **स्वीकार करें** और **अस्वीकार करें** बटन अगल-बगल होते हैं, ताकि मना करना भी उतना ही आसान हो जितना स्वीकार करना। जवाब पाठक के ब्राउज़र में ही सेव रहता है, और जवाब देने के बाद बैनर फिर से नहीं दिखता।
+
+```ts blume.config.ts lineNumbers
+consent: native({
+  policy: "/privacy", // optional: links the banner to your privacy policy
+}),
+```
+
+`policy` में पेज रूट या पूरा URL दिया जा सकता है। बैनर का टेक्स्ट सभी बिल्ट-इन भाषाओं में अनुवादित है। शब्द बदलने के लिए `i18n.ui` की मदद से `consent` की [UI स्ट्रिंग्स](/docs/content/i18n#translated-ui) (`message`, `accept`, `decline`, `policy`, `settings`) ओवरराइड करें।
+
+बैनर `blume dev` में भी काम करता है, इसलिए लिखते समय आप इसे देख सकते हैं। एनालिटिक्स केवल प्रोडक्शन बिल्ड में लोड होता है।
+
+## Osano
+
+`osano()` [Osano Cookie Consent](https://www.osano.com) लोड करता है। यह वही बैनर और ड्रॉअर दिखाता है जो आपने Osano डैशबोर्ड में सेट किए हैं। Osano से पाठक की एनालिटिक्स सहमति की जानकारी मिलते ही Blume आपका एनालिटिक्स चलाता है। पाठक जब भी अपनी पसंद बदलते हैं, Blume यह प्रक्रिया फिर से करता है। दोनों ID आपको Osano से मिले स्क्रिप्ट टैग में मिलेंगी: `https://cmp.osano.com/<customerId>/<configId>/osano.js`।
+
+```ts blume.config.ts lineNumbers
+import { osano } from "blume/consent";
+
+consent: osano({ customerId: "AzZdRbSIoEzZU2", configId: "7b9e2f4a-…" }),
+```
+
+हर क्षेत्र में किसे सहमति माना जाए, यह Osano तय करता है। इसके लिए वह उस अनुपालन मोड का पालन करता है जो आपने उसके डैशबोर्ड में चुना है।
+
+## Ethyca
+
+`ethyca()` आपके प्राइवेसी सेंटर से [Ethyca का Fides](https://www.ethyca.com) सहमति प्रबंधक लोड करता है। यह वही बैनर और मोडल दिखाता है जो आपने Fides में सेट किए हैं। पाठक का एनालिटिक्स नोटिस चालू होने पर Blume आपका एनालिटिक्स चलाता है। नोटिस तीन स्थितियों में चालू माना जाता है: पाठक ने ऑप्ट इन किया हो, ऑप्ट आउट न किया हो, या नोटिस केवल जानकारी स्वीकार करने के लिए हो।
+
+```ts blume.config.ts lineNumbers
+import { ethyca } from "blume/consent";
+
+consent: ethyca({
+  privacyCenter: "https://privacy.example.com",
+  propertyId: "FDS-XXXXXX", // optional: which Fides property to load
+  notice: "analytics", // optional: the notice key that covers analytics
+}),
+```
+
+`notice` का डिफ़ॉल्ट मान `analytics` है। अगर एनालिटिक्स के लिए आपके Fides नोटिस की key कुछ और है, तो इसे सेट करें।
+
+एनालिटिक्स की तरह Osano और Fides भी केवल प्रोडक्शन बिल्ड में लोड होते हैं। इसलिए `blume dev` में टेस्ट करने पर कोई सहमति रिकॉर्ड नहीं बनता। इन्हें `blume build` और `blume preview` से प्रीव्यू करें।
+
+## जवाब बदलना [#changing-an-answer]
+
+`consent` सेट होने पर साइट फ़ुटर में **कुकी सेटिंग्स** लिंक दिखता है। यह Blume का बैनर, या होस्टेड सहमति प्रबंधक की प्राथमिकताएँ फिर से खोलता है। अगर आप फ़ुटर की जगह अपना [`Footer`](/docs/configuration/customization#layout-slots) लगाते हैं, तो किसी भी एलिमेंट को `data-blume-consent-open` एट्रिब्यूट देकर उसे यह लिंक बना सकते हैं:
+
+```html
+<button data-blume-consent-open type="button">Cookie settings</button>
+```
+
+अगर पाठक एनालिटिक्स की अनुमति देकर बाद में उसे वापस ले लेते हैं, तो पेज रीलोड होता है। पहले से चल रही स्क्रिप्ट्स रोकने का यही एक तरीका है। इसके बाद एनालिटिक्स बंद ही रहता है।
+
+## आपकी अपनी स्क्रिप्ट्स [#your-own-scripts]
+
+अपनी किसी भी स्क्रिप्ट को भी इसी तरह रोका जा सकता है। उसे `type="text/plain"` और `data-blume-consent="analytics"` दें। पाठक के एनालिटिक्स की अनुमति देने पर वह चल जाएगी। जवाबों पर खुद कार्रवाई करने के लिए `window` पर `blume:consent` इवेंट सुनें। इसके `detail.analytics` में पाठक की पसंद होती है। `window.blumeConsent.analytics` में मौजूदा पसंद रहती है। सहमति प्रबंधक के जवाब देने तक यह `null` रहती है, उसके बाद `true` या `false`।
+
+```js
+window.addEventListener("blume:consent", (event) => {
+  if (event.detail.analytics) {
+    // start something that needs consent
+  }
+});
+```

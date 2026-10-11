@@ -1,8 +1,14 @@
 import { normalizeRoute } from "../core/base-path.ts";
 import { nextFenceState } from "../core/code-fences.ts";
 import type { FenceState } from "../core/code-fences.ts";
+import {
+  accentInsensitive,
+  foldLatinTerm,
+  stripSoftHyphens,
+} from "../search/fold.ts";
 import { buildOramaIndex, queryOramaIndex } from "../search/orama-index.ts";
 import type { OramaDoc } from "../search/orama-index.ts";
+import { linkText } from "./link-text.ts";
 
 /** A chat message as posted by the assistant island (`{ role, content }`). */
 export interface AskMessage {
@@ -47,7 +53,7 @@ const EXCERPT_CHARS = 2000;
 const CONTEXT_BUDGET = 10_000;
 /**
  * Smallest excerpt worth injecting. A long page pushed under a tiny residual
- * budget would get a full `## Title (/route)` heading over a fragment of a few
+ * budget would get a full `## [Title](/route)` heading over a fragment of a few
  * dozen characters — a section the model is invited to cite but that grounds
  * nothing. Short pages that fit whole are still injected below this floor.
  */
@@ -196,7 +202,7 @@ const hasSegmenter = (
 ): segmenter is typeof Intl.Segmenter => typeof segmenter === "function";
 
 const segmentQuery = (query: string): string[] => {
-  const lowered = query.normalize("NFC").toLowerCase();
+  const lowered = stripSoftHyphens(query).normalize("NFC").toLowerCase();
   if (!hasSegmenter(Intl.Segmenter)) {
     return lowered.match(TERM) ?? [];
   }
@@ -210,9 +216,15 @@ const segmentQuery = (query: string): string[] => {
   return pieces;
 };
 
-/** Lowercase word tokens of `text`, cut at the same boundaries as a query. */
+/**
+ * Lowercase word tokens of `text`, cut at the same boundaries as a query.
+ * Latin words fold the way the search index folds them, so the section a page
+ * was retrieved for (Prüfung, for the question `prufung`) is the one excerpted.
+ */
 const tokenize = (text: string): string[] =>
-  segmentQuery(text).flatMap((piece) => piece.match(TERM) ?? []);
+  segmentQuery(text).flatMap((piece) =>
+    (piece.match(TERM) ?? []).map((term) => foldLatinTerm(term))
+  );
 
 /** Distinct, meaningful lowercase terms from a query (drops stopwords). */
 const queryTerms = (query: string): string[] =>
@@ -222,11 +234,35 @@ const queryTerms = (query: string): string[] =>
 
 /**
  * The grounding preamble. The model is told to answer strictly from the injected
- * excerpts and to cite the pages it used as Markdown links (each excerpt is
- * headed by `## Title (/route)`), so citations render as real links in the panel.
+ * excerpts and to cite the pages it used as Markdown links, so citations render
+ * as real links in the panel. Each excerpt is headed by the very link to cite
+ * (`## [Title](/route)`), so a model that copies the heading copies a link.
  */
 const BASE_INSTRUCTION =
-  "You are a helpful documentation assistant for this project. Answer the user's question using ONLY the documentation excerpts below. Each excerpt is headed by its page as `## Page Title (/route)`. If the answer is not covered by the excerpts, say you don't know and suggest where in the docs to look — do not invent details. Always cite the pages you drew from, and write every citation as a Markdown link to that page using its route, e.g. [Page Title](/route).";
+  "You are a helpful documentation assistant for this project. Answer the user's question using ONLY the documentation excerpts below. Each excerpt opens with a heading that links to its page, `## [Page Title](/route)`. If the answer is not covered by the excerpts, say you don't know and suggest where in the docs to look — do not invent details. Always cite the pages you drew from with the link in the heading that opens their excerpt, written exactly as it is there: [Page Title](/route).";
+
+/** `encodeURIComponent` leaves parentheses as they are, so they're mapped here. */
+const PARENTHESES = new Map([
+  ["(", "%28"],
+  [")", "%29"],
+]);
+
+/**
+ * An excerpt's heading: the Markdown link the model cites the page with. A
+ * bracket or backslash in the title, or whitespace or a parenthesis in the
+ * route, would break the link, and a `%` in the route would read back as an
+ * escape (`read_page` decodes them), so those are escaped; the rest of the
+ * route stays as the reader sees it (`/ja/ポイント`).
+ */
+export const excerptHeading = (
+  doc: Pick<OramaDoc, "route" | "title">
+): string => {
+  const target = doc.route.replaceAll(
+    /[%\s()]/gu,
+    (char) => PARENTHESES.get(char) ?? encodeURIComponent(char)
+  );
+  return `## [${linkText(doc.title)}](${target})`;
+};
 
 /**
  * Appended when the endpoint gives the model the docs tools (see
@@ -272,7 +308,7 @@ const isFollowUp = (message: string): boolean => {
 /**
  * The texts that retrieve for the latest question, in rank order.
  *
- * The question itself always leads, verbatim: Orama's own tokenizer and BM25
+ * The question itself always leads, verbatim: the index's tokenizer and BM25
  * weighting see the whole sentence (version numbers, single-character CJK
  * words, `--flags`, and the bigrams a ja/zh index depends on all survive), and
  * a short question that names its subject ("Does it support i18n?") is never
@@ -350,13 +386,15 @@ export const relevantExcerpt = (
     return `${prefix}${slice}${suffix}`;
   };
 
-  // Case-insensitive matching via regex rather than `indexOf` on a lowercased
-  // copy: length-changing case mappings (Turkish İ → "i" + U+0307) would shift
-  // every index in the copy, sliding the excerpt window off the match. Terms
-  // come from TERM (letters, marks and digits only), so no regex escaping.
+  // Case- and accent-insensitive matching via regex rather than `indexOf` on
+  // a folded copy: length-changing mappings (Turkish İ → "i" + U+0307, ß →
+  // "ss") would shift every index in the copy, sliding the excerpt window off
+  // the match.
   const positions: number[] = [];
   for (const term of queryTerms(query)) {
-    for (const match of trimmed.matchAll(new RegExp(term, "giu"))) {
+    for (const match of trimmed.matchAll(
+      new RegExp(accentInsensitive(term), "giu")
+    )) {
       positions.push(match.index);
     }
   }
@@ -622,10 +660,37 @@ export interface ReaderScope {
   filters: { locale: string | undefined; version: string | undefined };
 }
 
+// The snapshot's locale codes, keyed lowercase, built once per snapshot.
+const localeCodes = new WeakMap<AskData, Map<string, string>>();
+
+/**
+ * The locale a path's first segment names (`/ja` or `/ja/pricing` → `ja`),
+ * when it's one the snapshot's documents carry: a page outside the docs,
+ * like a localized landing page, still says which language it's in.
+ */
+const pathLocale = (data: AskData, path: string): string | undefined => {
+  let codes = localeCodes.get(data);
+  if (!codes) {
+    codes = new Map<string, string>();
+    for (const { locale } of data.documents) {
+      if (locale) {
+        codes.set(locale.toLowerCase(), locale);
+      }
+    }
+    localeCodes.set(data, codes);
+  }
+  const [, first = ""] = normalizeRoute(path).split("/");
+  return first ? codes.get(first.toLowerCase()) : undefined;
+};
+
 /**
  * Where the reader is: their page, when it's in the snapshot, and the locale
- * and docs version retrieval keeps to. Without a page, a versioned site
- * grounds in the current docs rather than every archived copy of each page.
+ * and docs version retrieval keeps to. A page the snapshot doesn't have (the
+ * homepage, a custom page, or none at all from a cross-origin caller) keeps
+ * to the locale its path's first segment names, or the default locale, so
+ * translations of every page don't crowd each other out. Without a page, a
+ * versioned site grounds in the current docs rather than every archived copy
+ * of each page.
  */
 export const readerScope = (
   data: AskData,
@@ -635,10 +700,13 @@ export const readerScope = (
   const current = page?.path
     ? byRoute.get(normalizeRoute(page.path))
     : undefined;
+  const locale = current
+    ? current.locale
+    : (page?.path && pathLocale(data, page.path)) || data.defaultLocale;
   return {
     current,
     filters: {
-      locale: current?.locale || undefined,
+      locale: locale || undefined,
       version: data.versioned ? (current?.version ?? "") : undefined,
     },
   };
@@ -740,7 +808,7 @@ export const createAskContext = (
         Math.min(excerptChars, budget)
       );
       budget -= body.length;
-      sections.push(`## ${doc.title} (${doc.route})${label}\n${body}`);
+      sections.push(`${excerptHeading(doc)}${label}\n${body}`);
     };
 
     if (current) {

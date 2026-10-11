@@ -1,0 +1,841 @@
+---
+// Create API docs without an OpenAPI spec: checked against the hand-written
+// API pages, components, includes, Markdown, and deployment docs, and against
+// the source on main (markdown/api-rail.ts, components/content/api-page.ts and
+// ApiPlayground.astro, the playground's operation-model.ts, request.ts, and
+// playground-client.ts, core/schema.ts, core/server-features.ts, and the api
+// proxy allowlist in astro/generate.ts). Ran: the sample API under Node 24,
+// with every request shown here sent to it with curl; the four MDX pages
+// through Blume's include and api-rail plugins (satteri) and the playground's
+// request builder, to confirm the collected fields, URLs, and samples; and the
+// config, meta.ts, and page frontmatter against core/schema.ts. Not yet run
+// end to end: no blume dev or build of the project, and the Try it panel
+// wasn't driven in a browser.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("api-documentation-without-openapi")}>
+  <p>
+    Yes. In Blume, an MDX page with an <code>api</code> line in its frontmatter
+    documents one endpoint with no spec at all. You describe the request with{" "}
+    <code>&lt;ParamField&gt;</code> components, and Blume builds what a
+    generated OpenAPI page gets from them: the method and path at the top, a
+    Try it panel that sends real requests, and request samples in cURL,
+    JavaScript, and Python.
+  </p>
+  <p>
+    By the end of this guide you have three hand-written endpoint pages for a
+    small messages API, a local copy of that API to test them against, and a
+    site ready to publish. The cost is upkeep: every field, type, and example
+    on these pages is something you keep in step with the API yourself.
+  </p>
+  <p>
+    If you have an OpenAPI spec,{" "}
+    <a href="/guides/openapi-documentation-website">generate your API docs from it</a>{" "}
+    instead, so the reference changes when the API does. Hand-written pages
+    suit a few endpoints, an API with no spec, or endpoints that read better
+    written by hand. For many endpoints that change often, a spec generated
+    from your code, for example{" "}
+    <a href="/guides/hono-zod-api-documentation">from Hono and Zod schemas</a>,
+    costs less to keep current.
+  </p>
+
+  <h2>What you maintain by hand</h2>
+  <p>
+    Without a spec, the page is the endpoint's only description:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">You write</th>
+        <th scope="col">In</th>
+        <th scope="col">Blume uses it for</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>The method and path</td>
+        <td><code>api</code> in the page's frontmatter</td>
+        <td>The header at the top of the page, and the request URL</td>
+      </tr>
+      <tr>
+        <td>The base URL</td>
+        <td><code>api.server</code> in <code>blume.config.ts</code></td>
+        <td>The start of every request URL</td>
+      </tr>
+      <tr>
+        <td>How requests authenticate</td>
+        <td><code>api.auth</code>, or <code>authMethod</code> on a page</td>
+        <td>The credential input in Try it, and the header in every sample</td>
+      </tr>
+      <tr>
+        <td>Each request field's name, location, type, and whether it's required</td>
+        <td><code>&lt;ParamField&gt;</code> attributes</td>
+        <td>
+          The field rows, the Try it inputs, the samples, and the body check
+          before Send
+        </td>
+      </tr>
+      <tr>
+        <td>Example values</td>
+        <td><code>placeholder</code> and <code>default</code> on each field</td>
+        <td>The values the samples and Try it start with</td>
+      </tr>
+      <tr>
+        <td>Descriptions</td>
+        <td>The text inside each field</td>
+        <td>The field rows on the page</td>
+      </tr>
+      <tr>
+        <td>Response fields and examples</td>
+        <td><code>&lt;ResponseField&gt;</code>, <code>&lt;ResponseExample&gt;</code></td>
+        <td>Shown as written</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Nothing on the page is checked against the running API: rename a field in
+    the API, and the page keeps the old name until you edit it. Some of what a
+    spec can say never reaches Try it. Descriptions, and any format or limit
+    you write in them, stay on the field rows, and an{" "}
+    <code>enum&lt;string&gt;</code> field is a text input, not a menu. Bodies
+    are always JSON, each page has one auth method, and response fields are
+    documentation only.
+  </p>
+  <p>
+    Mintlify uses the same frontmatter keys and components, so endpoint pages{" "}
+    <a href="/guides/migrate-from-mintlify">moved from Mintlify</a> carry over
+    as they are.
+  </p>
+
+  <h2>Run the sample API</h2>
+  <p>
+    The pages in this guide document a small Acme Messages API: send an email
+    or SMS from a template, look a message up, and list the templates. To test
+    the pages against something real, save this server as{" "}
+    <code>sample-api.mjs</code> in an empty folder. It uses only Node's
+    standard library, so there's nothing to install.
+  </p>
+  <CodeBlock
+    code={`import { randomUUID } from "node:crypto";
+import { createServer } from "node:http";
+
+const PORT = 3030;
+const API_KEY = "sk_test_acme";
+const DOCS_ORIGIN = "http://localhost:4321";
+
+const templates = [
+  { id: "welcome", name: "Welcome email", channel: "email" },
+  { id: "password-reset", name: "Password reset", channel: "email" },
+  { id: "login-code", name: "Login code", channel: "sms" },
+];
+const messages = new Map();
+const sentKeys = new Map();
+
+const reply = (res, status, body) => {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(body === undefined ? "" : JSON.stringify(body, null, 2));
+};
+
+const fail = (res, status, code, message) =>
+  reply(res, status, { error: { code, message } });
+
+const readJson = async (req) => {
+  let text = "";
+  for await (const chunk of req) {
+    text += chunk;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+};
+
+const sendMessage = async (req, res) => {
+  const body = await readJson(req);
+  if (!body || typeof body !== "object") {
+    return fail(res, 400, "invalid_json", "The body must be a JSON object.");
+  }
+  const { channel, to, template, variables = {} } = body;
+  if (channel !== "email" && channel !== "sms") {
+    return fail(res, 400, "invalid_channel", "channel must be email or sms.");
+  }
+  if (typeof to !== "string" || to === "") {
+    return fail(res, 400, "missing_to", "to is required.");
+  }
+  if (!templates.some((entry) => entry.id === template)) {
+    return fail(res, 400, "unknown_template", "No template has the ID " + template + ".");
+  }
+  const key = req.headers["idempotency-key"];
+  if (key && sentKeys.has(key)) {
+    return reply(res, 202, messages.get(sentKeys.get(key)));
+  }
+  const message = {
+    id: "msg_" + randomUUID().slice(0, 8),
+    status: "queued",
+    channel,
+    to,
+    template,
+    variables,
+    created_at: new Date().toISOString(),
+  };
+  messages.set(message.id, message);
+  if (key) {
+    sentKeys.set(key, message.id);
+  }
+  return reply(res, 202, message);
+};
+
+const server = createServer(async (req, res) => {
+  // Let the docs site's Try it panel call this API from the browser.
+  res.setHeader("Access-Control-Allow-Origin", DOCS_ORIGIN);
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Authorization, Content-Type, Idempotency-Key"
+  );
+  if (req.method === "OPTIONS") {
+    return reply(res, 204);
+  }
+  if (req.headers.authorization !== "Bearer " + API_KEY) {
+    return fail(res, 401, "unauthorized", "Send a valid API key as a bearer token.");
+  }
+
+  const url = new URL(req.url, "http://localhost");
+  if (req.method === "POST" && url.pathname === "/v1/messages") {
+    return sendMessage(req, res);
+  }
+  if (req.method === "GET" && url.pathname.startsWith("/v1/messages/")) {
+    const id = decodeURIComponent(url.pathname.slice("/v1/messages/".length));
+    const message = messages.get(id);
+    return message
+      ? reply(res, 200, message)
+      : fail(res, 404, "not_found", "No message has that ID.");
+  }
+  if (req.method === "GET" && url.pathname === "/v1/templates") {
+    const channel = url.searchParams.get("channel");
+    const limit = Number(url.searchParams.get("limit") ?? 20);
+    const data = templates
+      .filter((entry) => !channel || entry.channel === channel)
+      .slice(0, limit);
+    return reply(res, 200, { data });
+  }
+  return fail(res, 404, "not_found", "No such endpoint.");
+});
+
+server.listen(PORT, () => {
+  console.log("Acme sample API on http://localhost:" + PORT + "/v1");
+});`}
+    lang="js"
+    title="sample-api.mjs"
+  />
+  <p>Start it:</p>
+  <CodeBlock code="node sample-api.mjs" lang="bash" />
+  <p>Then check from a second terminal that it answers:</p>
+  <CodeBlock
+    code={`curl http://localhost:3030/v1/templates \\
+  -H "Authorization: Bearer sk_test_acme"`}
+    lang="bash"
+  />
+  <p>
+    You get the three templates back. Two details matter for the docs: it only
+    accepts the bearer token <code>sk_test_acme</code>, and its CORS headers
+    let a page on <code>http://localhost:4321</code>, where{" "}
+    <code>blume dev</code> serves your docs, call it from the browser.
+  </p>
+
+  <h2>Set up the docs project</h2>
+  <p>Scaffold a Blume project in a separate folder:</p>
+  <CodeBlock code="npx blume init acme-docs --template docs --yes" lang="bash" />
+  <p>
+    You get a <code>docs/</code> content folder, a <code>blume.config.ts</code>,
+    and <code>dev</code> and <code>build</code> scripts, with Blume installed.
+    Replace the config with this:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme Docs",
+  api: {
+    server: "https://api.acme.example/v1",
+    auth: { method: "bearer" },
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>api</code> holds what every endpoint page shares.{" "}
+    <code>server</code> is the base URL each page's path joins, and{" "}
+    <code>auth</code> says how requests authenticate. Point{" "}
+    <code>server</code> at your production API. The{" "}
+    <code>api.acme.example</code> host doesn't exist, so you'll aim Try it at
+    the local server when you test.
+  </p>
+  <p>
+    Keep the reference in its own folder. A <code>meta.ts</code> names the
+    sidebar group and orders its pages:
+  </p>
+  <CodeBlock
+    code={`import { defineMeta } from "blume";
+
+export default defineMeta({
+  title: "API reference",
+  pages: ["send-message", "get-message", "list-templates"],
+});`}
+    lang="ts"
+    title="docs/api/meta.ts"
+  />
+  <p>
+    Then add an overview page for what applies to every endpoint. As the
+    folder's index, it comes first in the group:
+  </p>
+  <CodeBlock
+    code={`---
+title: API overview
+description: The Acme Messages API's base URL, how to authenticate, and the shape of its errors.
+---
+
+The Acme Messages API sends transactional email and SMS from templates. Every
+endpoint lives under one base URL:
+
+\`\`\`text
+https://api.acme.example/v1
+\`\`\`
+
+## Authentication
+
+Send your API key as a bearer token in the \`Authorization\` header of every
+request:
+
+\`\`\`bash
+curl https://api.acme.example/v1/templates \\
+  -H "Authorization: Bearer $ACME_API_KEY"
+\`\`\`
+
+A missing or wrong key gets a \`401\` response.
+
+## Errors
+
+Every error has the same shape: a machine-readable \`code\` and a sentence for
+humans.
+
+\`\`\`json
+{ "error": { "code": "unauthorized", "message": "Send a valid API key as a bearer token." } }
+\`\`\``}
+    lang="mdx"
+    title="docs/api/index.mdx"
+  />
+
+  <h2>Write the first endpoint page</h2>
+  <p>
+    An endpoint page is an MDX file whose frontmatter has an <code>api</code>{" "}
+    line: an HTTP method, a space, and a path. Save this as{" "}
+    <code>docs/api/send-message.mdx</code>:
+  </p>
+  <CodeBlock
+    code={`---
+title: Send a message
+description: Queue an email or SMS from a template and get its message ID back right away.
+api: POST /messages
+---
+
+Queues an email or SMS for delivery and returns the message with a status of
+\`queued\`. Check whether it arrived with [Get a message](/api/get-message).
+
+## Request
+
+<ParamField header="Idempotency-Key" type="string">
+  A unique key for this send. Retrying with the same key returns the first
+  message instead of sending a second one.
+</ParamField>
+
+<ParamField body="channel" type="enum<string>" required placeholder="email">
+  How to deliver the message: \`email\` or \`sms\`.
+</ParamField>
+
+<ParamField body="to" type="string" required placeholder="ada@example.com">
+  An email address, or a phone number in E.164 format for \`sms\`.
+</ParamField>
+
+<ParamField body="template" type="string" required placeholder="welcome">
+  The ID of a template. [List templates](/api/list-templates) returns them.
+</ParamField>
+
+<ParamField body="variables" type="object">
+  Values for the template's variables.
+
+  <Expandable title="properties">
+    <ParamField body="name" type="string" placeholder="Ada">
+      The recipient's first name, used by the \`welcome\` template.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Response
+
+<include>./_message.mdx</include>
+
+<ResponseExample>
+
+\`\`\`json 202
+{
+  "id": "msg_f1e0f988",
+  "status": "queued",
+  "channel": "email",
+  "to": "ada@example.com",
+  "template": "welcome",
+  "variables": { "name": "Ada" },
+  "created_at": "2026-09-27T23:44:11.578Z"
+}
+\`\`\`
+
+\`\`\`json 400
+{
+  "error": {
+    "code": "unknown_template",
+    "message": "No template has the ID welcom."
+  }
+}
+\`\`\`
+
+</ResponseExample>`}
+    lang="mdx"
+    title="docs/api/send-message.mdx"
+  />
+  <p>Here's what each part does:</p>
+  <ul>
+    <li>
+      <strong>The <code>api</code> line</strong> puts <code>POST</code> and{" "}
+      <code>/messages</code> at the top of the page and gives it a Try it panel
+      and samples. The path joins <code>api.server</code>, so the request goes
+      to <code>https://api.acme.example/v1/messages</code>.
+    </li>
+    <li>
+      <strong>Each <code>&lt;ParamField&gt;</code></strong> says where it goes
+      with the attribute that holds its name: <code>path</code>,{" "}
+      <code>query</code>, <code>header</code>, or <code>body</code>. Its{" "}
+      <code>type</code> and <code>required</code> show on the field row and
+      shape the request.
+    </li>
+    <li>
+      <strong><code>placeholder</code></strong> is the example value the
+      samples and Try it start with. It doesn't appear on the page itself.
+    </li>
+    <li>
+      <strong>A field inside another field's <code>&lt;Expandable&gt;</code></strong>{" "}
+      becomes a property of that object, so <code>variables</code> is sent as{" "}
+      <code>{'{ "name": "Ada" }'}</code>.
+    </li>
+    <li>
+      <strong><code>&lt;ResponseExample&gt;</code></strong> shows one tab per
+      titled code fence. On a wide screen it pins to a column beside the page,
+      under the Try it panel and samples.
+    </li>
+    <li>
+      <strong>The samples</strong> are generated in cURL, JavaScript, and
+      Python. To show your SDK instead, add a{" "}
+      <code>&lt;RequestExample&gt;</code>, which replaces them.
+    </li>
+  </ul>
+
+  <h3>Share the response fields</h3>
+  <p>
+    Send a message and Get a message return the same message object, so write
+    its fields once. A file whose name starts with an underscore isn't a page,
+    and an <code>&lt;include&gt;</code> splices it in where you put it. Save
+    this as <code>docs/api/_message.mdx</code>:
+  </p>
+  <CodeBlock
+    code={`<ResponseField name="id" type="string" required>
+  The message ID. Pass it to [Get a message](/api/get-message).
+</ResponseField>
+
+<ResponseField name="status" type="enum<string>" required>
+  One of \`queued\`, \`sent\`, \`delivered\`, or \`failed\`.
+</ResponseField>
+
+<ResponseField name="channel" type="enum<string>" required>
+  \`email\` or \`sms\`.
+</ResponseField>
+
+<ResponseField name="to" type="string" required>
+  The recipient, as sent.
+</ResponseField>
+
+<ResponseField name="template" type="string" required>
+  The template the message was built from.
+</ResponseField>
+
+<ResponseField name="variables" type="object">
+  The variables sent with the message.
+</ResponseField>
+
+<ResponseField name="created_at" type="string" required>
+  When the message was queued, as an ISO 8601 timestamp.
+</ResponseField>`}
+    lang="mdx"
+    title="docs/api/_message.mdx"
+  />
+  <p>
+    When the message object gains a field, you add it here and both pages pick
+    it up.
+  </p>
+
+  <h2>Add the other two endpoints</h2>
+  <p>
+    Get a message takes the message ID in its path. Save this as{" "}
+    <code>docs/api/get-message.mdx</code>:
+  </p>
+  <CodeBlock
+    code={`---
+title: Get a message
+description: Look up a message by its ID to see whether it was queued, sent, delivered, or failed.
+api: GET /messages/{id}
+---
+
+Returns a message and its delivery status.
+
+## Request
+
+<ParamField path="id" type="string" required placeholder="msg_f1e0f988">
+  The message ID, from the response to [Send a message](/api/send-message).
+</ParamField>
+
+## Response
+
+<include>./_message.mdx</include>
+
+<ResponseExample>
+
+\`\`\`json 200
+{
+  "id": "msg_f1e0f988",
+  "status": "queued",
+  "channel": "email",
+  "to": "ada@example.com",
+  "template": "welcome",
+  "variables": { "name": "Ada" },
+  "created_at": "2026-09-27T23:44:11.578Z"
+}
+\`\`\`
+
+\`\`\`json 404
+{
+  "error": {
+    "code": "not_found",
+    "message": "No message has that ID."
+  }
+}
+\`\`\`
+
+</ResponseExample>`}
+    lang="mdx"
+    title="docs/api/get-message.mdx"
+  />
+  <p>
+    The <code>{"{id}"}</code> in the <code>api</code> line is filled from the
+    path field with the same name. List templates takes two optional query
+    fields. Save it as <code>docs/api/list-templates.mdx</code>:
+  </p>
+  <CodeBlock
+    code={`---
+title: List templates
+description: List the message templates in your workspace, optionally only the ones for email or for SMS.
+api: GET /templates
+---
+
+Returns the templates you can pass to [Send a message](/api/send-message).
+
+## Request
+
+<ParamField query="channel" type="enum<string>">
+  Only return templates for this channel: \`email\` or \`sms\`.
+</ParamField>
+
+<ParamField query="limit" type="integer" default={20}>
+  How many templates to return, up to 100.
+</ParamField>
+
+## Response
+
+<ResponseField name="data" type="object[]" required>
+  The templates.
+
+  <Expandable title="properties">
+    <ResponseField name="id" type="string" required>
+      The template ID, passed as \`template\` when you send a message.
+    </ResponseField>
+    <ResponseField name="name" type="string" required>
+      A readable name for the template.
+    </ResponseField>
+    <ResponseField name="channel" type="enum<string>" required>
+      The channel the template is written for: \`email\` or \`sms\`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseExample>
+
+\`\`\`json 200
+{
+  "data": [
+    { "id": "welcome", "name": "Welcome email", "channel": "email" },
+    { "id": "password-reset", "name": "Password reset", "channel": "email" }
+  ]
+}
+\`\`\`
+
+</ResponseExample>`}
+    lang="mdx"
+    title="docs/api/list-templates.mdx"
+  />
+  <p>
+    Optional query and header fields start blank in Try it and stay out of the
+    request until a reader fills them in, so the default of 20 is
+    documentation: it shows on the field row, and the API applies it.
+  </p>
+
+  <h2>How the request is built</h2>
+  <p>
+    Try it and the samples share one request builder, so apart from the
+    credential placeholder, a copied sample is what Send would do. Each kind of
+    field is sent like this:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Field</th>
+        <th scope="col">Sent as</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>path="id"</code></td>
+        <td>The value in place of <code>{"{id}"}</code>, URL-encoded</td>
+      </tr>
+      <tr>
+        <td><code>query="limit"</code></td>
+        <td>
+          <code>?limit=20</code>. A <code>string[]</code> field repeats its
+          name, like <code>?tag=a&amp;tag=b</code>.
+        </td>
+      </tr>
+      <tr>
+        <td><code>header="Idempotency-Key"</code></td>
+        <td>A request header with that name</td>
+      </tr>
+      <tr>
+        <td><code>body="channel"</code></td>
+        <td>
+          A property of one JSON object, sent with{" "}
+          <code>Content-Type: application/json</code>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    In the body, <code>integer</code>, <code>number</code>, and{" "}
+    <code>boolean</code> fields are JSON numbers and booleans, a{" "}
+    <code>string[]</code> field is an array, and any other type, like{" "}
+    <code>enum&lt;string&gt;</code>, is sent as a string. When every body field
+    is a plain value, Try it shows one input per field. A nested object or an
+    array, like <code>variables</code> here, switches it to a JSON editor for
+    the whole body. In the JSON editor, the panel checks the body against your
+    types and <code>required</code> flags and won't send until it passes, so
+    deleting <code>to</code> shows <code>body.to is required</code>.
+  </p>
+
+  <h3>Authentication</h3>
+  <p>
+    <code>api.auth</code> applies to every endpoint page. Try it shows one
+    credential input to match, and the samples show a placeholder in its place:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col"><code>method</code></th>
+        <th scope="col">Sent as</th>
+        <th scope="col">Sample placeholder</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>bearer</code></td>
+        <td><code>Authorization: Bearer</code> and the token</td>
+        <td><code>YOUR_TOKEN</code></td>
+      </tr>
+      <tr>
+        <td><code>basic</code></td>
+        <td>
+          <code>Authorization: Basic</code> and the base64 of{" "}
+          <code>username:password</code>
+        </td>
+        <td><code>YOUR_CREDENTIALS</code></td>
+      </tr>
+      <tr>
+        <td><code>key</code></td>
+        <td>
+          The key in an <code>x-api-key</code> header, or the header you name
+          in <code>api.auth.name</code>
+        </td>
+        <td><code>YOUR_API_KEY</code></td>
+      </tr>
+      <tr>
+        <td><code>none</code></td>
+        <td>No credential</td>
+        <td>None</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    A page overrides the site's method with <code>authMethod</code> in its
+    frontmatter, like <code>authMethod: none</code> on a public status
+    endpoint. A page can't name its own API key header, though:{" "}
+    <code>key</code> always uses <code>api.auth.name</code>. Try it leaves an
+    empty credential out of the request instead of sending the placeholder.
+  </p>
+  <p>
+    To show the samples without Try it, set <code>playground: simple</code> in
+    a page's frontmatter. It suits an endpoint readers shouldn't call from the
+    browser, like one that deletes data. <code>playground: none</code> drops
+    both and keeps the method, path, and examples.
+  </p>
+
+  <h2>Send a test request</h2>
+  <p>With the sample API still running, start the docs from the project folder:</p>
+  <CodeBlock code="npm run dev" lang="bash" />
+  <p>
+    Open <code>http://localhost:4321/api/send-message</code>, expand Try it,
+    and:
+  </p>
+  <ol>
+    <li>
+      In Custom base URL, enter <code>http://localhost:3030/v1</code>. It
+      overrides <code>api.server</code> for this panel, and the samples switch
+      to it as you type.
+    </li>
+    <li>In Bearer token, enter <code>sk_test_acme</code>.</li>
+    <li>Leave the body as the placeholders filled it, and select Send.</li>
+  </ol>
+  <p>
+    The panel shows a <code>202</code> with the new message's ID. Open Get a
+    message, enter the same base URL and token, paste the ID into the{" "}
+    <code>id</code> field, and send for a <code>200</code>. Then try the
+    failures your pages document: clear the token for a <code>401</code>, or
+    change <code>template</code> to one that doesn't exist for a{" "}
+    <code>400</code>. Any response that doesn't match its page is a page to
+    fix.
+  </p>
+  <p>
+    To run the same request from a terminal, tick Include my values in
+    samples. The cURL sample then carries your token as well as the local base
+    URL.
+  </p>
+
+  <h2>Publish</h2>
+  <p>
+    The live Try it panel sends requests from the reader's browser, so your
+    production API has to allow your docs origin with CORS headers, the way
+    the sample API allows <code>http://localhost:4321</code>. If it can't,
+    route requests through Blume's built-in proxy. The proxy is a server route,
+    so it needs a host adapter:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { vercel } from "blume/deploy";
+
+export default defineConfig({
+  title: "Acme Docs",
+  deployment: vercel(),
+  api: {
+    server: "https://api.acme.example/v1",
+    auth: { method: "bearer" },
+    playground: { proxy: true },
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The proxy only forwards to the origin of <code>api.server</code> and of any
+    full URL in an <code>api</code> line, so readers can't aim it at other
+    hosts. That also means it refuses a Custom base URL like your local server,
+    so test locally with the proxy off.{" "}
+    <a href="/guides/api-documentation-cors-errors">Fix CORS errors in an API documentation playground</a>{" "}
+    goes deeper on both, and{" "}
+    <a href="/guides/static-vs-server-documentation">static or server-rendered docs</a>{" "}
+    explains what a server build changes.
+  </p>
+  <p>Build the site and check its links:</p>
+  <CodeBlock
+    code={`npm run build
+npx blume validate`}
+    lang="bash"
+  />
+  <p>
+    <code>blume validate</code> checks the links between your endpoint pages,
+    and reports a broken link inside <code>_message.mdx</code> against that
+    file rather than the pages that include it. Each endpoint page also has a
+    Markdown copy at its URL plus <code>.md</code>, like{" "}
+    <code>/api/send-message.md</code>. It keeps the frontmatter, so agents see
+    the <code>api</code> line, and it lists every field with its type.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The build fails with BLUME_FRONTMATTER_INVALID on the api line</h3>
+  <p>
+    <code>api</code> takes an HTTP method, a space, and a path or full URL,
+    like <code>POST /messages</code> or{" "}
+    <code>GET https://api.acme.example/v1/templates</code>. The method must be
+    one of GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, or TRACE, in any case.
+    A method alone, or anything else before the path, fails the page's
+    frontmatter check.
+  </p>
+  <h3>The request URL still has a brace in it</h3>
+  <p>
+    A <code>{"{name}"}</code> in the path is only filled by a path field with
+    exactly that name. If the <code>api</code> line says{" "}
+    <code>{"{id}"}</code> and the field says <code>path="messageId"</code>,
+    the URL keeps <code>{"{id}"}</code> as written. Rename one to match the
+    other.
+  </p>
+  <h3>Try it sends the request to the docs site</h3>
+  <p>
+    With no <code>api.server</code>, a path in the <code>api</code> line stays
+    relative, so Send goes to your docs origin instead of the API. Set{" "}
+    <code>api.server</code>, or write a full URL in the <code>api</code> line.
+  </p>
+  <h3>A field is sent as "string", 0, or true</h3>
+  <p>
+    A required body field with no <code>placeholder</code> or{" "}
+    <code>default</code> still goes into the sample body, with a stand-in
+    value for its type. Optional fields with neither start empty and stay out
+    of the request. Give every required body field one of the two. A{" "}
+    <code>placeholder</code> is always text, so on a number field the samples
+    send <code>"5"</code>; use <code>default={"{5}"}</code> there instead.
+  </p>
+  <h3>Send says the browser blocked the request</h3>
+  <p>
+    That's CORS: the API answered, but not with headers that allow your docs
+    origin. The message names the fix for hand-written pages,{" "}
+    <code>api.playground.proxy</code> in <code>blume.config.ts</code>, as
+    shown in <a href="#publish">Publish</a>, and it needs a server build.
+    Locally, check that the sample API's <code>DOCS_ORIGIN</code> matches the
+    port <code>blume dev</code> printed.
+  </p>
+  <h3>The build fails with BLUME_SERVER_FEATURE_REQUIRED</h3>
+  <p>
+    <code>api.playground.proxy: true</code> needs server output, but the site
+    is a static build. Set <code>deployment</code> to a host adapter from{" "}
+    <code>blume/deploy</code>, or allow the docs origin in your API and turn
+    the proxy off. If Blume also warns that the proxy has no origin to allow,{" "}
+    <code>api.server</code> isn't an absolute URL, so the proxy would refuse
+    every request.
+  </p>
+
+</GuidePage>

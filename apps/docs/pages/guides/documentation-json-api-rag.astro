@@ -1,0 +1,667 @@
+---
+// Index docs for RAG from the JSON API: checked against the JSON API,
+// Markdown, llms.txt, MCP, assistant, configuration, and deployment docs, and
+// the API handlers and agent snapshot (ai/api/handlers.ts, ai/api/paths.ts,
+// ai/mcp/data.ts, ai/markdown.ts, astro/generate.ts, core/heading-markers.ts)
+// on main; Vercel's bypass header and Cloudflare Access's service token
+// headers against their own docs. Ran package.json, embed.mjs, ingest.mjs,
+// and ask.mjs as shown (Node 24, @huggingface/transformers 4.3.0) against
+// useblume.dev with LOCALE=en: a first sync, an unchanged re-run, a changed
+// and a removed page, an empty filter, a 404 index, and queries; all 472
+// section anchors it generated matched ids on the rendered pages. Review:
+// rechecked the index filter (hidden, fallback; search.exclude, noindex and
+// ai.exclude still listed), lastModified sources, search limits, and dev's
+// localhost site fallback in source, and probed pages.json, a page JSON, and
+// search on a local blume dev. Not yet run end to end against a fresh Blume
+// project or a vector database.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const ingestMjsCode = `import { createHash } from "node:crypto";
+import { readFile, rename, writeFile } from "node:fs/promises";
+import GithubSlugger from "github-slugger";
+import { embed, MODEL } from "./embed.mjs";
+
+const DOCS_URL = process.env.DOCS_URL ?? "https://docs.acme.example";
+const LOCALE = process.env.LOCALE; // "en" keeps one language; unset keeps all
+const STORE = "index.json";
+const MAX_CHARS = 1200;
+
+const FRONTMATTER = /^---\\r?\\n[\\s\\S]*?\\r?\\n---\\r?\\n/;
+const FENCE = /^\\s*(\`{3,}|~{3,})/;
+const HEADING = /^(#{1,6})\\s+(.+?)\\s*$/;
+const MARKER = /\\s*(?:\\\\?\\{#([^\\s}\\\\]+)\\\\?\\}|\\[(?:#([^\\s\\]]+)|!?toc)\\])\\s*$/;
+
+const root = new URL(DOCS_URL.endsWith("/") ? DOCS_URL : \`\${DOCS_URL}/\`);
+
+// The index links to the site's canonical origin. Fetch from DOCS_URL instead,
+// so the script also runs against a preview deployment or \`blume dev\`.
+const onHost = (link) => new URL(new URL(link, root).pathname, root);
+
+async function getJson(url) {
+  const res = await fetch(url, { headers: { accept: "application/json" } });
+  const type = res.headers.get("content-type") ?? "";
+  if (!(res.ok && type.includes("json"))) {
+    throw new Error(\`\${url} answered \${res.status} (\${type || "no type"})\`);
+  }
+  return res.json();
+}
+
+// A heading's text and anchor id, the way Blume slugs them: github-slugger
+// over the plain text, unless the heading pins its own id with [#id].
+function anchorFor(raw, slugger) {
+  let text = raw;
+  let pinned;
+  for (let m = MARKER.exec(text); m; m = MARKER.exec(text)) {
+    pinned ??= m[1] ?? m[2];
+    text = text.slice(0, m.index);
+  }
+  text = text.replace(/\\[([^\\]]*)\\]\\([^)]*\\)/g, "$1").replace(/[\`*]/g, "");
+  return { id: pinned ?? slugger.slug(text), text };
+}
+
+// Drop leading blank lines and trailing space, but keep indentation.
+const tidy = (text) => text.replace(/^\\s*\\n/, "").trimEnd();
+
+// Split a page into sections at its h1-h3 headings, then pack each section's
+// lines into chunks of at most MAX_CHARS. A code block is never cut in two.
+function chunkPage(markdown, pageUrl) {
+  const slugger = new GithubSlugger();
+  const sections = [{ heading: null, lines: [], url: pageUrl }];
+  let fence = null;
+  for (const line of markdown.split("\\n")) {
+    const marker = FENCE.exec(line)?.[1];
+    const heading = fence || marker ? null : HEADING.exec(line);
+    if (heading) {
+      const { id, text } = anchorFor(heading[2], slugger);
+      if (heading[1].length <= 3) {
+        const url = \`\${pageUrl}#\${id}\`;
+        sections.push({ heading: text, lines: [], url });
+        continue;
+      }
+    }
+    const { lines } = sections.at(-1);
+    if (fence) {
+      lines[lines.length - 1] += \`\\n\${line}\`;
+    } else {
+      lines.push(line);
+    }
+    if (marker && !fence) {
+      fence = marker;
+    } else if (marker?.startsWith(fence)) {
+      fence = null;
+    }
+  }
+
+  const chunks = [];
+  for (const { heading, lines, url } of sections) {
+    let text = "";
+    for (const line of lines) {
+      if (text.trim() && text.length + line.length > MAX_CHARS) {
+        chunks.push({ heading, text: tidy(text), url });
+        text = "";
+      }
+      text += \`\${line}\\n\`;
+    }
+    if (text.trim()) {
+      chunks.push({ heading, text: tidy(text), url });
+    }
+  }
+  return chunks;
+}
+
+async function loadStore() {
+  try {
+    const store = JSON.parse(await readFile(STORE, "utf8"));
+    // Vectors from another model can't be compared: start over.
+    return store.model === MODEL ? store : { model: MODEL, pages: {} };
+  } catch {
+    return { model: MODEL, pages: {} };
+  }
+}
+
+const store = await loadStore();
+const index = await getJson(new URL("api/docs/pages.json", root));
+
+// Current docs only (\`version\` is "" for them on a versioned site), in the
+// chosen language.
+const wanted = index.pages.filter(
+  (page) => !page.version && (!LOCALE || page.locale === LOCALE)
+);
+if (wanted.length === 0) {
+  throw new Error("No pages matched, so nothing was changed. Check LOCALE.");
+}
+
+const counts = { added: 0, failed: 0, removed: 0, unchanged: 0, updated: 0 };
+const seen = new Set();
+for (const summary of wanted) {
+  seen.add(summary.route);
+  try {
+    const page = await getJson(onHost(summary.json));
+    const url = new URL(page.url, root).href;
+    const hash = createHash("sha256")
+      .update(\`\${url}\\n\${page.markdown}\`)
+      .digest("hex");
+    const existing = store.pages[summary.route];
+    if (existing?.hash === hash) {
+      counts.unchanged += 1;
+      continue;
+    }
+    const chunks = chunkPage(page.markdown.replace(FRONTMATTER, ""), url);
+    const inputs = chunks.map(
+      (chunk) => \`\${page.title}\\n\${chunk.heading ?? ""}\\n\\n\${chunk.text}\`
+    );
+    const vectors = inputs.length > 0 ? await embed(inputs) : [];
+    store.pages[summary.route] = {
+      chunks: chunks.map((chunk, i) => ({ ...chunk, vector: vectors[i] })),
+      contentType: page.contentType,
+      description: page.description ?? null,
+      hash,
+      locale: page.locale,
+      title: page.title,
+      url,
+    };
+    counts[existing ? "updated" : "added"] += 1;
+  } catch (error) {
+    // Keep the last good copy of a page that failed to load this time.
+    counts.failed += 1;
+    console.warn(\`Skipped \${summary.route}: \${error.message}\`);
+  }
+}
+
+// A page that left the index was deleted, renamed, or hidden: drop it.
+for (const route of Object.keys(store.pages)) {
+  if (!seen.has(route)) {
+    delete store.pages[route];
+    counts.removed += 1;
+  }
+}
+
+await writeFile(\`\${STORE}.tmp\`, JSON.stringify(store));
+await rename(\`\${STORE}.tmp\`, STORE);
+console.log(counts);`;
+---
+
+<GuidePage guide={guideById("documentation-json-api-rag")}>
+  <p>
+    To index a Blume docs site for retrieval-augmented generation (RAG), skip
+    the HTML. Every Blume site publishes its pages as JSON:{" "}
+    <code>/api/docs/pages.json</code> lists every page with its route, URL,
+    title, and metadata, and{" "}
+    <code>/api/docs/pages/{"{route}"}.json</code> returns one page with its
+    Markdown. Fetch the index, pull each page, split its Markdown into chunks,
+    and store every chunk with the page's route and URL. The route is how you
+    update or remove the page later, and the URL is what your answers cite.
+  </p>
+  <p>
+    By the end of this guide you have two small Node scripts. One syncs a docs
+    site into a local vector index, embeds again only the pages that changed,
+    and drops pages that left the site. The other takes a question and returns
+    the best-matching sections as a prompt with numbered sources, each linked
+    to the exact section of the docs it came from.
+  </p>
+  <p>
+    Blume supplies the content, not the pipeline. It doesn't sync a vector
+    store or host a RAG backend for you, so the model, the store, and the
+    schedule are yours. If readers only need answers on the docs site, the
+    built-in{" "}
+    <a href="/guides/ai-assistant-for-documentation">assistant</a> already
+    retrieves from your pages. If coding agents need your docs,{" "}
+    <a href="/guides/mcp-server-for-documentation">add an MCP server</a>. For
+    a one-off paste into a model,{" "}
+    <a href="/docs/discoverability/llms-txt"><code>llms-full.txt</code></a>{" "}
+    holds the entire corpus in one file. Build your own index when the docs need to
+    sit beside other sources in a retrieval system you run, like a support bot
+    inside your product.
+  </p>
+
+  <h2>What Blume publishes</h2>
+  <p>
+    The <a href="/docs/discoverability/json-api">JSON API</a> is on by default
+    on every Blume site, with nothing to configure:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Endpoint</th>
+        <th scope="col">Returns</th>
+        <th scope="col">Served on</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>/api/docs/pages.json</code></td>
+        <td>
+          Every page's route, URL, title, description, content type, and
+          locale, with links to its Markdown and JSON
+        </td>
+        <td>Every build, as a file</td>
+      </tr>
+      <tr>
+        <td><code>/api/docs/pages/{"{route}"}.json</code></td>
+        <td>
+          One page: the same fields, plus <code>markdown</code>, the page's
+          agent-ready Markdown
+        </td>
+        <td>Every build, as a file</td>
+      </tr>
+      <tr>
+        <td><code>/api/docs/navigation.json</code></td>
+        <td>The header tabs and sidebar tree</td>
+        <td>Every build, as a file</td>
+      </tr>
+      <tr>
+        <td><code>/api/docs/search?q=</code></td>
+        <td>Full-text search hits</td>
+        <td>Server output only</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    In <code>{"{route}"}</code>, drop the route's leading slash; the home page
+    is <code>index</code>. The page's <code>markdown</code> is the same{" "}
+    <a href="/docs/discoverability/markdown">agent Markdown</a> the{" "}
+    <code>.md</code> URLs serve: includes spliced in, and components turned
+    into plain Markdown. It starts with the page's frontmatter block.
+  </p>
+  <Callout type="info">
+    The first three endpoints are prerendered, so a static site serves them as
+    plain files from any host. Search runs live, so it exists only on a{" "}
+    <a href="/docs/deployment#server-rendering">server build</a>. The sync in
+    this guide reads only the files, so it works against a static site.
+  </Callout>
+  <p>An entry in <code>pages.json</code> looks like this:</p>
+  <CodeBlock
+    code={`{
+  "contentType": "doc",
+  "json": "https://docs.acme.example/api/docs/pages/authentication.json",
+  "lastModified": null,
+  "locale": "en",
+  "markdownUrl": "https://docs.acme.example/authentication.md",
+  "route": "/authentication",
+  "title": "Authentication",
+  "url": "https://docs.acme.example/authentication",
+  "description": "Create, rotate, and revoke the API keys that authenticate requests."
+}`}
+    lang="json"
+  />
+  <p>Keep these fields with every chunk you store:</p>
+  <ul>
+    <li>
+      <strong><code>route</code></strong> is the page's stable key. Use it to
+      replace a page's chunks when the page changes, and to delete them when
+      it's gone.
+    </li>
+    <li>
+      <strong><code>url</code></strong> is the address to cite. It's absolute
+      once the site URL is known, and root-relative otherwise.
+    </li>
+    <li>
+      <strong><code>title</code></strong> and{" "}
+      <strong><code>description</code></strong> give each chunk context and
+      give your answers a readable label.
+    </li>
+    <li>
+      <strong><code>locale</code></strong>,{" "}
+      <strong><code>contentType</code></strong> (the page's frontmatter{" "}
+      <code>type</code>), and, where they appear,{" "}
+      <strong><code>version</code></strong> and{" "}
+      <strong><code>facets</code></strong> are filters. <code>version</code>{" "}
+      exists only on a versioned site, where it's an empty string for the
+      current docs.
+    </li>
+  </ul>
+  <p>
+    Don't use <code>lastModified</code> to decide what to index again. It's{" "}
+    <code>null</code> unless the site turns on{" "}
+    <a href="/docs/configuration#last-modified"><code>lastModified</code></a>{" "}
+    or the page sets a date in its frontmatter, and a git date follows the
+    page's own file, while its Markdown also changes when an include or
+    variable it uses changes. A hash of the Markdown catches both.
+  </p>
+
+  <h2>Set up the project</h2>
+  <p>
+    Create a folder for the retrieval code, outside your docs repository, and
+    give it a <code>package.json</code>:
+  </p>
+  <CodeBlock
+    code={`{
+  "name": "docs-rag",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "ingest": "node ingest.mjs",
+    "ask": "node ask.mjs"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.3.0",
+    "github-slugger": "2.0.0"
+  }
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <p>Install the two dependencies:</p>
+  <CodeBlock code="npm install" lang="bash" />
+  <p>
+    The embedding model runs on your machine through Transformers.js, so you
+    don't need an API key to follow along. Both scripts use it, so it gets its
+    own module:
+  </p>
+  <CodeBlock
+    code={`import { pipeline } from "@huggingface/transformers";
+
+// A small embedding model that runs on your machine, so no API key is needed.
+export const MODEL = "Xenova/all-MiniLM-L6-v2";
+
+let extractor;
+
+// Unit-length vectors, so a dot product is the cosine similarity.
+export async function embed(texts) {
+  extractor ??= await pipeline("feature-extraction", MODEL);
+  const output = await extractor(texts, { pooling: "mean", normalize: true });
+  return output.tolist();
+}`}
+    lang="js"
+    title="embed.mjs"
+  />
+  <p>
+    The first run downloads the model from the Hugging Face Hub and caches it
+    inside <code>node_modules</code>. To use a hosted embedding model instead,
+    rewrite <code>embed()</code> to call your provider and return one
+    unit-length array of numbers per text, since the query script scores with
+    a dot product. Change <code>MODEL</code> at the same time: vectors from
+    different models can't be compared, so a new name makes the next sync
+    embed every page again.
+  </p>
+
+  <h2>Write the ingestion script</h2>
+  <p>
+    The script fetches the index, keeps the pages you want, and compares each
+    one with what it stored last time. New and changed pages are chunked and
+    embedded, and pages that left the index are deleted. Save it as{" "}
+    <code>ingest.mjs</code>:
+  </p>
+  <CodeBlock
+    code={ingestMjsCode}
+    lang="js"
+    title="ingest.mjs"
+  />
+  <p>A few choices in it are worth knowing before you adapt it:</p>
+  <ul>
+    <li>
+      <strong>It fetches from the host you name.</strong> The links in the
+      index use the site's canonical origin. The script keeps each link's path
+      but requests it from <code>DOCS_URL</code>, so the same script syncs from
+      production, a preview, or a local <code>blume dev</code>, while the URLs
+      it stores stay canonical.
+    </li>
+    <li>
+      <strong>It keeps the current docs in one language.</strong> On a
+      translated site the index lists every locale, so set{" "}
+      <code>LOCALE</code> to index one language, or leave it unset to index
+      them all. Archived versions are skipped.
+    </li>
+    <li>
+      <strong>It chunks by section.</strong> It strips the frontmatter, splits
+      the Markdown at h1 to h3 headings, and packs each section into chunks of
+      up to 1,200 characters without cutting through a code block. A section's
+      chunks link to its heading's anchor. Blume slugs heading ids with
+      github-slugger, so the script uses the same package and honors ids
+      pinned with <code>[#id]</code> or <code>{"{#id}"}</code>.
+    </li>
+    <li>
+      <strong>It embeds only what changed.</strong> Each page's hash covers its
+      URL and Markdown, so an unchanged page is skipped without touching the
+      model.
+    </li>
+    <li>
+      <strong>It fails safe.</strong> A page that fails to load keeps its last
+      good copy, a filter that matches nothing stops the run before anything is
+      deleted, and the store is written to a temporary file and renamed, so a
+      crash never leaves half a file.
+    </li>
+  </ul>
+
+  <h2>Run the sync</h2>
+  <p>Point the script at your docs site and pick a language:</p>
+  <CodeBlock
+    code="DOCS_URL=https://docs.acme.example LOCALE=en npm run ingest"
+    lang="bash"
+  />
+  <p>
+    It writes <code>index.json</code> and prints how many pages it added,
+    updated, left unchanged, removed, and failed to load. Run it again and
+    every page comes back unchanged. If the site is served under a{" "}
+    <a href="/docs/deployment#subpath-deploys"><code>deployment.base</code></a>,
+    include it in <code>DOCS_URL</code>, like{" "}
+    <code>https://acme.example/docs</code>.
+  </p>
+  <p>
+    To try it before you deploy, run <code>npx blume dev</code> in your docs
+    project and sync with <code>DOCS_URL=http://localhost:4321</code>. The dev
+    server lists drafts too, so build the real index from a deployed site.
+  </p>
+  <p>
+    Run the sync after each docs deploy, or on a schedule. Every run fetches
+    each page's JSON, but only changed pages go through the model again, and
+    a page that was deleted, renamed, or hidden from the sidebar leaves the
+    store on the next run.
+  </p>
+
+  <h2>Query with source attribution</h2>
+  <p>
+    Retrieval is a similarity search over the stored chunks. This script
+    embeds a question with the same model, ranks every chunk, and turns the
+    top five into a prompt with numbered sources. Save it as{" "}
+    <code>ask.mjs</code>:
+  </p>
+  <CodeBlock
+    code={`import { readFile } from "node:fs/promises";
+import { embed, MODEL } from "./embed.mjs";
+
+const question = process.argv.slice(2).join(" ").trim();
+if (!question) {
+  console.error('Usage: node ask.mjs "How do I rotate an API key?"');
+  process.exit(1);
+}
+
+const store = JSON.parse(await readFile("index.json", "utf8"));
+if (store.model !== MODEL) {
+  throw new Error(\`index.json holds \${store.model} vectors: run ingest again.\`);
+}
+
+const [query] = await embed([question]);
+const dot = (a, b) => a.reduce((sum, value, i) => sum + value * b[i], 0);
+
+const hits = Object.values(store.pages)
+  .flatMap((page) =>
+    page.chunks.map((chunk) => ({
+      ...chunk,
+      page: page.title,
+      score: dot(query, chunk.vector),
+    }))
+  )
+  .sort((a, b) => b.score - a.score)
+  .slice(0, 5);
+
+// Ranked sources for you, on stderr.
+for (const [i, hit] of hits.entries()) {
+  console.error(\`[\${i + 1}] \${hit.score.toFixed(3)}  \${hit.url}\`);
+}
+
+// A grounded prompt for your model, on stdout. Each source keeps its title
+// and URL, so the answer can cite [1], [2] and link back to the docs.
+const sources = hits.map((hit, i) => {
+  const title = hit.heading ? \`\${hit.page}: \${hit.heading}\` : hit.page;
+  return \`[\${i + 1}] \${title}\\n\${hit.url}\\n\\n\${hit.text}\`;
+});
+console.log(\`Answer the question using only the numbered sources below.
+Cite each claim with its source number, like [1], and list the URLs you used.
+If the sources don't cover the question, say so.
+
+Question: \${question}
+
+\${sources.join("\\n\\n---\\n\\n")}\`);`}
+    lang="js"
+    title="ask.mjs"
+  />
+  <p>Ask it something your docs answer:</p>
+  <CodeBlock
+    code={`node ask.mjs "How do I rotate an API key?" > prompt.txt`}
+    lang="bash"
+  />
+  <p>
+    The ranked source URLs print to your terminal, and{" "}
+    <code>prompt.txt</code> holds the prompt. Each source carries the page
+    title, the section heading, and a URL that opens that section, so the
+    model can cite <code>[1]</code> and your app can turn those numbers into
+    links. Send the prompt to whichever model your app uses.
+  </p>
+
+  <h2>Move the store into a vector database</h2>
+  <p>
+    Scanning every chunk in memory keeps the example small, and{" "}
+    <code>index.json</code> stands in for a real store. For a large corpus,
+    or several apps sharing one index, move it into a vector database. The
+    sync logic carries over as long as every row keeps its page's route:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In the script</th>
+        <th scope="col">In a vector database</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>A page's entry, keyed by <code>route</code></td>
+        <td>Chunk rows with a <code>route</code> column or metadata field</td>
+      </tr>
+      <tr>
+        <td>A changed page</td>
+        <td>Delete the rows for its route, then insert its new chunks</td>
+      </tr>
+      <tr>
+        <td>A page that left the index</td>
+        <td>Delete the rows for its route</td>
+      </tr>
+      <tr>
+        <td>The page's <code>hash</code></td>
+        <td>A small table of routes and hashes, checked before embedding</td>
+      </tr>
+      <tr>
+        <td><code>model</code></td>
+        <td>One collection or table per embedding model</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Replacing a page's rows is simpler than updating chunks in place: an edit
+    can change how many chunks a page has, so there's no stable chunk to
+    update.
+  </p>
+  <p>
+    To have the docs site's own assistant panel answer from your backend, set{" "}
+    <a href="/docs/configuration/assistant#external-endpoint"
+      ><code>ai.assistant.endpoint</code></a
+    > to its URL. The panel posts each question there and shows the text your
+    endpoint streams back, while retrieval and citations stay yours.
+  </p>
+
+  <h2>Add keyword hits on a server build</h2>
+  <p>
+    Embeddings match paraphrases well, but can rank an exact term, like a
+    header name or an error code, below looser matches. On a{" "}
+    <a href="/docs/deployment#server-rendering">server build</a>, Blume's own
+    full-text search is live at <code>/api/docs/search</code>, and you can
+    blend its hits into your context:
+  </p>
+  <CodeBlock
+    code={`curl "https://docs.acme.example/api/docs/search?q=Idempotency-Key&locale=en&limit=3"`}
+    lang="bash"
+  />
+  <p>
+    It returns 8 hits by default and 20 at most, each with the same{" "}
+    <code>route</code> your store is keyed by:
+  </p>
+  <CodeBlock
+    code={`{
+  "count": 1,
+  "query": "Idempotency-Key",
+  "results": [
+    {
+      "contentType": "doc",
+      "excerpt": "Retry a request safely by sending the same Idempotency-Key header.",
+      "route": "/retries",
+      "title": "Retries and idempotency",
+      "url": "https://docs.acme.example/retries"
+    }
+  ]
+}`}
+    lang="json"
+  />
+  <p>
+    Look up those routes in your store and add their chunks to the prompt
+    beside the vector hits. A static build has no search endpoint, so there
+    the vector search is the whole retriever.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The sync stops on the page index</h3>
+  <p>
+    The script stops when <code>pages.json</code> answers with an error or
+    with anything that isn't JSON. Check these in order:
+  </p>
+  <ul>
+    <li>
+      The site sets <code>agents.api: false</code>, which publishes none of
+      the JSON API. Remove it and deploy again.
+    </li>
+    <li>
+      <code>DOCS_URL</code> is missing the site's <code>deployment.base</code>.
+      A <code>basePath</code> is different: it moves your pages, not the API,
+      which stays at <code>/api/docs/</code>.
+    </li>
+    <li>
+      The site is behind host protection, so the request gets a sign-in page.
+      Add the headers your host accepts from automated clients to{" "}
+      <code>getJson</code>: on Vercel, a Protection Bypass for Automation
+      secret in <code>x-vercel-protection-bypass</code>; behind Cloudflare
+      Access, a service token in <code>CF-Access-Client-Id</code> and{" "}
+      <code>CF-Access-Client-Secret</code>.
+    </li>
+  </ul>
+  <h3>Source URLs point at localhost or a preview</h3>
+  <p>
+    A page's <code>url</code> comes from the site URL the docs were built
+    with. <code>blume dev</code> falls back to its local address when none is
+    set, and Cloudflare Pages exposes only a per-deployment URL. Set{" "}
+    <a href="/docs/deployment#set-your-site-url"><code>deployment.site</code></a
+    > to your docs domain. Because the hash covers the URL, the next sync
+    embeds every page once more, with the corrected links.
+  </p>
+  <h3>A page is missing, or one you excluded is included</h3>
+  <p>
+    The index leaves out pages hidden from the sidebar (<code
+      >hidden: true</code
+    >), drafts in production builds, and the fallback copies a translated site
+    serves for untranslated pages. It still lists pages marked{" "}
+    <code>seo.noindex</code>, <code>search.exclude</code>, or{" "}
+    <code>ai.exclude</code>: those keep a page out of search engines, site
+    search, and <code>llms.txt</code> and your site's skill, not out of the
+    JSON API. To keep them
+    out of your store, skip their routes in the <code>wanted</code> filter.
+  </p>
+  <h3>The search endpoint returns 404</h3>
+  <p>
+    <code>/api/docs/search</code> exists only on server output. Use the vector
+    search alone, or move the site to a server build with a host adapter.{" "}
+    <a href="/guides/static-vs-server-documentation"
+      >Static or server-rendered documentation</a
+    > covers the trade-off.
+  </p>
+</GuidePage>

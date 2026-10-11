@@ -1,6 +1,12 @@
 ---
 import { EN_UI } from "../../core/i18n-ui.ts";
 import type { UIStrings } from "../../core/i18n-ui.ts";
+import {
+  isBuiltInMcpClient,
+  mcpClients,
+  mcpMenuRows,
+} from "../../core/mcp-clients.ts";
+import type { McpMenuEntry } from "../../core/mcp-clients.ts";
 import { NEW_TAB_ATTRS } from "../../core/new-tab.ts";
 import { openInChatProviders } from "../../core/open-in-chat.ts";
 import type { OpenInChatProvider } from "../../core/open-in-chat.ts";
@@ -18,6 +24,11 @@ interface Props {
   mcpUrl?: string | null;
   /** Display name of the MCP server (defaults to the site title). */
   mcpName?: string | null;
+  /**
+   * "Connect to MCP" clients to list after "Copy server URL", in order, with
+   * custom labels resolved; omitting the prop lists every built-in client.
+   */
+  mcpMenu?: readonly McpMenuEntry[];
   /**
    * "Open in chat" providers to list, in order; an empty list hides the
    * action, and omitting the prop shows every provider.
@@ -40,6 +51,7 @@ const {
   exportEpub,
   mcpUrl,
   mcpName,
+  mcpMenu,
   openInChat,
   strings,
   divider = true,
@@ -89,15 +101,31 @@ const providers = (openInChat ?? openInChatProviders).map((key) => ({
 // keep that separator only while a configured list preserves v0 first.
 const chatSeparator = providers.length > 1 && providers[0]?.key === "v0";
 
+// `agents.mcp.clients` picks and orders the clients after "Copy server URL",
+// with a rule between the commands to copy and the install links.
+const mcpRows = mcpMenuRows(mcpMenu ?? mcpClients);
+
+// The block renders once, for the right rail. Below `xl` the script moves it
+// into the mobile "On this page" dropdown, and the global styles below the
+// markup restyle it there from that container.
+
 // Top-level actions match the ToC links: flat, no background/padding, color
 // shift on hover only.
 const rowClass =
   "flex w-full items-center gap-2.5 py-1.5 text-start text-muted-foreground text-sm transition-colors hover:text-foreground";
 
 // Items inside the floating popovers keep menu affordances (padding + hover
-// background).
+// background). Their icons sit in a box one line tall, so a label that wraps
+// keeps them beside its first line.
 const menuRowClass =
-  "flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-start text-muted-foreground text-sm transition-colors hover:bg-muted hover:text-foreground";
+  "flex w-full items-start gap-2.5 rounded-md px-2 py-1.5 text-start text-muted-foreground text-sm transition-colors hover:bg-muted hover:text-foreground";
+const menuIconClass = "flex h-lh shrink-0 items-center";
+// At most out to the rail's edge, past its padding (`--blume-rail-inset`, set
+// by the layout), less 2px so the border never lands on the edge: the rail
+// scrolls, so it clips anything wider. Longer labels wrap instead. The minimum
+// width gives way to that cap in a narrower rail.
+const panelClass =
+  "absolute top-full end-0 z-50 mt-1 w-max [--blume-menu-room:calc(100%+var(--blume-rail-inset,1rem)-2px)] min-w-[min(14rem,var(--blume-menu-room))] max-w-(--blume-menu-room) wrap-anywhere rounded-blume border border-border bg-background p-1 shadow-xl";
 ---
 
 <div
@@ -130,33 +158,37 @@ const menuRowClass =
     <span data-blume-copy-label>{a.copyMarkdown}</span>
   </button>
 
+  {/* Each chevron turns with its own <details> only: in the mobile dropdown
+      these nest inside the outline's <details>, and a `group-open` variant
+      would match that open ancestor too. */}
   {
     (exportPdf || exportEpub) && (
-      <details class="group relative" data-blume-dropdown>
+      <details class="relative" data-blume-dropdown>
         <summary
           class={`${rowClass} cursor-pointer list-none [&::-webkit-details-marker]:hidden`}
         >
           <Icon name="download" size={16} />
           {a.export}
           <Icon
-            class="ms-auto transition-transform group-open:rotate-180"
+            class="ms-auto transition-transform [details[open]>summary_&]:rotate-180"
             name="chevron-down"
             size={14}
           />
         </summary>
-        <div
-          class="absolute top-full right-2 z-50 mt-1 w-max min-w-[14rem] max-w-[22rem] rounded-blume border border-border bg-background p-1 shadow-xl"
-          data-blume-menu
-        >
+        <div class={panelClass} data-blume-menu>
           {exportPdf && (
             <button class={menuRowClass} data-blume-export-pdf type="button">
-              <Icon name="file" size={16} />
+              <span class={menuIconClass}>
+                <Icon name="file" size={16} />
+              </span>
               <span class="flex-1">{a.exportPdf}</span>
             </button>
           )}
           {exportEpub && (
             <button class={menuRowClass} data-blume-export-epub type="button">
-              <Icon name="book-open" size={16} />
+              <span class={menuIconClass}>
+                <Icon name="book-open" size={16} />
+              </span>
               <span class="flex-1" data-blume-epub-label>
                 {a.exportEpub}
               </span>
@@ -169,22 +201,19 @@ const menuRowClass =
 
   {
     providers.length > 0 && (
-      <details class="group relative" data-blume-dropdown>
+      <details class="relative" data-blume-dropdown>
         <summary
           class={`${rowClass} cursor-pointer list-none [&::-webkit-details-marker]:hidden`}
         >
           <Icon name="external-link" size={16} />
           {a.openInChat}
           <Icon
-            class="ms-auto transition-transform group-open:rotate-180"
+            class="ms-auto transition-transform [details[open]>summary_&]:rotate-180"
             name="chevron-down"
             size={14}
           />
         </summary>
-        <div
-          class="absolute top-full right-2 z-50 mt-1 w-max min-w-[14rem] max-w-[22rem] rounded-blume border border-border bg-background p-1 shadow-xl"
-          data-blume-menu
-        >
+        <div class={panelClass} data-blume-menu>
           {providers.map((provider, index) => (
             <>
               {index === 1 && chatSeparator && (
@@ -195,9 +224,11 @@ const menuRowClass =
                 data-open-in={provider.key}
                 {...NEW_TAB_ATTRS}
               >
-                <span set:html={LOGOS[provider.key]} />
+                <span class={menuIconClass} set:html={LOGOS[provider.key]} />
                 <span class="flex-1">{provider.label}</span>
-                <Icon name="external-link" size={13} />
+                <span class={menuIconClass}>
+                  <Icon name="external-link" size={13} />
+                </span>
               </a>
             </>
           ))}
@@ -208,58 +239,133 @@ const menuRowClass =
 
   {
     mcpUrl && (
-      <details class="group relative" data-blume-dropdown>
+      <details class="relative" data-blume-dropdown>
         <summary
           class={`${rowClass} cursor-pointer list-none [&::-webkit-details-marker]:hidden`}
         >
           <Icon name="plug" size={16} />
           {a.connectMcp}
           <Icon
-            class="ms-auto transition-transform group-open:rotate-180"
+            class="ms-auto transition-transform [details[open]>summary_&]:rotate-180"
             name="chevron-down"
             size={14}
           />
         </summary>
-        <div
-          class="absolute top-full right-2 z-50 mt-1 w-max min-w-[14rem] max-w-[22rem] rounded-blume border border-border bg-background p-1 shadow-xl"
-          data-blume-menu
-        >
+        <div class={panelClass} data-blume-menu>
           <button class={menuRowClass} data-mcp-copy-url type="button">
-            <Icon name="link" size={16} />
+            <span class={menuIconClass}>
+              <Icon name="link" size={16} />
+            </span>
             <span class="flex-1" data-mcp-url-label>
               {a.copyServerUrl}
             </span>
           </button>
-          <button class={menuRowClass} data-mcp-copy-claude type="button">
-            <span set:html={LOGOS.claude} />
-            <span class="flex-1" data-mcp-claude-label>
-              {a.copyClaudeCode}
-            </span>
-          </button>
-          <button class={menuRowClass} data-mcp-copy-codex type="button">
-            <span set:html={LOGOS.codex} />
-            <span class="flex-1" data-mcp-codex-label>
-              {a.copyCodex}
-            </span>
-          </button>
-          <hr class="my-1 border-border border-t" />
-          <a class={menuRowClass} data-mcp-cursor rel="noreferrer">
-            <span set:html={LOGOS.cursor} />
-            <span class="flex-1">{a.addToCursor}</span>
-            <Icon name="external-link" size={13} />
-          </a>
-          <a class={menuRowClass} data-mcp-vscode rel="noreferrer">
-            <Icon name="code" size={16} />
-            <span class="flex-1">{a.addToVscode}</span>
-            <Icon name="external-link" size={13} />
-          </a>
+          {mcpRows.map(({ client, rule }) => (
+            <>
+              {rule && <hr class="my-1 border-border border-t" />}
+              {client === "claude-code" && (
+                <button
+                  class={menuRowClass}
+                  data-mcp-copy-claude
+                  type="button"
+                >
+                  <span class={menuIconClass} set:html={LOGOS.claude} />
+                  <span class="flex-1" data-mcp-claude-label>
+                    {a.copyClaudeCode}
+                  </span>
+                </button>
+              )}
+              {client === "codex" && (
+                <button class={menuRowClass} data-mcp-copy-codex type="button">
+                  <span class={menuIconClass} set:html={LOGOS.codex} />
+                  <span class="flex-1" data-mcp-codex-label>
+                    {a.copyCodex}
+                  </span>
+                </button>
+              )}
+              {client === "cursor" && (
+                <a class={menuRowClass} data-mcp-cursor rel="noreferrer">
+                  <span class={menuIconClass} set:html={LOGOS.cursor} />
+                  <span class="flex-1">{a.addToCursor}</span>
+                  <span class={menuIconClass}>
+                    <Icon name="external-link" size={13} />
+                  </span>
+                </a>
+              )}
+              {client === "vscode" && (
+                <a class={menuRowClass} data-mcp-vscode rel="noreferrer">
+                  <span class={menuIconClass}>
+                    <Icon name="code" size={16} />
+                  </span>
+                  <span class="flex-1">{a.addToVscode}</span>
+                  <span class={menuIconClass}>
+                    <Icon name="external-link" size={13} />
+                  </span>
+                </a>
+              )}
+              {!isBuiltInMcpClient(client) && (
+                <button
+                  class={menuRowClass}
+                  data-mcp-copy-command={client.command}
+                  type="button"
+                >
+                  <span class={menuIconClass}>
+                    <Icon name={client.icon ?? "terminal"} size={16} />
+                  </span>
+                  <span class="flex-1" data-mcp-command-label>
+                    {client.label}
+                  </span>
+                </button>
+              )}
+            </>
+          ))}
         </div>
       </details>
     )
   }
 </div>
 
+<style is:global>
+  /* Below `xl` the script moves the block into the mobile "On this page"
+     dropdown (see `placeActions`), where it reads like the outline above it:
+     under a rule, its rows padded like the outline's links, its groups
+     expanding in place under their row instead of floating, and without
+     Scroll to top, since that dropdown already sits at the top of the page. */
+  [data-blume-page-actions-mount] > [data-blume-page-actions] {
+    margin-top: 0;
+    border-top: 1px solid var(--blume-border);
+    padding: 0.5rem;
+  }
+  [data-blume-page-actions-mount] [data-blume-scroll-top] {
+    display: none;
+  }
+  [data-blume-page-actions-mount]
+    :is([data-blume-page-actions] > :is(a, button), summary) {
+    border-radius: 0.375rem;
+    padding-inline: 0.5rem;
+  }
+  [data-blume-page-actions-mount] [data-blume-menu] {
+    position: static;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    margin: 0;
+    margin-inline-start: 0.5rem;
+    border-width: 0;
+    border-inline-start-width: 1px;
+    border-radius: 0;
+    background-color: transparent;
+    padding: 0;
+    padding-inline-start: 0.5rem;
+    box-shadow: none;
+  }
+  [data-blume-page-actions-mount] [data-blume-menu] > :hover {
+    background-color: transparent;
+  }
+</style>
+
 <script>
+  import { mcpClientCommand } from "../../core/mcp-clients.ts";
   import { copyDeferredText, copyText, flashLabel } from "../copy-feedback.ts";
   import { installDropdownDismiss } from "../dropdown-dismiss.ts";
   import { mountBase } from "../islands/base-path.ts";
@@ -301,13 +407,42 @@ hr { border: 0; border-top: 1px solid #ddd; margin: 2em 0; }`;
   // for the EPUB: drop decorative SVGs and interactive controls (which render as
   // broken boxes in a reader), flatten Shiki's variable-colored code to plain
   // monospace text, and reveal panels the tab scripts would otherwise hide.
-  const buildEpubChapterHtml = (article: Element): string => {
+  // Links point at the site: a site-relative `/docs/page` means nothing inside
+  // the book, so every link but an in-page `#fragment` is made absolute.
+  const buildEpubChapterHtml = async (article: Element): Promise<string> => {
     const clone = article.cloneNode(true) as Element;
     for (const el of clone.querySelectorAll(
       "svg, button, select, script, style, link, noscript, template"
     )) {
       el.remove();
     }
+    for (const link of clone.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+      if (!link.getAttribute("href")?.startsWith("#")) {
+        link.setAttribute("href", link.href);
+      }
+    }
+    // The generator fetches every image into the book, and one it can't fetch
+    // (a cross-origin image served without CORS headers, a 404) fails the
+    // whole export. Try each first, and leave out the ones that fail.
+    await Promise.all(
+      [...clone.querySelectorAll("img")].map(async (img) => {
+        if (!img.getAttribute("src")) {
+          return;
+        }
+        try {
+          const response = await fetch(img.src);
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+        } catch (error) {
+          console.warn(
+            `[blume] EPUB export left out an image it couldn't fetch: ${img.src}`,
+            error
+          );
+          img.remove();
+        }
+      })
+    );
     for (const pre of clone.querySelectorAll("pre")) {
       const code = document.createElement("code");
       code.textContent = pre.textContent ?? "";
@@ -329,19 +464,26 @@ hr { border: 0; border-top: 1px solid #ddd; margin: 2em 0; }`;
       return;
     }
     const rect = summary.getBoundingClientRect();
+    // The rail scrolls, so it clips the menu at its own edges: its top sits
+    // under the sticky header, below the viewport's.
+    const room = details
+      .closest("[data-blume-toc]")
+      ?.getBoundingClientRect() ?? { bottom: window.innerHeight, top: 0 };
     const margin = 8;
     const flipUp =
-      rect.bottom + menu.offsetHeight + margin > window.innerHeight &&
-      rect.top - menu.offsetHeight - margin > 0;
+      rect.bottom + menu.offsetHeight + margin > room.bottom &&
+      rect.top - menu.offsetHeight - margin > room.top;
     menu.classList.toggle("top-full", !flipUp);
     menu.classList.toggle("mt-1", !flipUp);
     menu.classList.toggle("bottom-full", flipUp);
     menu.classList.toggle("mb-1", flipUp);
   };
 
+  // Only the rail's floating dropdowns need placing; a group open in place in
+  // the mobile dropdown is not one (see `placeActions`).
   const openDropdown = () =>
     document.querySelector<HTMLDetailsElement>(
-      "[data-blume-page-actions] details[open]"
+      "[data-blume-page-actions] details[data-blume-dropdown][open]"
     );
 
   // rAF-coalesced so a live resize drag re-reads layout once per frame, not
@@ -362,6 +504,32 @@ hr { border: 0; border-top: 1px solid #ddd; margin: 2em 0; }`;
   // dropdown behavior (also the header language switcher and nav selectors).
   installDropdownDismiss();
 
+  // The page renders its one actions block in the right rail, which only
+  // shows at `xl`. Below that the block moves into the mobile "On this page"
+  // dropdown, into the empty mount the layout passes it as children, and
+  // back at `xl`; a moved node keeps its listeners, so nothing rebinds. In
+  // the dropdown its groups expand in place, so they drop out of the shared
+  // light-dismiss and the placement here (both keyed on
+  // `data-blume-dropdown`) until the block is back in the rail, and the
+  // styles above restyle it from the mount.
+  const railQuery = window.matchMedia("(min-width: 80rem)");
+  const placeActions = () => {
+    const root = document.querySelector("[data-blume-page-actions]");
+    const rail = railQuery.matches;
+    const home = document.querySelector(
+      rail ? "[data-blume-toc]" : "[data-blume-page-actions-mount]"
+    );
+    if (!(root && home) || root.parentElement === home) {
+      return;
+    }
+    // A group left open would reopen as the other kind of menu.
+    for (const details of root.querySelectorAll("details")) {
+      details.open = false;
+      details.toggleAttribute("data-blume-dropdown", rail);
+    }
+    home.append(root);
+  };
+
   // Per-page setup, run on the initial load and again after every
   // client-router swap: the swap rebuilds the actions menu from
   // server-rendered markup, so every handler below binds to fresh elements.
@@ -372,7 +540,7 @@ hr { border: 0; border-top: 1px solid #ddd; margin: 2em 0; }`;
     }
     // The action dropdowns are native <details>. Make them behave like a proper
     // menu: only one open at a time, and flip above the trigger when opening
-    // downward would run past the viewport bottom.
+    // downward would run past the rail's bottom and there's room above.
     const dropdowns = [...root.querySelectorAll<HTMLDetailsElement>("details")];
     for (const details of dropdowns) {
       details.addEventListener("toggle", () => {
@@ -384,7 +552,9 @@ hr { border: 0; border-top: 1px solid #ddd; margin: 2em 0; }`;
             other.open = false;
           }
         }
-        placeMenu(details);
+        if (details.hasAttribute("data-blume-dropdown")) {
+          placeMenu(details);
+        }
       });
     }
 
@@ -474,6 +644,19 @@ hr { border: 0; border-top: 1px solid #ddd; margin: 2em 0; }`;
             root.querySelector("[data-mcp-codex-label]")
           )
         );
+      for (const button of root.querySelectorAll<HTMLElement>(
+        "[data-mcp-copy-command]"
+      )) {
+        button.addEventListener("click", () =>
+          copy(
+            mcpClientCommand(button.dataset.mcpCopyCommand ?? "", {
+              name: id,
+              url: mcpUrl,
+            }),
+            button.querySelector("[data-mcp-command-label]")
+          )
+        );
+      }
     }
 
     const label = root.querySelector("[data-blume-copy-label]");
@@ -537,10 +720,24 @@ hr { border: 0; border-top: 1px solid #ddd; margin: 2em 0; }`;
         const epubModule = await loadEpub();
         const epub = epubModule.default?.default ?? epubModule.default;
         // The article HTML already opens with the page's <h1>, so don't let the
-        // generator prepend a second chapter-title heading.
+        // generator prepend a second chapter-title heading. The book's
+        // language is the article's (a fallback page's content locale, else
+        // the page's), and the site is its author and publisher; left out,
+        // the generator says English and "anonymous". Its defaults are spread
+        // under these options, so an unknown value is omitted, not undefined.
+        const site = document
+          .querySelector('meta[property="og:site_name"]')
+          ?.getAttribute("content");
+        const lang = article.closest("[lang]")?.getAttribute("lang");
         const result = await epub(
-          { css: EPUB_STYLES, prependChapterTitles: false, title },
-          [{ content: buildEpubChapterHtml(article), title }]
+          {
+            css: EPUB_STYLES,
+            prependChapterTitles: false,
+            title,
+            ...(site && { author: site, publisher: site }),
+            ...(lang && { lang }),
+          },
+          [{ content: await buildEpubChapterHtml(article), title }]
         );
         const blob =
           result instanceof Blob
@@ -572,5 +769,8 @@ hr { border: 0; border-top: 1px solid #ddd; margin: 2em 0; }`;
   };
 
   initPageActions();
+  placeActions();
   document.addEventListener("astro:after-swap", initPageActions);
+  document.addEventListener("astro:after-swap", placeActions);
+  railQuery.addEventListener("change", placeActions);
 </script>

@@ -1,0 +1,44 @@
+---
+title: Variablen
+description: >-
+  Definiere einen Wert einmal in blume.config.ts und schreib {{name}} überall dort, wo eine Seite ihn braucht – im Fließtext, in Code, Links und Komponenten-Props.
+---
+
+Definiere einen Wert einmal und verwende ihn auf jeder Seite. Eine Versionsnummer, ein API-Host oder ein Produktname steht in `blume.config.ts`, und `{{name}}` liest den Wert auf einer Seite aus:
+
+```ts blume.config.ts lineNumbers
+export default defineConfig({
+  variables: {
+    version: "2.1.0",
+    "api-url": "https://api.example.com",
+  },
+});
+```
+
+```mdx docs/quickstart.mdx
+Install version {{version}}, then call {{api-url}}.
+
+## What's new in {{version}}
+
+<Card title="Release {{version}}" href="{{api-url}}/changelog" />
+```
+
+Referenzen funktionieren im Fließtext, in Überschriften, Links, Codeblöcken, Inline-Code und Komponenten-Props. Das gilt für `.md`- und `.mdx`-Seiten und für die Dateien, die sie [einbinden](/docs/content/includes). Leerzeichen innerhalb der geschweiften Klammern sind erlaubt (`{{ version }}`). Wenn du den Wert in der Config änderst, übernimmt ihn jede Seite beim nächsten Build.
+
+Namen dürfen Buchstaben, Ziffern, `_` und `-` enthalten. Werte sind einfacher Text in einer Zeile.
+
+## Wo sie gelten [#where-they-apply]
+
+Eine Variable wird ersetzt, bevor irgendetwas die Seite liest. Deshalb zeigen das gerenderte HTML, die [Suche](/docs/configuration/search), der [`.md`-Spiegel](/docs/discoverability/markdown) der Seite und `llms-full.txt` alle den Wert an.
+
+Das Frontmatter bleibt unverändert: Wenn in `title` oder `description` `{{version}}` steht, werden die geschweiften Klammern angezeigt.
+
+## Undefinierte Namen [#undefined-names]
+
+Ein `{{name}}` im Fließtext, der nicht definiert ist, löst den Build-Fehler `BLUME_UNDEFINED_VARIABLE` aus. Der Fehler nennt die betroffene Zeile, sodass ein Tippfehler nie bei deinen Leser\*innen ankommt. In einem Codeblock oder in Inline-Code bleibt ein undefinierter Name unverändert, weil dort oft Template-Beispiele wie `{{title}}` aus Handlebars stehen.
+
+Wenn du eine Referenz im Fließtext zeigen willst, ohne sie zu definieren, setz sie in Inline-Code: `` `{{name}}` ``.
+
+Eine Website ohne definierte Variablen ist davon nicht betroffen: `{{…}}` bleibt auf ihren `.md`-Seiten unverändert. In `.mdx` sind geschweifte Klammern ein JavaScript-Ausdruck. Deshalb schlägt eine Seite mit einem undefinierten `{{name}}` beim Rendern fehl. Der Fehler wird als [`BLUME_MDX_UNDEFINED_NAME`](/docs/content#markdown-and-mdx) mit der betroffenen Zeile gemeldet. Escape beide öffnenden Klammern (`\{\{name}}`) oder setz die Referenz in Inline-Code.
+
+Ein `{{…}}`, das mehr als einen Namen enthält, etwa `{{ site.title }}` oder `{{ page.url | relative_url }}` aus Liquid, ist nie eine Variable. Auf einer `.md`-Seite gibt Blume dafür die Warnung `BLUME_TEMPLATE_TAG` aus, weil die Seite es unverändert anzeigen würde.

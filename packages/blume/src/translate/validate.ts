@@ -7,7 +7,8 @@ import { TRANSLATABLE_KEY_PATHS } from "./prompts.ts";
  * structure: the final frontmatter is *reconstructed* from the source (clone
  * the source data, overlay only the translatable string values), so invented
  * keys are dropped, deleted keys are restored, and slugs/icons/orders/dates
- * stay source-verbatim by construction. Only then is the file written.
+ * stay source-verbatim by construction. The one source key left out is
+ * `seo.canonical` (see `dropCanonical`). Only then is the file written.
  */
 
 export type ValidationResult =
@@ -93,6 +94,26 @@ const setPath = (
   parent[path.at(-1) as string] = value;
 };
 
+/**
+ * Drop `seo.canonical`, and `seo` with it when nothing else is left. The
+ * source's canonical names a page in the source language (most often the
+ * source page itself); copied into a translation, it would canonicalize the
+ * translation to another language and take it out of search. Without it the
+ * translation gets Blume's default canonical: its own URL.
+ */
+const dropCanonical = (data: FrontmatterData): void => {
+  const { seo } = data;
+  if (!isKeyedObject(seo) || !("canonical" in seo)) {
+    return;
+  }
+  const { canonical: _canonical, ...rest } = seo;
+  if (Object.keys(rest).length > 0) {
+    data.seo = rest;
+  } else {
+    delete data.seo;
+  }
+};
+
 const ensureTrailingNewline = (text: string): string =>
   text.endsWith("\n") ? text : `${text}\n`;
 
@@ -132,8 +153,14 @@ export const validateTranslation = (
   let parsed: { content: string; data: FrontmatterData };
   try {
     parsed = matter(candidate);
-  } catch {
-    return { ok: false, reason: "frontmatter does not parse as YAML" };
+  } catch (error) {
+    // js-yaml's message leads with the problem and its line:column in the
+    // file, then a multi-line code frame; the first line is enough to act on.
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      reason: `frontmatter does not parse as YAML: ${message.replace(/\n[\s\S]*$/u, "")}`,
+    };
   }
 
   const rawBody = ensureTrailingNewline(parsed.content.replace(/^\r?\n/u, ""));
@@ -175,6 +202,7 @@ export const validateTranslation = (
       setPath(data, path, translated);
     }
   }
+  dropCanonical(data);
 
   return {
     ok: true,

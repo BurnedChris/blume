@@ -34,6 +34,7 @@ export const el: UIStringsOverride = {
     error: "Λυπούμαστε, κάτι πήγε στραβά.",
     explainCode: "Εξήγησε αυτόν τον κώδικα.",
     label: "Κάντε μια ερώτηση",
+    open: "Άνοιγμα βοηθού",
     placeholder: "Κάντε μια ερώτηση…",
     rateLimited: "Κάνατε πολλές ερωτήσεις. Δοκιμάστε ξανά σε λίγα λεπτά.",
     removeCode: "Αφαίρεση κώδικα",
@@ -49,6 +50,7 @@ export const el: UIStringsOverride = {
   banner: { dismiss: "Κλείσιμο ανακοίνωσης" },
   changelog: {
     description: "Ενημερώσεις προϊόντος και σημειώσεις έκδοσης.",
+    empty: "Δεν υπάρχουν ακόμη καταχωρίσεις στο ιστορικό αλλαγών.",
     title: "Ιστορικό αλλαγών",
   },
   consent: {
@@ -70,6 +72,7 @@ export const el: UIStringsOverride = {
     preview: "Προεπισκόπηση",
     prop: "Ιδιότητα",
     selectTab: "Επιλογή καρτέλας",
+    selectView: "Επιλογή προβολής",
     showLess: "Εμφάνιση λιγότερων",
     showMore: "Εμφάνιση περισσότερων",
     stars: "Αστέρια",

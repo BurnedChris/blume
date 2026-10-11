@@ -35,6 +35,23 @@ seo:
 ---
 ```
 
+## Eigene Tags [#your-own-tags]
+
+Für alles, wofür Blume keine Einstellung bietet, fügst du Tags unter `seo.metatags` hinzu, und jede Seite übernimmt sie — eigene Seiten und API-Referenzen eingeschlossen. Das eignet sich für Tokens zur Website-Verifizierung von Google, Bing oder Facebook, eine `theme-color` oder ein App-Banner:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  metatags: {
+    "google-site-verification": "abc123",
+    "msvalidate.01": "def456",
+    "theme-color": "#0b5fff",
+    "apple-itunes-app": "app-id=123456789",
+  },
+}
+```
+
+Jeder Schlüssel ist der Name des Tags und jeder Wert sein Inhalt. Open-Graph-Familien (`og:`, `fb:`, `article:` und die übrigen) werden mit `property` gerendert, so wie das Protokoll sie benennt, alles andere mit `name`. Die Tags, die Blume selbst schreibt und die oben auf dieser Seite aufgelistet sind, kannst du hier nicht setzen, damit eine Seite nie zwei Werte für ein Tag enthält. Der Build nennt dir jeweils die zuständige Einstellung: `og:image` kommt aus [`seo.og`](/docs/discoverability/open-graph) oder dem `seo.image` einer Seite, `robots` aus dem `seo.noindex` einer Seite.
+
 ## Überschreibungen pro Seite [#per-page-overrides]
 
 Überschreibe jedes der anderen Tags pro Seite mit `seo`-Frontmatter:

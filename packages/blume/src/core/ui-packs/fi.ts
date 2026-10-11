@@ -33,6 +33,7 @@ export const fi: UIStringsOverride = {
     error: "Pahoittelut, jokin meni pieleen.",
     explainCode: "Selitä tämä koodi.",
     label: "Kysy kysymys",
+    open: "Avaa avustaja",
     placeholder: "Kysy kysymys…",
     rateLimited:
       "Olet esittänyt paljon kysymyksiä. Yritä uudelleen muutaman minuutin kuluttua.",
@@ -48,6 +49,7 @@ export const fi: UIStringsOverride = {
   banner: { dismiss: "Sulje ilmoitus" },
   changelog: {
     description: "Tuotepäivitykset ja julkaisutiedot.",
+    empty: "Muutoslokissa ei ole vielä merkintöjä.",
     title: "Muutosloki",
   },
   consent: {
@@ -69,6 +71,7 @@ export const fi: UIStringsOverride = {
     preview: "Esikatselu",
     prop: "Ominaisuus",
     selectTab: "Valitse välilehti",
+    selectView: "Valitse näkymä",
     showLess: "Näytä vähemmän",
     showMore: "Näytä lisää",
     stars: "Tähdet",

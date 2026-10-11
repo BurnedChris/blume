@@ -1,0 +1,92 @@
+---
+title: Inhaltsquellen
+description: >-
+  Beziehe Dokumentation aus lokalen Dateien, einem entfernten Repository, einem CMS oder einem beliebigen eigenen Backend – und kombiniere mehrere Quellen zu einer static-first-Website, die zur Build-Zeit gelesen wird.
+sidebar:
+  hidden: true
+---
+
+Standardmäßig liest Blume einen Ordner mit `.md`/`.mdx`-Dateien. **Inhaltsquellen** ermöglichen es dir, Seiten von woanders zu beziehen – aus einem entfernten Repository, einem CMS oder einem beliebigen eigenen Backend – und mehrere Quellen zu einer einzigen Website zu kombinieren. Quellen werden zur Build-Zeit gelesen; Blume bleibt static-first.
+
+## Die Voreinstellung [#the-default]
+
+Ohne Konfiguration durchsucht Blume dein Inhaltsverzeichnis (standardmäßig `docs`) als eine Dateisystemquelle. Die Optionen `content.root`, `content.include` und `content.exclude` auf oberster Ebene sind eine Kurzschreibweise für genau diese eine Quelle – es muss nichts importiert und nichts geändert werden.
+
+```ts blume.config.ts
+import { defineConfig } from "blume";
+
+export default defineConfig({
+  content: { root: "docs" },
+});
+```
+
+## Adapter [#adapters]
+
+Jeder Eintrag in `content.sources` ist ein **Adapter**: eine aus `blume/sources` importierte Factory, die einen einfachen Deskriptor zurückgibt, den Blume zur Build-Zeit liest. Füge ein `sources`-Array hinzu, um Quellen zusammenzustellen. Wenn `sources` vorhanden ist, ersetzt es die implizite Voreinstellung – nimm daher einen `filesystem()`-Eintrag für deine lokale Dokumentation auf und verschiebe `root`, `include` oder `exclude` dorthin. Die Kurzschreibweise und `sources` lassen sich nicht kombinieren; Blume meldet, welches Feld du verschieben musst.
+
+```ts blume.config.ts
+import { defineConfig } from "blume";
+import { filesystem, mdxRemote } from "blume/sources";
+
+export default defineConfig({
+  content: {
+    sources: [
+      // Local docs at the site root
+      filesystem({ root: "docs" }),
+
+      // Remote MDX from a GitHub repo, mounted under /sdk
+      mdxRemote({
+        prefix: "sdk",
+        github: { owner: "acme", repo: "sdk", ref: "main", path: "docs" },
+      }),
+    ],
+  },
+});
+```
+
+Neben `filesystem()` hat jeder eingebaute Adapter eine eigene Seite, und [`custom()`](/docs/content/sources/custom) bindet jedes andere Backend ein:
+
+| Adapter | Liest | Laufzeitabhängigkeit | Umgebungsvariable |
+| --- | --- | --- | --- |
+| [`obsidian()`](/docs/content/sources/obsidian) | Einen Obsidian-Vault, direkt an Ort und Stelle | — | — |
+| [`mdxRemote()`](/docs/content/sources/remote-mdx) | `.md`/`.mdx` aus einem GitHub-Repository oder von einer Raw-URL | — | `GITHUB_TOKEN` (private Repositorys) |
+| [`githubReleases()`](/docs/content/sources/github-releases) | Die Releases eines Repositorys, als Changelog-Einträge | — | `GITHUB_TOKEN` (private Repositorys) |
+| [`sanity()`](/docs/content/sources/sanity) | Eine GROQ-Abfrage über ein Sanity-Dataset | `@sanity/client` | `SANITY_TOKEN` (private Datasets) |
+| [`notion()`](/docs/content/sources/notion) | Eine Notion-Datenbank | `@notionhq/client` | `NOTION_TOKEN` |
+| [`contentful()`](/docs/content/sources/contentful) | Einen einzelnen Contentful-Inhaltstyp | — | `CONTENTFUL_ACCESS_TOKEN` |
+| [`payload()`](/docs/content/sources/payload) | Eine Payload-Collection | — | `PAYLOAD_API_KEY` |
+| [`strapi()`](/docs/content/sources/strapi) | Einen Strapi-Inhaltstyp | — | `STRAPI_API_TOKEN` |
+| [`custom()`](/docs/content/sources/custom) | Jede `ContentSource`, die du implementierst | — | — |
+
+Jeder Adapter, der ein Optionsobjekt entgegennimmt, akzeptiert zwei gemeinsame Optionen:
+
+- **`prefix`** legt die Routen der Quelle in einen eigenen Namensraum unter `/<prefix>/…`; das Präfix wird außerdem zum Namen der Quelle in Diagnosemeldungen und zu ihrem Cache-Verzeichnis. Wenn zwei Quellen dieselbe Route auflösen, meldet Blume den Build-Fehler `BLUME_DUPLICATE_ROUTE` – gib jeder Quelle ein eigenes `prefix`.
+- **`pollInterval`** (in Sekunden) lässt eine entfernte Quelle in der Entwicklung in diesem Intervall erneut abrufen und lädt nur dann neu, wenn sich der Inhalt tatsächlich geändert hat. Lass die Option ungesetzt, um einmal abzurufen und den Inhalt für die Sitzung einzufrieren. Lokale Quellen (`filesystem()`, `obsidian()`) beobachten stattdessen das Dateisystem und ignorieren die Option.
+
+Der Deskriptor eines Adapters deklariert außerdem das benötigte SDK und die Umgebungsvariablen, die er liest. Dadurch deklariert das generierte Projekt dieses Paket, `blume dev`, `blume build` und `blume doctor` warnen, wenn eine Variable nicht gesetzt ist, und `blume doctor` listet die konfigurierten Quellen auf. Die Warnung erscheint, bevor eine Quelle abgerufen wird, sodass sie nicht verloren geht, wenn der Abruf anschließend fehlschlägt. `notion()` und `contentful()` können ohne ihr Token nichts lesen; ist es nicht gesetzt, brechen sie daher vor ihrer ersten Anfrage mit dem Fehler `BLUME_MISSING_SECRET` ab, und eine Quelle, deren SDK nicht installiert ist, bricht auf dieselbe Weise mit `BLUME_SOURCE_SDK_MISSING` ab; in beiden Fällen wird stattdessen der zwischengespeicherte Snapshot ausgeliefert, sofern einer vorhanden ist. Optionen werden beim Laden der Konfiguration validiert: Eine fehlende Pflichtoption, ein unbekannter Schlüssel oder ein übrig gebliebenes `{ type: "…" }`-Objekt aus 1.x schlägt mit einer Meldung fehl, die die Lösung nennt.
+
+Eine einzelne `filesystem()`-Quelle verankert die generierte Docs-Collection in ihrem eigenen Verzeichnis. Mehrere Dateisystemquellen müssen sich ein Wurzelverzeichnis teilen und es mit `include`-Globs aufteilen – eine zweite Quelle mit einem anderen Wurzelverzeichnis wird als `BLUME_ENTRY_ID_MISMATCH` gemeldet, damit ihre Seiten nicht stillschweigend auf einer 404 landen.
+
+## Caching und Offline-Builds [#caching-and-offline-builds]
+
+Jede entfernte Quelle hält einen Snapshot unter `.blume/cache/<source>/` vor. Wenn ein Abruf fehlschlägt – eine Netzwerkstörung oder ein CMS-Ausfall –, liefert Blume den letzten funktionierenden Snapshot mit einer Warnung aus, anstatt den Build fehlschlagen zu lassen. Vorschau- und veröffentlichte Inhalte erhalten getrennte Snapshots, ebenso jede Kombination von Quelloptionen, sodass ein Build niemals auf Entwürfe zurückfällt, die unter `--preview` abgerufen wurden, und das Bearbeiten von `query` oder `fields` einer Quelle einen frischen Abruf auslöst. Eine [`custom()`](/docs/content/sources/custom)-Quelle ist die Ausnahme: Ihr Snapshot wird nur pro Preview-Modus vorgehalten, führe daher nach dem Bearbeiten ihrer Optionen `blume sync` aus. Der Cache liegt innerhalb von `.blume/` und wird neu erzeugt, niemals eingecheckt.
+
+In der Entwicklung wird eine entfernte Quelle aus ihrem Snapshot ausgeliefert, wenn sie einen hat, sodass ein Neustart des Dev-Servers sie nicht erneut abruft. Führe `blume sync` aus, um die neuesten Inhalte zu holen (ein laufender Dev-Server lädt per Hot-Reload neu), oder `blume sync --force`, um zuerst die Snapshots zu verwerfen. Lokale Dateisystemquellen laden wie gewohnt per Hot-Reload neu. Um eine entfernte Quelle stattdessen auf Änderungen abzufragen, setze bei ihr die gemeinsame Option `pollInterval` (in Sekunden) – der Dev-Server ruft in diesem Intervall erneut ab und lädt nur dann neu, wenn sich der Inhalt tatsächlich geändert hat. Lass die Option ungesetzt, um die API während der Arbeit nicht zu belasten.
+
+## Preview und Sync [#preview-and-sync]
+
+Zwei Flags steuern, wie entfernte Inhalte abgerufen werden und was enthalten ist:
+
+- **`--preview`** bei `blume dev` oder `blume build` rendert Entwürfe und lädt unveröffentlichte CMS-Inhalte – Sanity wechselt in seine `previewDrafts`-Perspektive, Contentful liest über die Preview API, und Payload und Strapi fordern Entwürfe an. Notion liest immer jede Seite und stellt diejenigen, deren `Status` nicht veröffentlicht ist, als Entwürfe bereit, sodass `blume dev` sie mit oder ohne das Flag anzeigt und `blume build --preview` sie rendert. Produktions-Builds ohne das Flag schließen Entwürfe wie gewohnt aus, sodass ein Preview-Build eine sichere Möglichkeit ist, unveröffentlichte Arbeit vor der Auslieferung zu prüfen.
+- **`blume sync`** ruft jede entfernte Quelle erneut ab und generiert die Runtime neu. Die Entwicklung ist cache-first – eine entfernte Quelle wird einmal abgerufen und beim Neustart aus `.blume/cache` ausgeliefert (schnell und offline-tolerant), daher ist `blume sync` der Weg, die neuesten CMS-Inhalte zu holen, ohne den Dev-Server neu zu starten (ein laufender Server lädt per Hot-Reload neu). Ergänze `--force`, um zuerst den Cache zu verwerfen, oder setze `pollInterval` an einer Quelle, um automatisch zu aktualisieren.
+
+```sh
+blume dev --preview      # author workflow: see drafts live
+blume build --preview    # render a full preview build
+blume sync               # refresh remote content now
+blume sync --force       # ...ignoring any cached snapshot
+```
+
+## Rendering und Maskierung [#rendering-and-escaping]
+
+Eine Quelle normalisiert ihre native Form (Portable Text, Notion-Blöcke, entferntes HTML) zu Markdown-/MDX-Text, sodass dieselben Komponenten und Markdown-Funktionen gelten, ganz gleich, woher eine Seite stammt. Die eingebauten Adapter maskieren Rich Text beim Überführen, sodass das, was jemand im CMS getippt hat – ein `{`, ein `<b>`, ein Absatz, der mit `import` beginnt, oder `&copy;` –, genau so gerendert wird, wie es geschrieben wurde. Links behalten nur `http(s)`-, `mailto:`-, `tel:`- und relative Ziele; jedes andere Schema (`javascript:`, `data:`) wird als Linktext gerendert, und SVG-Bilder, die eine Quelle herunterlädt, werden in einer Sandbox ausgeliefert. Release Notes aus `githubReleases()` und Dateien aus `mdxRemote()` werden wie deine eigenen Inhalte behandelt: Ihr rohes HTML wird genau so gerendert, wie es geschrieben ist, richte sie daher nur auf Repositorys, denen du vertraust.

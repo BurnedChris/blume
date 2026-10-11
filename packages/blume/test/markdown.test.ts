@@ -67,11 +67,12 @@ type MetaPreNode = Parameters<
 /** Run the code-meta transformer over a fence's meta and return the <pre> attrs. */
 const metaAttrs = (
   raw?: string,
-  source?: string
+  source?: string,
+  lang?: string
 ): MetaPreNode["properties"] => {
   const node: MetaPreNode = { properties: {} };
   codeTitleTransformer().pre.call(
-    { options: { meta: { __raw: raw } }, source },
+    { options: { lang, meta: { __raw: raw } }, source },
     node
   );
   return node.properties;
@@ -252,8 +253,52 @@ describe(lineCount, () => {
 });
 
 describe(codeTitleTransformer, () => {
-  it("promotes the first bare token to a title", () => {
+  it("promotes a bare token to a title", () => {
     expect(metaAttrs("blume.config.ts").dataTitle).toBe("blume.config.ts");
+  });
+
+  it("keeps every bare word of a multi-word title", () => {
+    // `javascript I am a tab` used to title the block "I".
+    expect(metaAttrs("I am a tab").dataTitle).toBe("I am a tab");
+    // Keywords, ranges, and attrs around the words stay out of the title.
+    const attrs = metaAttrs('{2} Install  the client lineNumbers icon="x"');
+    expect(attrs.dataTitle).toBe("Install the client");
+    expect(attrs.dataLineNumbers).toBeTruthy();
+  });
+
+  it("drops the brackets around a bracketed title", () => {
+    // ```ts [file.ts], the Docus and VitePress code-group spelling.
+    expect(metaAttrs("[file.ts]").dataTitle).toBe("file.ts");
+    expect(metaAttrs("[my file.ts] {2}").dataTitle).toBe("my file.ts");
+    // Only one pair around the whole title is a wrapper.
+    expect(metaAttrs("[a] [b]").dataTitle).toBe("[a] [b]");
+    expect(metaAttrs("[]").dataTitle).toBe("[]");
+    expect(metaAttrs('title="[file.ts]"').dataTitle).toBe("[file.ts]");
+  });
+
+  it("keeps other tools' keywords out of the title", () => {
+    // Mintlify's `lines`, on any fence.
+    expect(metaAttrs("app.py lines", undefined, "py").dataTitle).toBe("app.py");
+    // Docusaurus' `showLineNumbers` (with or without a start line) and Fern's
+    // `wordWrap`, on any fence.
+    expect(
+      metaAttrs("app.js showLineNumbers wordWrap", undefined, "js").dataTitle
+    ).toBe("app.js");
+    expect(
+      metaAttrs("showLineNumbers{3}", undefined, "js").dataTitle
+    ).toBeUndefined();
+    // rustdoc's and mdBook's, on a Rust fence only.
+    expect(
+      metaAttrs(
+        "main.rs ignore no_run should_panic compile_fail edition2021 noplayground editable",
+        undefined,
+        "rust"
+      ).dataTitle
+    ).toBe("main.rs");
+    expect(metaAttrs("ignore", undefined, "rs").dataTitle).toBeUndefined();
+    expect(metaAttrs("Files to ignore", undefined, "sh").dataTitle).toBe(
+      "Files to ignore"
+    );
   });
 
   it("reads an explicit title attribute", () => {
@@ -355,12 +400,13 @@ describe(blumeShikiTransformers, () => {
     const names = blumeShikiTransformers().map(
       (transformer) => transformer.name ?? ""
     );
-    expect(names).toHaveLength(7);
+    expect(names).toHaveLength(8);
     // Upstream Shiki transformers (notation + meta-highlight range) run first.
     expect(names).toContain("@shikijs/transformers:notation-highlight");
     expect(names).toContain("@shikijs/transformers:notation-diff");
     expect(names).toContain("@shikijs/transformers:notation-highlight-word");
     expect(names).toContain("@shikijs/transformers:notation-focus");
+    expect(names).toContain("@shikijs/transformers:notation-error-level");
     expect(names).toContain("@shikijs/transformers:meta-highlight");
     // Blume's own transformers: the icon, then the fence-meta reader last.
     expect(names).toContain("blume:language-icon");
@@ -371,7 +417,7 @@ describe(blumeShikiTransformers, () => {
     const names = blumeShikiTransformers({ icons: false }).map(
       (transformer) => transformer.name ?? ""
     );
-    expect(names).toHaveLength(6);
+    expect(names).toHaveLength(7);
     expect(names).not.toContain("blume:language-icon");
     expect(names.at(-1)).toBe("blume:code-meta");
   });
@@ -583,7 +629,51 @@ describe("directiveToCalloutPlugin", () => {
       directiveToCalloutPlugin().containerDirective(node, ctx)
     ) as ReturnType<typeof jsxFlowElement>;
     const title = result.attributes.find((a) => a.name === "title");
-    expect(title?.value).toBe("Read this now");
+    // The formatting travels as Markdown, which `<Callout>` renders.
+    expect(title?.value).toBe("Read **this** now");
+  });
+
+  it("writes every kind of [label] phrasing back as Markdown", () => {
+    const space = { type: "text", value: " " };
+    const label = {
+      children: [
+        { children: [{ type: "text", value: "em" }], type: "emphasis" },
+        space,
+        { children: [{ type: "text", value: "gone" }], type: "delete" },
+        space,
+        { type: "inlineCode", value: "a`b" },
+        space,
+        { type: "inlineCode", value: "`tick" },
+        space,
+        { type: "inlineCode", value: " pad " },
+        space,
+        {
+          children: [{ type: "text", value: "docs" }],
+          type: "link",
+          url: "/a b<c>",
+        },
+        { alt: "logo", type: "image", url: "/l.png" },
+        space,
+        { type: "html", value: "<kbd>" },
+        { type: "text", value: " snake_case *star* [x] \\ ~" },
+      ],
+      data: { directiveLabel: true },
+      type: "paragraph",
+    };
+    // SAFETY: the `note` directive maps onto a Callout, so the captured
+    // replacement is a `jsxFlowElement` result carrying its attributes.
+    const result = captureReplacement((ctx) =>
+      directiveToCalloutPlugin().containerDirective(
+        { children: [label, body], name: "note", type: "containerDirective" },
+        ctx
+      )
+    ) as ReturnType<typeof jsxFlowElement>;
+    expect(result.attributes.find((a) => a.name === "title")?.value).toBe(
+      [
+        "*em* ~~gone~~ ``a`b`` `` `tick `` `  pad  ` [docs](</a b%3Cc%3E>)",
+        String.raw`\<kbd> snake\_case \*star\* \[x\] \\ \~`,
+      ].join(" ")
+    );
   });
 
   it("keeps a non-callout directive's body between its literal fences", () => {
@@ -681,6 +771,9 @@ const tabs = (
   );
 
 describe("ts2jsPlugin", () => {
+  // The first case pays the plugin's lazy `require("sucrase")`, which usually
+  // takes ~150ms on the Windows runner but has spiked past Bun's 5s default,
+  // so it gets an explicit timeout.
   it("expands a marked ts fence into TypeScript/JavaScript tabs", () => {
     const result = ts2js({
       lang: "ts",
@@ -693,7 +786,7 @@ describe("ts2jsPlugin", () => {
         { lang: "js", meta: null, value: 'const greeting = "hi";' }
       )
     );
-  });
+  }, 30_000);
 
   it("preserves formatting, JSX, and comments; elides type-only imports", () => {
     const value = [
@@ -1052,29 +1145,29 @@ interface TestFrontmatter {
   __blumeTocHidden?: string[];
 }
 
+/** A hast context whose `setProperty` mutates the node so tests can assert. */
+const makeCtx = (): AnchorContext => ({
+  data: { astro: { frontmatter: {} } },
+  setProperty(node, key, value) {
+    node.properties = { ...node.properties, [key]: value };
+  },
+  textContent: textOf,
+});
+
+/** A heading node with text (or element) children. */
+const heading = (
+  tagName: string,
+  ...children: (AnchorNode | string)[]
+): AnchorNode & { properties: NonNullable<AnchorNode["properties"]> } => ({
+  children: children.map((child) =>
+    isString(child) ? { type: "text", value: child } : child
+  ),
+  properties: {},
+  tagName,
+  type: "element",
+});
+
 describe("headingAnchorPlugin", () => {
-  /** A hast context whose `setProperty` mutates the node so tests can assert. */
-  const makeCtx = (): AnchorContext => ({
-    data: { astro: { frontmatter: {} } },
-    setProperty(node, key, value) {
-      node.properties = { ...node.properties, [key]: value };
-    },
-    textContent: textOf,
-  });
-
-  /** A heading node with text (or element) children. */
-  const heading = (
-    tagName: string,
-    ...children: (AnchorNode | string)[]
-  ): AnchorNode & { properties: NonNullable<AnchorNode["properties"]> } => ({
-    children: children.map((child) =>
-      isString(child) ? { type: "text", value: child } : child
-    ),
-    properties: {},
-    tagName,
-    type: "element",
-  });
-
   it("wraps an h2's content in an anchor to its own slug", () => {
     const node = heading("h2", "Getting Started");
     const result = headingAnchorPlugin().element.visit(node, makeCtx());
@@ -1735,6 +1828,40 @@ const renderExpandable = (code: string) =>
     themes: { dark: "github-dark", light: "github-light" },
     transformers: blumeShikiTransformers({ icons: false }),
   });
+
+/** A `ts` block highlighted by Shiki with Blume's transformers. */
+const renderTs = (code: string) =>
+  codeToHtml(code, {
+    defaultColor: false,
+    lang: "ts",
+    themes: { dark: "github-dark", light: "github-light" },
+    transformers: blumeShikiTransformers({ icons: false }),
+  });
+
+describe("error and warning notations", () => {
+  it("marks error and warning lines and strips their comments", async () => {
+    const html = await renderTs(
+      [
+        "const port = process.env.PORT; // [!code warning]",
+        "server.listen(port.trim()); // [!code error]",
+        "done();",
+      ].join("\n")
+    );
+    expect(html).toContain('class="line highlighted warning"');
+    expect(html).toContain('class="line highlighted error"');
+    expect(html).not.toContain("[!code");
+    // The plain line stays a plain line.
+    expect(html.match(/class="line"/gu)).toHaveLength(1);
+  });
+
+  it("leaves an info notation as written", async () => {
+    // Only error and warning are styled; `[!code info]` stays a comment
+    // rather than turning into an unstyled highlight.
+    const html = await renderTs("run(); // [!code info]");
+    expect(html).toContain("[!code info]");
+    expect(html).not.toContain("highlighted");
+  });
+});
 
 describe("fence keywords through Shiki", () => {
   it("counts an expandable block's lines from the source Shiki passes", async () => {

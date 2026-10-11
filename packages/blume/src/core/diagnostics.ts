@@ -24,58 +24,97 @@ const DOCS_BASE = "https://useblume.dev";
 const DOCS_DEPLOYMENT = "/docs/deployment";
 const DOCS_CLI_VALIDATE = "/docs/cli/validate";
 const DOCS_CONTENT_SOURCES = "/docs/content/sources";
+const DOCS_CONTENT_SOURCES_OBSIDIAN = "/docs/content/sources/obsidian";
 const DOCS_CONTENT_NAVIGATION = "/docs/content/navigation";
 const DOCS_CONTENT_INCLUDES = "/docs/content/includes";
+const DOCS_OPENAPI_WARNINGS = "/docs/references/openapi#spec-warnings";
+const DOCS_OTHER_TOOLS_SYNTAX = "/docs/content/syntax#syntax-from-other-tools";
+const DOCS_MARKDOWN_AND_MDX = "/docs/content#markdown-and-mdx";
 
 /** Diagnostic code → the docs page that explains it. */
 const DOCS_PATHS = new Map(
   Object.entries({
     BLUME_ADAPTER_REQUIRED: DOCS_DEPLOYMENT,
     BLUME_ANALYTICS_DEPRECATED: "/docs/configuration/analytics-migration",
-    BLUME_ASSETS_UNCHECKED: DOCS_CLI_VALIDATE,
     BLUME_ASSET_FETCH_FAILED: DOCS_CONTENT_SOURCES,
     BLUME_BROKEN_ANCHOR: DOCS_CLI_VALIDATE,
     BLUME_BROKEN_ASSET: DOCS_CLI_VALIDATE,
     BLUME_BROKEN_LINK: DOCS_CLI_VALIDATE,
+    BLUME_BROKEN_REDIRECT: DOCS_CLI_VALIDATE,
+    BLUME_CODE_FENCE_OPTION: "/docs/content/syntax",
     BLUME_COMPONENTS_INVALID: "/docs/configuration/customization",
     BLUME_CONFIG_INVALID: "/docs/configuration",
     BLUME_CONFIG_LOAD_FAILED: "/docs/configuration",
     BLUME_CONTENT_ROOT_MISSING: DOCS_CONTENT_SOURCES,
     BLUME_DEAD_LINK: DOCS_CLI_VALIDATE,
     BLUME_DEPENDENCY_MISSING: "/docs/cli/doctor",
+    BLUME_DIRECTIVE_CLOSING_TEXT: "/docs/content/syntax",
+    BLUME_DIRECTIVE_OPENING_TEXT: "/docs/content/syntax",
+    BLUME_DIRECTIVE_SPACED_NAME: "/docs/content/syntax",
     BLUME_DUPLICATE_ROUTE: DOCS_CONTENT_NAVIGATION,
     BLUME_DUPLICATE_SIDEBAR_ORDER: DOCS_CONTENT_NAVIGATION,
+    BLUME_EXAMPLE_NOT_FOUND: "/docs/content/components#component",
     BLUME_FRONTMATTER_INVALID: "/docs/content/frontmatter",
+    BLUME_GRAPHQL_UNKNOWN_CODE_SAMPLE: "/docs/references/graphql",
     BLUME_INCLUDE_CYCLE: DOCS_CONTENT_INCLUDES,
     BLUME_INCLUDE_MALFORMED: DOCS_CONTENT_INCLUDES,
     BLUME_INCLUDE_NOT_FOUND: DOCS_CONTENT_INCLUDES,
     BLUME_INCLUDE_OUTSIDE_ROOT: DOCS_CONTENT_INCLUDES,
+    BLUME_MDC_SYNTAX: DOCS_OTHER_TOOLS_SYNTAX,
+    BLUME_MDX_ATTRIBUTE_LIST: DOCS_OTHER_TOOLS_SYNTAX,
     BLUME_MDX_CURLY_ANCHOR: "/docs/content/syntax",
-
+    BLUME_MDX_EVENT_HANDLER: "/docs/content/islands",
+    BLUME_MDX_SYNTAX: DOCS_MARKDOWN_AND_MDX,
+    BLUME_MDX_UNCLOSED_ELEMENT: DOCS_OTHER_TOOLS_SYNTAX,
+    BLUME_MDX_UNDEFINED_NAME: DOCS_MARKDOWN_AND_MDX,
+    BLUME_MD_ATTRIBUTE_LIST: DOCS_OTHER_TOOLS_SYNTAX,
+    BLUME_MD_CURLY_ANCHOR: "/docs/content/syntax",
+    BLUME_MD_DIRECTIVE: "/docs/content/syntax",
+    BLUME_MD_GITHUB_ALERT: "/docs/content/syntax",
     BLUME_META_INVALID: "/docs/content/meta",
     BLUME_META_LOAD_FAILED: "/docs/content/meta",
+    BLUME_META_OUTSIDE_INCLUDE: "/docs/content/meta",
+    BLUME_META_UNKNOWN_PAGE: "/docs/content/meta",
     BLUME_MISSING_SECRET: DOCS_DEPLOYMENT,
     BLUME_NAV_DUPLICATE_LABEL: DOCS_CONTENT_NAVIGATION,
     BLUME_NAV_HIDDEN_IN_SIDEBAR: DOCS_CONTENT_NAVIGATION,
     BLUME_NAV_INDEX_TITLE_MISMATCH: DOCS_CONTENT_NAVIGATION,
     BLUME_NAV_MISSING_PAGE: DOCS_CONTENT_NAVIGATION,
     BLUME_NODE_VERSION: "/docs/quickstart",
+    BLUME_OPENAPI_DUPLICATE_OPERATION_ID: DOCS_OPENAPI_WARNINGS,
+    BLUME_OPENAPI_LOCAL_SERVER: DOCS_OPENAPI_WARNINGS,
+    BLUME_OPENAPI_NULLABLE: DOCS_OPENAPI_WARNINGS,
+    BLUME_OPENAPI_UNKNOWN_CODE_SAMPLE:
+      "/docs/references/openapi#code-samples-and-schemas",
+    BLUME_PUBLIC_OPENAPI_JSON: "/docs/discoverability/json-api",
+    BLUME_SEARCH_SYNC_FAILED: "/docs/configuration/search",
     BLUME_SERVER_FEATURE_REQUIRED: DOCS_DEPLOYMENT,
     BLUME_SIDEBAR_DISPLAY_IGNORED: DOCS_CONTENT_NAVIGATION,
     BLUME_SOURCE_FETCH_FAILED: DOCS_CONTENT_SOURCES,
     BLUME_SOURCE_MISCONFIGURED: DOCS_CONTENT_SOURCES,
     BLUME_SOURCE_OFFLINE: DOCS_CONTENT_SOURCES,
+    BLUME_SOURCE_PATH_MISSING: "/docs/content/sources/remote-mdx",
     BLUME_SOURCE_SDK_MISSING: DOCS_CONTENT_SOURCES,
     BLUME_SOURCE_UNAVAILABLE: DOCS_CONTENT_SOURCES,
+    BLUME_SOURCE_UNRESOLVED_LINK: "/docs/content/sources/contentful",
+    BLUME_SOURCE_UNSUPPORTED_NODE: "/docs/content/sources/payload",
+    BLUME_SVG_UNOPTIMIZED: "/docs/content/syntax#links-and-images",
+    BLUME_TEMPLATE_TAG: DOCS_OTHER_TOOLS_SYNTAX,
+    BLUME_THEME_COLOR_INVALID: "/docs/configuration/theming",
     BLUME_TRANSLATE_MISSING: "/docs/cli/translate",
     BLUME_TRANSLATE_STALE: "/docs/cli/translate",
+    BLUME_TSCONFIG_EXTENDS: "/docs/cli#type-checking",
+    BLUME_UNKNOWN_CODE_LANGUAGE: "/docs/content/syntax",
     BLUME_UNKNOWN_COMPONENT: "/docs/configuration/customization",
     BLUME_UNKNOWN_DIRECTIVE: "/docs/content/syntax",
     BLUME_UNKNOWN_ICON: DOCS_CONTENT_NAVIGATION,
     BLUME_UNKNOWN_OPTION: "/docs/cli",
+    BLUME_UNKNOWN_PROP: "/docs/content/components",
     BLUME_UNLOADABLE_FILE_NAME: "/docs/content",
-    BLUME_WIKILINK_AMBIGUOUS: DOCS_CONTENT_SOURCES,
-    BLUME_WIKILINK_UNRESOLVED: DOCS_CONTENT_SOURCES,
+    BLUME_UNSUPPORTED_LINK_SCHEME: DOCS_CLI_VALIDATE,
+    BLUME_WIKILINK_AMBIGUOUS: DOCS_CONTENT_SOURCES_OBSIDIAN,
+    BLUME_WIKILINK_UNRESOLVED: DOCS_CONTENT_SOURCES_OBSIDIAN,
+    BLUME_WIKILINK_UNSUPPORTED: DOCS_OTHER_TOOLS_SYNTAX,
     BLUME_YARN_PNP: "/docs/quickstart",
   })
 );
@@ -312,7 +351,7 @@ const findElement = (scope: Scope, position: number): Step | undefined => {
  * Returns 1-based line/column, or undefined when not even the first segment
  * matches.
  */
-const locatePath = (
+export const locatePath = (
   source: string,
   path: readonly (string | number)[]
 ): { column: number; line: number } | undefined => {

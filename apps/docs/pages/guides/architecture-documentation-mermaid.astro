@@ -1,0 +1,480 @@
+---
+// Architecture documentation with Mermaid: checked against the syntax
+// (Diagrams), includes, export, search, narration, theming, validate, and
+// Markdown docs, and against markdown/mermaid.ts, components/content/
+// mermaid-element.ts, markdown/index.ts, core/includes.ts, ai/markdown.ts,
+// astro/generate.ts (clientFeaturesFrom), search/documents.ts,
+// narration/script.ts, and PageActions.astro (EPUB) on main. Mermaid facts
+// (accTitle/accDescr output, securityLevel "strict", front matter config
+// precedence, the `end` keyword, quoting labels) checked against
+// mermaid.js.org; GitHub rendering against docs.github.com; Mermaid CLI usage
+// and the Linux sandbox note against its README and docs.
+//
+// Ran: both diagrams, the dead-letter change, and the failure cases (`end` as
+// a node ID, unquoted parentheses, useMaxWidth front matter) through
+// @mermaid-js/mermaid-cli 12.0.0 (Mermaid 12.0.0, the version Blume installs)
+// with Blume's dagre/classic settings in the default and dark themes; the SVGs
+// carry <title>/<desc> with aria-labelledby/aria-describedby. The npx loop
+// shown here ran on macOS and named a broken file. The fixture page ran from
+// repo source with Bun through scanProject (no diagnostics; a missing .mmd is
+// BLUME_INCLUDE_NOT_FOUND), buildRawMarkdown (the .md mirror has both fences
+// spliced in), clientFeaturesFrom (mermaid: true), and the MDX renderer Astro
+// uses (two <blume-mermaid> elements whose data-source is each .mmd file).
+// The diff is real `git diff -U1` output from that fixture.
+//
+// Not yet run end to end: no blume dev or blume build of the fixture, so the
+// browser rendering, theme switch, console check, JavaScript-off view, and
+// exports rest on the source above.
+// Updated for main: mermaid-element.ts logs Mermaid's parser error to the
+// console and shows it under the message in dev (c8820c29); the print
+// stylesheet switches a dark page to light (e12b668a). Read in the source.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const indexMdxCode = `---
+title: Architecture
+description: How Acme Messages accepts, queues, and delivers email and SMS, and where each part keeps its state.
+---
+
+Acme Messages has one write path: the Messages API saves and queues each message, and the delivery worker sends it later. This page covers that path and every part it touches.
+
+## Components
+
+<include lang="mermaid">./_diagrams/components.mmd</include>
+
+| Component | What it does | Talks to |
+| --- | --- | --- |
+| Messages API | Validates \`POST /messages\`, saves the message, and queues a send job | Postgres, send queue |
+| Postgres | Stores each message and its status: \`queued\`, \`sent\`, or \`failed\` | Messages API, delivery worker |
+| Send queue | Holds send jobs until a worker takes them | Messages API, delivery worker |
+| Delivery worker | Sends each job through a provider and records the result | Send queue, Postgres, providers, customer webhooks |
+| Email and SMS providers | Deliver the message. Acme doesn't run them. | Delivery worker |
+| Customer webhook endpoint | Receives a delivery event per message. The customer runs it. | Delivery worker |
+
+In the diagram, a dashed outline marks a system Acme doesn't run.
+
+## Sending a message
+
+<include lang="mermaid">./_diagrams/send-message.mmd</include>
+
+1. The client app calls \`POST /messages\`.
+2. The Messages API inserts the message into Postgres with status \`queued\`, then adds a send job to the queue. It writes first, so a worker never takes a job for a message that isn't saved.
+3. The API answers \`202 Accepted\` with the message ID, without waiting for delivery.
+4. The delivery worker takes the job and sends the message through the email or SMS provider.
+5. If the provider accepts it, the worker sets the status to \`sent\` and posts a delivery event to the customer's webhook endpoint.
+6. If the provider returns an error, the worker puts the job back on the queue with a delay. After the last retry, it sets the status to \`failed\`.`;
+---
+
+<GuidePage guide={guideById("architecture-documentation-mermaid")}>
+  <p>
+    To keep architecture explanations and diagrams together in Git, write the
+    architecture page as an MDX file in the same repository as the code, and
+    draw each diagram in Mermaid, a text syntax for diagrams. The diagram
+    source lives in a <code>mermaid</code> code fence on the page, or in a{" "}
+    <code>.mmd</code> file the page includes. A change to the system then
+    changes the prose and the diagram in one pull request, reviewers read both
+    as line diffs, and Blume draws the diagrams in the reader's browser, in the
+    site's light or dark theme.
+  </p>
+  <p>
+    This guide builds that page for Acme Messages, a fictional service that
+    sends email and SMS: a flowchart of its components, a sequence diagram of
+    one request, and text that states every relationship the diagrams show.
+    That text isn't optional. Blume renders diagrams on the client, so without
+    JavaScript, in an EPUB export, and in the default search index, the
+    diagram isn't there and the text is.
+  </p>
+  <p>
+    If your architecture notes only need to live in the repository, you may
+    not need a docs site: GitHub renders Mermaid fences in Markdown files,
+    issues, and pull requests. Blume adds a published site with navigation and
+    search, and a Markdown copy of every page for agents. If a diagram must
+    appear without JavaScript, render it to an SVG with Mermaid CLI, commit it
+    under <code>public/</code>, and embed it as an image with alt text. You
+    then keep the source and the image in sync by hand.
+  </p>
+
+  <h2>Lay out the files</h2>
+  <p>Put the page and its diagram sources in the docs folder, side by side:</p>
+  <CodeBlock
+    code={`docs/
+  architecture/
+    _diagrams/
+      components.mmd
+      send-message.mmd
+    index.mdx
+  index.mdx
+blume.config.ts`}
+    lang="text"
+  />
+  <p>
+    <code>docs/architecture/index.mdx</code> becomes the page at{" "}
+    <code>/architecture</code>. Blume leaves any file or folder whose name
+    starts with an underscore out of routing, navigation, search, and the
+    sitemap, so <code>_diagrams/</code> holds sources without turning them into
+    pages.
+  </p>
+  <p>
+    The page must be <code>.mdx</code>. Diagrams are an MDX-only feature: in a{" "}
+    <code>.md</code> page, a <code>mermaid</code> fence renders as a plain code
+    block. Blume loads the Mermaid library only on pages that contain a
+    diagram, so the rest of the site never downloads it.
+  </p>
+  <p>
+    Separate <code>.mmd</code> files are optional. The page pulls each one in
+    with an include, which turns it into the same <code>mermaid</code> fence
+    you could write inline. As files, diagrams paste straight into Mermaid's
+    live editor, one diagram can appear on several pages, and Mermaid CLI can
+    check them for syntax errors, which the build doesn't. For a one-off
+    diagram, a fence written on the page works the same.
+  </p>
+
+  <h2>Draw the components as a flowchart</h2>
+  <p>
+    Start with the parts of the system and how they connect. This flowchart
+    runs top to bottom, which fits a docs column better than a wide
+    left-to-right layout:
+  </p>
+  <CodeBlock
+    code={`flowchart TB
+  accTitle: Acme Messages components
+  accDescr: A client app calls the Messages API, which saves the message in Postgres and adds a send job to the queue. The delivery worker takes each job, sends it through the email or SMS provider, records the result in Postgres, and posts a delivery event to the customer's webhook endpoint.
+
+  %% Nodes: a short ID, then the label readers see.
+  client([Client app])
+  api[Messages API]
+  db[(Postgres)]
+  queue[Send queue]
+  worker[Delivery worker]
+  email[Email provider]
+  sms[SMS provider]
+  hook([Customer webhook endpoint])
+
+  %% Edges: one relationship per line.
+  %% The API writes the row before it enqueues, so the worker always finds it.
+  client -->|"POST /messages"| api
+  api -->|insert, status queued| db
+  api -->|enqueue send job| queue
+  queue -->|deliver job| worker
+  worker -->|send email| email
+  worker -->|send SMS| sms
+  worker -->|update status| db
+  worker -->|delivery event| hook
+
+  %% Dashed outlines mark systems Acme doesn't run. No colors, so both themes work.
+  classDef external stroke-dasharray: 5 5
+  class client,email,sms,hook external`}
+    lang="mermaid"
+    title="docs/architecture/_diagrams/components.mmd"
+  />
+  <p>A few choices here make the source easier to maintain:</p>
+  <ul>
+    <li>
+      <strong>IDs and labels.</strong> Each node has a short ID
+      (<code>api</code>) and the label readers see (<code>Messages API</code>).
+      Edges use the IDs, so renaming a component changes one line.
+    </li>
+    <li>
+      <strong>One edge per line.</strong> Mermaid can chain edges, but a line
+      per relationship means a diff shows exactly which connection changed.
+    </li>
+    <li>
+      <strong>Comments.</strong> Mermaid ignores lines that start with{" "}
+      <code>%%</code>. Use them for the reason behind an edge, where the next
+      person to edit the diagram will see it.
+    </li>
+    <li>
+      <strong>Style without color.</strong> The <code>external</code> class
+      dashes the outline of systems Acme doesn't run. It sets no colors, so it
+      reads the same in Blume's light and dark themes.
+    </li>
+    <li>
+      <strong>An accessible name.</strong> Mermaid turns <code>accTitle</code>{" "}
+      and <code>accDescr</code> into the SVG's <code>&lt;title&gt;</code> and{" "}
+      <code>&lt;desc&gt;</code>, linked with <code>aria-labelledby</code> and{" "}
+      <code>aria-describedby</code>, so assistive technology can name and
+      describe the diagram. Keep the description to a summary, since the page
+      text carries the detail.
+    </li>
+  </ul>
+
+  <h2>Draw one request as a sequence diagram</h2>
+  <p>
+    A flowchart shows what connects to what. A sequence diagram shows the
+    order things happen in, which is where most architecture questions are:
+    what the caller waits for, and what happens on failure. This one follows a
+    single email:
+  </p>
+  <CodeBlock
+    code={`sequenceDiagram
+  accTitle: Sending an email
+  accDescr: The API saves and queues the message and answers 202 right away. The worker then sends it. On success it marks the message sent and posts a delivery event; on a provider error it requeues the job with a delay.
+
+  participant C as Client app
+  participant A as Messages API
+  participant D as Postgres
+  participant Q as Send queue
+  participant W as Delivery worker
+  participant P as Email provider
+  participant H as Customer webhook
+
+  C->>A: POST /messages
+  A->>D: Insert message, status queued
+  A->>Q: Enqueue send job
+  A-->>C: 202 Accepted with message ID
+  Q->>W: Deliver job
+  W->>P: Send email
+  alt Provider accepts
+    P-->>W: Provider message ID
+    W->>D: Set status sent
+    W->>H: POST delivery event
+  else Provider returns an error
+    P-->>W: Error
+    W->>Q: Requeue with a delay
+  end`}
+    lang="mermaid"
+    title="docs/architecture/_diagrams/send-message.mmd"
+  />
+  <p>
+    Solid arrows (<code>-&gt;&gt;</code>) are calls here, and dotted ones
+    (<code>--&gt;&gt;</code>) are responses. The <code>alt</code> and{" "}
+    <code>else</code> blocks draw the two outcomes as labeled sections, and
+    the one-letter aliases keep each message line short while the diagram
+    shows full names.
+  </p>
+
+  <h2>Write the page around the diagrams</h2>
+  <p>
+    Now the page itself. Each diagram is followed by text that says the same
+    thing in words: a table for the components and a numbered list for the
+    request.
+  </p>
+  <CodeBlock
+    code={indexMdxCode}
+    lang="mdx"
+    title="docs/architecture/index.mdx"
+  />
+  <p>
+    <code>&lt;include lang="mermaid"&gt;</code> splices the file in as a{" "}
+    <code>mermaid</code> fence. The <code>lang</code> attribute is required,
+    because Blume takes an included code file's language from its extension,
+    and <code>mmd</code> isn't <code>mermaid</code>. Each include statement
+    must sit on a line of its own.
+  </p>
+  <p>The text under each diagram covers every place the diagram doesn't reach:</p>
+  <ul>
+    <li>
+      <strong>Without JavaScript.</strong> The prerendered HTML holds only the
+      diagram's source, in an attribute. Mermaid draws the SVG in the browser.
+    </li>
+    <li>
+      <strong>In search.</strong> Blume's default search index leaves out code
+      fences, diagrams included, so a search for "delivery worker" finds this
+      page through the table, not the flowchart.
+    </li>
+    <li>
+      <strong>In exports.</strong> If you turn on{" "}
+      <a href="/docs/configuration/export">export</a>, the EPUB strips every
+      SVG, so it has the text and no diagrams. PDF export prints the page in
+      the light theme, with the diagrams as they're drawn on screen. The{" "}
+      <a href="/guides/documentation-pdf-epub-export">PDF and EPUB guide</a>{" "}
+      covers what else changes in each format.
+    </li>
+    <li>
+      <strong>Read aloud.</strong> Narration skips diagrams and tables, so
+      the numbered steps are what a listener hears.
+    </li>
+    <li>
+      <strong>For agents.</strong> The page's Markdown copy at{" "}
+      <code>/architecture.md</code> has the includes spliced in, so an agent
+      reads the Mermaid source and the prose together.
+    </li>
+  </ul>
+  <p>
+    A quick test: cover each diagram and read the page. If a reader could
+    still say what calls what, and in what order, the text is complete.
+  </p>
+
+  <h2>Review diagram changes in Git</h2>
+  <p>
+    Because the diagram is text, a pull request that changes the architecture
+    shows the change line by line. Here Acme adds a dead-letter queue for jobs
+    that fail every retry. The diagram gains a node and an edge, and the same
+    pull request updates the table and step 6:
+  </p>
+  <CodeBlock
+    code={`diff --git a/docs/architecture/_diagrams/components.mmd b/docs/architecture/_diagrams/components.mmd
+--- a/docs/architecture/_diagrams/components.mmd
++++ b/docs/architecture/_diagrams/components.mmd
+@@ -13,2 +13,3 @@ flowchart TB
+   hook([Customer webhook endpoint])
++  dlq[Dead-letter queue]
+
+@@ -24,2 +25,3 @@ flowchart TB
+   worker -->|delivery event| hook
++  worker -->|after the last retry| dlq
+
+diff --git a/docs/architecture/index.mdx b/docs/architecture/index.mdx
+--- a/docs/architecture/index.mdx
++++ b/docs/architecture/index.mdx
+@@ -16,3 +16,4 @@
+ | Send queue | Holds send jobs until a worker takes them | Messages API, delivery worker |
+-| Delivery worker | Sends each job through a provider and records the result | Send queue, Postgres, providers, customer webhooks |
++| Dead-letter queue | Keeps jobs that failed every retry, for inspection | Delivery worker |
++| Delivery worker | Sends each job through a provider and records the result | Send queue, Postgres, providers, customer webhooks, dead-letter queue |
+ | Email and SMS providers | Deliver the message. Acme doesn't run them. | Delivery worker |
+@@ -31,2 +32,2 @@
+ 5. If the provider accepts it, the worker sets the status to \`sent\` and posts a delivery event to the customer's webhook endpoint.
+-6. If the provider returns an error, the worker puts the job back on the queue with a delay. After the last retry, it sets the status to \`failed\`.
++6. If the provider returns an error, the worker puts the job back on the queue with a delay. After the last retry, it sets the status to \`failed\` and moves the job to the dead-letter queue.`}
+    lang="diff"
+  />
+  <p>Three habits keep these reviews honest:</p>
+  <ul>
+    <li>
+      <strong>Change the diagram and its text together.</strong> A pull
+      request that touches a <code>.mmd</code> file and not the page is the
+      sign that the prose is now out of date.
+    </li>
+    <li>
+      <strong>Look at the drawing, not only the diff.</strong> Paste the
+      changed file into the{" "}
+      <a href="https://mermaid.live">Mermaid Live Editor</a>, or open your
+      host's preview deployment if it builds pull requests.
+    </li>
+    <li>
+      <strong>Check the syntax before merging.</strong> <code>blume build</code>{" "}
+      and <code>blume validate</code> don't parse Mermaid, because the browser
+      does. A broken diagram only shows up on the page and in the browser
+      console.
+    </li>
+  </ul>
+  <p>
+    Mermaid CLI catches syntax errors from the command line. This loop renders
+    each source to a throwaway SVG and names any file that fails:
+  </p>
+  <CodeBlock
+    code={`for f in docs/architecture/_diagrams/*.mmd; do
+  npx -y -p @mermaid-js/mermaid-cli@12.0.0 mmdc -q -i "$f" -o /tmp/diagram-check.svg \\
+    || echo "Broken: $f"
+done`}
+    lang="bash"
+  />
+  <p>
+    The first run downloads the CLI and the headless browser it renders with.
+    Pin the CLI to the same major version as the <code>mermaid</code> package
+    Blume installs, which <code>npm ls mermaid</code> shows. Treat it as a
+    syntax check, not a preview: the CLI renders with Mermaid's defaults
+    rather than Blume's settings, so its drawing can differ from the site's.
+    If Chrome won't start on a Linux CI runner, Mermaid CLI documents a{" "}
+    <a
+      href="https://github.com/mermaid-js/mermaid-cli/blob/master/docs/linux-sandbox-issue.md"
+      >sandbox workaround</a
+    >.
+  </p>
+
+  <h2>Check the published page</h2>
+  <p>Start the dev server and open <code>http://localhost:4321/architecture</code>:</p>
+  <CodeBlock code="npx blume dev" lang="bash" />
+  <p>
+    <strong>Both themes.</strong> Switch between light and dark with the
+    toggle in the header. Each diagram redraws in Mermaid's matching theme, and
+    the dashed outlines stay visible in both.
+  </p>
+  <p>
+    <strong>Text alternatives.</strong> Run this in the browser console. It
+    prints each diagram's title and description, the text assistive
+    technology gets:
+  </p>
+  <CodeBlock
+    code={`for (const svg of document.querySelectorAll("blume-mermaid svg")) {
+  console.log(svg.querySelector("title")?.textContent, "/", svg.querySelector("desc")?.textContent);
+}`}
+    lang="js"
+  />
+  <p>
+    <strong>Without JavaScript.</strong> Turn off JavaScript in your browser's
+    developer tools and reload. The diagrams are gone, and the table and steps
+    should still explain the system on their own.
+  </p>
+  <p>
+    <strong>The Markdown copy.</strong> Fetch what agents read. Both diagrams
+    appear as <code>mermaid</code> fences between the text:
+  </p>
+  <CodeBlock code="curl http://localhost:4321/architecture.md" lang="bash" />
+  <p>Then stop the dev server, build, and check the links:</p>
+  <CodeBlock
+    code={`npx blume build
+npx blume validate`}
+    lang="bash"
+  />
+
+  <h2>Troubleshooting</h2>
+  <h3>The diagram shows up as a code block</h3>
+  <p>
+    The page is a <code>.md</code> file. Blume turns <code>mermaid</code>{" "}
+    fences into diagrams only in MDX, and an included file is parsed in the
+    including page's format. Rename the page to <code>.mdx</code>.
+  </p>
+  <h3>The page says "Could not render this diagram."</h3>
+  <p>
+    Mermaid couldn't parse the source, and Blume shows this message in place
+    of the diagram. Mermaid's parser error, with the line it stopped on, is in
+    the browser console under{" "}
+    <code>[blume] Mermaid could not render a diagram</code>, and in{" "}
+    <code>blume dev</code> it also shows under the message. The{" "}
+    <code>mmdc</code> loop above reports the same error from the command
+    line. Two common causes: a lowercase{" "}
+    <code>end</code> as a flowchart node ID, which Mermaid reads as a keyword
+    (write <code>End</code> or pick another ID), and a label with parentheses
+    or other special characters, which needs quotes, as in{" "}
+    <code>api["Messages API (v1)"]</code>.
+  </p>
+  <h3>The build fails with BLUME_INCLUDE_NOT_FOUND</h3>
+  <p>
+    A <code>.mmd</code> file was renamed or moved, and an include still points
+    at the old path. The error names the path it looked for. Update the
+    include, and search the docs folder for other pages that include the same
+    file.
+  </p>
+  <h3>A diagram doesn't follow dark mode</h3>
+  <p>
+    A <code>theme</code> set in the diagram's own front matter (a{" "}
+    <code>config:</code> block at the top of the fence) or in an{" "}
+    <code>%%{"{init}"}%%</code> directive outranks the theme Blume picks, so
+    the diagram stays in that theme. Remove it. Colors set with{" "}
+    <code>style</code> or <code>classDef</code> also stay fixed in both themes,
+    so a light <code>fill</code> can leave light text unreadable in dark mode.
+    Style with outlines and dashes instead, as the <code>external</code> class
+    does.
+  </p>
+  <h3>Links and HTML in a diagram don't work</h3>
+  <p>
+    Blume runs Mermaid at its <code>strict</code> security level, which
+    disables <code>click</code> interactions and encodes HTML tags in labels as
+    text. Put links in the prose next to the diagram instead.
+  </p>
+  <h3>A large diagram is too small to read</h3>
+  <p>
+    By default, Mermaid scales a diagram down to fit the column, so a wide one
+    shrinks. Split it into smaller diagrams, one per concern, or let it keep
+    its natural width and scroll sideways by adding front matter at the top of
+    the source:
+  </p>
+  <CodeBlock
+    code={`---
+config:
+  flowchart:
+    useMaxWidth: false
+---
+flowchart TB`}
+    lang="mermaid"
+  />
+  <p>
+    For a sequence diagram, use <code>sequence:</code> in place of{" "}
+    <code>flowchart:</code>. A diagram can also ask for the ELK layout with{" "}
+    <code>layout: elk</code> under <code>config:</code>; Blume loads that
+    engine only for diagrams that request it.
+  </p>
+</GuidePage>

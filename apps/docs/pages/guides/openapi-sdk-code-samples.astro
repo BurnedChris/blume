@@ -1,0 +1,606 @@
+---
+// Add SDK examples to generated API documentation: checked against the
+// OpenAPI reference docs and, on main, the custom-sample reader
+// (components/openapi/code-samples.ts), the Request panel and its tabs
+// (RequestPanel.astro, PanelTabs.astro, panel.ts), the generated-sample list
+// (snippets.ts `sampleLanguages`), the playground client (only panes with
+// `data-sample-lang` re-render), the adapter options (reference/openapi.ts,
+// reference/options.ts), overlays (openapi/overlay.ts), and the agent
+// Markdown for operations (ai/openapi-components.ts). Ran with Bun: Blume's
+// `parseSpec` plus `customCodeSamples` over this guide's spec (tab labels as
+// listed), over a bare spec plus the overlay shown here, over a spec whose
+// `source` is a `$ref` (skipped), and over a Swagger 2.0 spec. Ran the
+// samples-check folder as written against stand-in `@acme/messages` and
+// `acme-messages` packages (TypeScript 7.0.2, pyright 1.1.414, Python 3.9):
+// it passes, fails on a renamed method or keyword argument, and fails on a
+// `$ref` source or a non-list `x-codeSamples`. Third-party claims checked
+// against Redocly's, Speakeasy's, and Stainless's docs. Not yet run end to
+// end: the rendered tabs were read from the source, not from a blume dev or
+// build. Later: $ref sources are now read relative to the spec (parse.ts
+// inlineSampleRefs, BLUME_OPENAPI_CODE_SAMPLE_REF when unreadable), and dev
+// watches local specs (openapi/references.ts referenceSpecFiles); checked in
+// source, not re-run.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const extractMjsCode = `// Write every x-codeSamples entry in the given files (specs or overlays) to
+// out/, one file per sample, so tsc and pyright can check them.
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { parse } from "yaml";
+
+const EXTENSIONS = { py: "py", python: "py", ts: "ts", typescript: "ts" };
+const samples = [];
+const problems = [];
+
+// Walk the whole document, so samples under paths, webhooks, and overlay
+// actions are all found. Each is named for its operation when it has one.
+const walk = (node, name) => {
+  if (typeof node !== "object" || node === null) {
+    return;
+  }
+  const here = node.operationId ?? name;
+  for (const [key, value] of Object.entries(node)) {
+    if (key !== "x-codeSamples" && key !== "x-code-samples") {
+      walk(value, here);
+    } else if (Array.isArray(value)) {
+      samples.push(...value.map((sample) => ({ name: here, sample })));
+    } else {
+      problems.push(\`\${here}: \${key} must be a list\`);
+    }
+  }
+};
+
+for (const file of process.argv.slice(2)) {
+  walk(parse(await readFile(file, "utf8")), "sample");
+}
+
+await rm("out", { force: true, recursive: true });
+await mkdir("out");
+
+for (const [index, { name, sample }] of samples.entries()) {
+  const { label = "", lang, source } = sample ?? {};
+  // Blume skips a malformed entry without a warning, and a $ref source isn't
+  // code this script can check, so fail on both here.
+  if (typeof lang !== "string" || typeof source !== "string" || typeof label !== "string") {
+    problems.push(\`\${name}: sample \${index} needs a string lang and source\`);
+    continue;
+  }
+  const extension = EXTENSIONS[lang.toLowerCase()];
+  if (extension) {
+    await writeFile(\`out/\${name}_\${index}.\${extension}\`, source);
+  }
+}
+
+console.log(\`Found \${samples.length} samples\`);
+if (problems.length > 0) {
+  console.error(problems.join("\\n"));
+  process.exit(1);
+}`;
+---
+
+<GuidePage guide={guideById("openapi-sdk-code-samples")}>
+  <p>
+    Yes. Add an <code>x-codeSamples</code> list to an operation in your
+    OpenAPI spec, with one entry per SDK call. Blume shows each entry as its
+    own tab on the operation's page, ahead of the cURL, JavaScript, and Python
+    samples it generates from the spec, and one setting decides whether those
+    generated samples stay.
+  </p>
+  <p>
+    By the end of this guide, the Acme Messages API reference opens each
+    operation on a TypeScript SDK tab, then a Python SDK tab, then a raw cURL
+    request. You also get a small check that type-checks every sample against
+    the SDK version your docs describe, so an SDK release can't leave a broken
+    call on the page.
+  </p>
+  <p>
+    This builds on{" "}
+    <a href="/guides/openapi-documentation-website">Generate API docs from an OpenAPI spec</a>,
+    and assumes a reference mounted at <code>/api</code> from{" "}
+    <code>openapi.yaml</code>. Blume doesn't write SDK code: it generates
+    plain HTTP requests. If you don't publish an SDK, those generated samples
+    already cover this, and you only need to{" "}
+    <a href="#keep-or-drop-the-generated-samples">pick their languages</a>. If
+    Speakeasy or Stainless builds your SDK, they can write the samples for
+    you, which the section on{" "}
+    <a href="#keep-samples-in-step-with-sdk-releases">SDK releases</a> covers.
+  </p>
+
+  <h2>Add SDK calls to an operation</h2>
+  <p>
+    <code>x-codeSamples</code> is an extension Redocly defined, and other docs
+    tools read it too. It goes on the operation object, beside{" "}
+    <code>operationId</code>, not on the path. Here are both message
+    operations with a TypeScript and a Python call each. The rest of the spec
+    stays as it was:
+  </p>
+  <CodeBlock
+    code={`paths:
+  /messages:
+    post:
+      operationId: sendMessage
+      tags: [Messages]
+      summary: Send a message
+      description: Queues an email or SMS for delivery and returns its ID right away.
+      x-codeSamples:
+        - lang: typescript
+          label: TypeScript SDK
+          source: |
+            import { Acme } from "@acme/messages";
+
+            const acme = new Acme({ apiKey: process.env.ACME_API_KEY });
+
+            const message = await acme.messages.send({
+              channel: "email",
+              to: "ada@example.com",
+              template: "welcome",
+            });
+            console.log(message.id);
+        - lang: python
+          label: Python SDK
+          source: |
+            import os
+
+            from acme_messages import Acme
+
+            acme = Acme(api_key=os.environ["ACME_API_KEY"])
+
+            message = acme.messages.send(
+                channel="email",
+                to="ada@example.com",
+                template="welcome",
+            )
+            print(message.id)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageRequest"
+            example:
+              channel: email
+              to: ada@example.com
+              template: welcome
+      responses:
+        "202":
+          description: The message is queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+  /messages/{id}:
+    get:
+      operationId: getMessage
+      tags: [Messages]
+      summary: Get a message
+      description: Returns a message and its delivery status.
+      x-codeSamples:
+        - lang: typescript
+          label: TypeScript SDK
+          source: |
+            import { Acme } from "@acme/messages";
+
+            const acme = new Acme({ apiKey: process.env.ACME_API_KEY });
+
+            const message = await acme.messages.get("msg_8f2k");
+            console.log(message.status);
+        - lang: python
+          label: Python SDK
+          source: |
+            import os
+
+            from acme_messages import Acme
+
+            acme = Acme(api_key=os.environ["ACME_API_KEY"])
+
+            message = acme.messages.get("msg_8f2k")
+            print(message.status)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The message ID, from the response to Send a message.
+          schema:
+            type: string
+          example: msg_8f2k
+      responses:
+        "200":
+          description: The message.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "404":
+          description: No message has that ID.`}
+    lang="yaml"
+    title="openapi.yaml"
+  />
+  <p>Each entry has three fields:</p>
+  <ul>
+    <li>
+      <strong><code>lang</code></strong> picks the syntax highlighting and the
+      tab's default name. <code>typescript</code> shows as TypeScript and{" "}
+      <code>python</code> as Python. <code>bash</code>, <code>sh</code>,{" "}
+      <code>shell</code>, and <code>zsh</code> show as Shell, which suits an
+      SDK's command-line tool.
+    </li>
+    <li>
+      <strong><code>label</code></strong> is optional and replaces that
+      default name.
+    </li>
+    <li>
+      <strong><code>source</code></strong> is the code, as a string. The{" "}
+      <code>|</code> block keeps its line breaks, and Blume trims the final
+      newline. It can also be a <code>$ref</code> to a file that holds only
+      the code, which Blume reads relative to the spec.
+    </li>
+  </ul>
+  <p>
+    The older spelling, <code>x-code-samples</code>, works too, and so do
+    Swagger 2.0 and OpenAPI 3.0 specs.
+  </p>
+  <Callout type="note">
+    The Acme SDK is fictional, like the API. Swap in your own package names,
+    client setup, and method names. The example values match the spec's own
+    examples on purpose, which the section on{" "}
+    <a href="#what-changes-when-readers-use-try-it">Try it</a> explains.
+  </Callout>
+
+  <h2>See the tabs</h2>
+  <p>
+    Start the dev server, then open <code>/api/messages/send-message</code>.
+    It watches the spec file, so later edits to the samples show up without
+    a restart:
+  </p>
+  <CodeBlock code="npm run dev" lang="bash" />
+  <p>
+    The page's Request panel now has five tabs, in this order:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Tab</th>
+        <th scope="col">Where it comes from</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>TypeScript SDK</td>
+        <td>Your first <code>x-codeSamples</code> entry, selected when the page opens</td>
+      </tr>
+      <tr>
+        <td>Python SDK</td>
+        <td>Your second entry</td>
+      </tr>
+      <tr>
+        <td>cURL</td>
+        <td>Generated</td>
+      </tr>
+      <tr>
+        <td>JavaScript</td>
+        <td>Generated, with <code>fetch</code></td>
+      </tr>
+      <tr>
+        <td>Python</td>
+        <td>Generated, with <code>requests</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Your samples always come first, in the order you list them, so put the
+    call you most want copied at the top. The panel's Copy button copies
+    whichever tab is showing.
+  </p>
+  <p>
+    That last row is why the entries have labels. Without one, your Python
+    entry would also be called Python, and the page would show two tabs with
+    the same name. If you give two of your own entries the same label, Blume
+    adds the language to tell them apart: two entries labeled{" "}
+    <code>SDK</code> become SDK · TypeScript and SDK · Python.
+  </p>
+
+  <h2>Keep or drop the generated samples</h2>
+  <p>
+    The adapter's <code>codeSamples</code> option lists the generated
+    languages, in order. It defaults to <code>["curl", "js", "python"]</code>.
+    For SDK tabs plus one raw HTTP request, keep only cURL:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  navigation: {
+    tabs: [
+      { label: "Docs", path: "/" },
+      { label: "API reference", path: "/api" },
+    ],
+  },
+  reference: [
+    openapi({
+      codeSamples: ["curl"],
+      route: "/api",
+      spec: "./openapi.yaml",
+    }),
+  ],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Now each operation shows TypeScript SDK, Python SDK, and cURL. Keeping a
+    generated request is worth it: it's the one sample that follows the Try it
+    form, and it serves readers who don't use your SDK. The{" "}
+    <a href="/docs/references/openapi#code-samples-and-schemas">OpenAPI reference</a>{" "}
+    lists every language id.
+  </p>
+  <p>
+    To show only your own samples, set <code>codeSamples: false</code>. An
+    operation with no <code>x-codeSamples</code> then has no request samples
+    at all, so add them to every operation before you turn the generated ones
+    off. An empty list, <code>codeSamples: []</code>, does the same.
+  </p>
+  <p>
+    The option covers every operation in that reference. You can't drop the
+    generated samples for one operation only. If a second spec needs a
+    different mix, give it its own <code>openapi()</code> adapter with its own{" "}
+    <code>route</code> and <code>codeSamples</code>.
+  </p>
+
+  <h2>What changes when readers use Try it</h2>
+  <p>
+    The generated samples are built from the operation, so they change as a
+    reader fills in the Try it form. A copied cURL command always matches what
+    Send would do. Your samples are fixed text. They stay exactly as written
+    when the form changes, so a reader who types a new address into Try it
+    sees it in the cURL tab and not in the TypeScript SDK tab.
+  </p>
+  <p>Two habits keep that from confusing anyone:</p>
+  <ul>
+    <li>
+      <strong>Use the spec's example values.</strong> The form starts from the
+      spec's examples, so when your samples use the same values (here,{" "}
+      <code>ada@example.com</code>, <code>welcome</code>, and{" "}
+      <code>msg_8f2k</code>), every tab agrees when the page opens.
+    </li>
+    <li>
+      <strong>Read the key from the environment.</strong> Include my values in
+      samples only fills in the generated tabs. Your samples show whatever you
+      wrote, so write <code>process.env.ACME_API_KEY</code> or{" "}
+      <code>os.environ["ACME_API_KEY"]</code>, never a real key.
+    </li>
+  </ul>
+  <p>
+    Your samples also reach the page's Markdown copy, which agents, the MCP
+    server, and the assistant read, so an agent that looks up an operation
+    sees your SDK call too. Site search indexes them like any other code
+    block: only when{" "}
+    <a href="/docs/configuration/search">
+      <code>search.indexing.includeCodeBlocks</code>
+    </a>{" "}
+    is on.
+  </p>
+
+  <h2>Test every sample against your SDK</h2>
+  <p>
+    A sample in a spec is a string, so nothing checks it. Pull the samples out
+    into real files and type-check them against the SDK version your docs
+    describe. Make a <code>samples-check</code> folder beside{" "}
+    <code>openapi.yaml</code>, with its own dependencies so the SDK never
+    becomes a dependency of the docs site.
+  </p>
+  <p>
+    First, a script that finds every <code>x-codeSamples</code> entry and
+    writes each TypeScript and Python one to <code>out/</code>. It also fails
+    on entries it can't check, such as a <code>source</code> that's a{" "}
+    <code>$ref</code> to a file:
+  </p>
+  <CodeBlock
+    code={extractMjsCode}
+    lang="js"
+    title="samples-check/extract.mjs"
+  />
+  <p>
+    Then the dependencies. Pin the SDK to the exact version your docs
+    describe. The <code>check</code> script extracts the samples, runs{" "}
+    <code>tsc</code> over the TypeScript ones, and runs pyright over the
+    Python ones:
+  </p>
+  <CodeBlock
+    code={`{
+  "private": true,
+  "scripts": {
+    "check": "node extract.mjs ../openapi.yaml && tsc -p . && pyright out --pythonpath .venv/bin/python"
+  },
+  "devDependencies": {
+    "@acme/messages": "1.4.0",
+    "@types/node": "24.19.0",
+    "pyright": "1.1.414",
+    "typescript": "7.0.2",
+    "yaml": "2.9.1"
+  }
+}`}
+    lang="json"
+    title="samples-check/package.json"
+  />
+  <CodeBlock
+    code="acme-messages==1.4.0"
+    lang="text"
+    title="samples-check/requirements.txt"
+  />
+  <p>
+    The TypeScript config treats every sample as a module, so top-level{" "}
+    <code>await</code> works, and checks nothing but the extracted files:
+  </p>
+  <CodeBlock
+    code={`{
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleDetection": "force",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "es2022",
+    "types": ["node"]
+  },
+  "include": ["out/**/*.ts"]
+}`}
+    lang="json"
+    title="samples-check/tsconfig.json"
+  />
+  <p>Install both SDKs and run the check:</p>
+  <CodeBlock
+    code={`cd samples-check
+npm install
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+npm run check`}
+    lang="bash"
+  />
+  <p>
+    A passing run prints the number of samples it found and pyright's{" "}
+    <code>0 errors</code>. Rename <code>send</code> to <code>create</code> in
+    the TypeScript sample and <code>tsc</code> fails on{" "}
+    <code>out/sendMessage_0.ts</code>, saying the property doesn't exist.
+    Rename <code>template</code> in the Python sample and pyright fails on the
+    missing and unknown arguments. Each file is named for its operation ID and
+    the sample's position, so the error points at the spec entry to fix.
+  </p>
+  <p>
+    Type-checking proves each call matches the SDK's types at the pinned
+    version: method names, argument names, and required fields. It doesn't
+    send a request, and pyright catches the most in an SDK that ships type
+    hints. Keep the generated files and the virtual environment out of Git:
+  </p>
+  <CodeBlock
+    code={`samples-check/node_modules
+samples-check/.venv
+samples-check/out`}
+    lang="text"
+    title=".gitignore"
+  />
+  <p>
+    Run <code>npm run check</code> in CI beside your docs build, so a pull
+    request that breaks a sample fails.{" "}
+    <a href="/guides/openapi-documentation-ci">Keep API documentation in sync with backend changes in CI</a>{" "}
+    shows the workflow to add it to.
+  </p>
+
+  <h2>Keep samples in step with SDK releases</h2>
+  <p>
+    Nothing in Blume ties a sample to an SDK version. When you release an SDK
+    that renames a method, the docs keep showing the old call until someone
+    changes it. The pins in <code>samples-check</code> are how you notice:
+    bump them to the new release in the same pull request as the sample
+    updates, and the check fails on every call the release broke. If a
+    dependency bot opens the bump for you, the failing check is the reminder.
+  </p>
+
+  <h3>When the spec is generated</h3>
+  <p>
+    If your spec comes from your code, regenerating it would wipe samples you
+    wrote into it. Keep them in an{" "}
+    <a href="/docs/references/openapi#overlays">overlay</a> instead, a
+    separate file Blume applies to the spec at build time:
+  </p>
+  <CodeBlock
+    code={`overlay: 1.1.0
+info:
+  title: SDK code samples
+  version: 1.0.0
+actions:
+  - target: $.paths['/messages'].post
+    update:
+      x-codeSamples:
+        - lang: typescript
+          label: TypeScript SDK
+          source: |
+            import { Acme } from "@acme/messages";
+
+            const acme = new Acme({ apiKey: process.env.ACME_API_KEY });
+
+            const message = await acme.messages.send({
+              channel: "email",
+              to: "ada@example.com",
+              template: "welcome",
+            });
+            console.log(message.id);`}
+    lang="yaml"
+    title="overlays/code-samples.yaml"
+  />
+  <p>List it under <code>overlays</code> in the adapter:</p>
+  <CodeBlock
+    code={`openapi({
+  codeSamples: ["curl"],
+  overlays: ["./overlays/code-samples.yaml"],
+  route: "/api",
+  spec: "./openapi.yaml",
+}),`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Then add <code>../overlays/code-samples.yaml</code> after{" "}
+    <code>../openapi.yaml</code> in the <code>check</code> script, so the
+    check reads both files. An overlay adds to any samples the operation
+    already has rather than replacing them, so keep each sample in one place,
+    or the page shows it twice. The <a href="/guides/openapi-overlays-public-docs">overlays guide</a>{" "}
+    covers the format in depth.
+  </p>
+
+  <h3>When the SDK is generated</h3>
+  <p>
+    SDK generators can write the samples themselves, from the SDK they
+    build, so the samples change with every release. Speakeasy writes them as
+    an overlay file, which goes under <code>overlays</code>. Stainless
+    publishes a copy of your spec with <code>x-codeSamples</code> added, and
+    can serve it from a stable URL; point <code>spec</code> at that URL. With
+    either one, the samples come from the generator, so the check above is
+    optional.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>A sample doesn't appear</h3>
+  <p>
+    Blume skips an entry without a warning when its <code>lang</code> or{" "}
+    <code>source</code> isn't a string, or when <code>x-codeSamples</code>{" "}
+    isn't a list. A <code>source</code> that's a <code>$ref</code> is read
+    relative to the spec. When Blume can't read that file, or the{" "}
+    <code>$ref</code> points at a spot inside a document rather than a file
+    of code, it leaves the sample out with a{" "}
+    <code>BLUME_OPENAPI_CODE_SAMPLE_REF</code> warning that names the
+    operation. Also check the list sits on the operation, not on the path.
+    Run <code>node extract.mjs ../openapi.yaml</code> in{" "}
+    <code>samples-check</code> to name each entry that isn't written out
+    inline.
+  </p>
+  <h3>Two tabs are both called Python</h3>
+  <p>
+    Your entry has no <code>label</code>, so it took the language's name, the
+    same as the generated Python tab. Give it a label, or drop{" "}
+    <code>python</code> from <code>codeSamples</code>.
+  </p>
+  <h3>The generated samples are still there</h3>
+  <p>
+    Check you edited the adapter whose <code>route</code> serves the page:{" "}
+    <code>codeSamples: false</code> covers only the operations its own
+    specs render.
+  </p>
+  <h3>A sample has no syntax colors</h3>
+  <p>
+    The highlighter didn't recognize the <code>lang</code>, so the code shows
+    as plain text. Use a common language name, like{" "}
+    <code>typescript</code>, <code>python</code>, <code>go</code>, or{" "}
+    <code>bash</code>.
+  </p>
+  <h3>The SDK tab ignores the Try it form</h3>
+  <p>
+    That's by design: only generated samples follow the form. Keep a
+    generated cURL tab for readers who want a request built from their own
+    values.
+  </p>
+</GuidePage>

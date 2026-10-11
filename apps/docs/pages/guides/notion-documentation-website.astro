@@ -1,0 +1,387 @@
+---
+// Notion as a docs CMS: checked against the Notion source docs, the content
+// sources overview (caching, sync, preview), the deployment docs, the
+// notion() adapter and its Notion lowering (core/sources/notion.ts), and the
+// init scaffold on main; Notion's connection, automation, and Sites steps
+// against Notion's help and developer docs, and deploy hooks against
+// Vercel's docs (September 2026). Not yet run end to end on a sample
+// database. Review (September 2026): the missing-token and missing-SDK
+// troubleshooting follows cli/prepare.ts, core/sources/notion.ts, and
+// core/sources/cache.ts (the secrets warning prints before any source loads,
+// and the source stops before calling Notion without a token or its SDK).
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("notion-documentation-website")}>
+  <p>
+    By the end of this guide, your team writes docs in a Notion database and
+    readers get a docs site built from it: a sidebar, search, your own domain,
+    and a Status property that decides which pages go live. Edits in Notion
+    reach the site on the next build, which you'll trigger automatically.
+  </p>
+  <p>
+    Notion can also publish pages to the web by itself.{" "}
+    <a href="https://www.notion.com/help/public-pages-and-web-publishing"
+      >Notion Sites</a
+    > gives a page a public notion.site address, with optional search engine indexing
+    and custom domains as a paid add-on. If a public Notion page is all you need,
+    that's the simpler path. This guide is for when you want a docs site instead:
+    Notion pages side by side with Markdown pages, docs-style navigation and search,
+    and a site you host and deploy yourself. When engineers own the Markdown
+    half and another team owns Notion,{" "}
+    <a href="/guides/markdown-notion-documentation"
+      >Combine Markdown and Notion in one site</a
+    > adds the ownership rules and CI checks.
+  </p>
+
+  <h2>Set up the database</h2>
+  <p>
+    Blume reads one Notion database, and each row becomes a page. Create a
+    database (or pick an existing one) with these properties:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Property</th>
+        <th scope="col">Type</th>
+        <th scope="col">What Blume does with it</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Name</td>
+        <td>Title</td>
+        <td>The page title, and its URL when Slug is empty</td>
+      </tr>
+      <tr>
+        <td>Description</td>
+        <td>Text</td>
+        <td>The page's description, shown under the title and to search engines</td>
+      </tr>
+      <tr>
+        <td>Slug</td>
+        <td>Text</td>
+        <td>The page's path, like <code>getting-started</code> or <code>guides/setup</code></td>
+      </tr>
+      <tr>
+        <td>Order</td>
+        <td>Number</td>
+        <td>Its position in the sidebar</td>
+      </tr>
+      <tr>
+        <td>Status</td>
+        <td>Status or select</td>
+        <td>Whether it publishes</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Only the title is required, and Blume finds the title property whatever it's
+    called. The others are optional, and any other properties you keep for your
+    team, like an owner or a due date, never reach the site.
+  </p>
+  <p>
+    Status is the publish gate. A page publishes when its Status equals the
+    value you tell Blume means published, and every other value makes it a
+    draft. Notion's default status options are Not started, In progress, and
+    Done, so this guide treats Done as published. Add three or four pages, set
+    most of them to Done, and leave one In progress so you can watch it stay
+    off the site.
+  </p>
+  <Callout type="warning">
+    A page with an empty Status publishes, and a database with no Status
+    property publishes every page. Give every page a status before you connect
+    a database that holds anything you don't want public.
+  </Callout>
+
+  <h2>Connect Notion</h2>
+  <p>
+    Blume reads the database through the Notion API, with a token from an
+    internal connection (called an integration in older Notion docs). In
+    Notion's developer portal:
+  </p>
+  <ol>
+    <li>
+      Under <strong>Internal connections</strong>, create a new connection in the
+      workspace that holds your database.
+    </li>
+    <li>
+      On its <strong>Configuration</strong> tab, copy the installation access
+      token. Blume only reads, so the connection needs no capability beyond
+      reading content.
+    </li>
+    <li>
+      On its <strong>Content access</strong> tab, give it access to your
+      database. You can also do this from the database itself: open the{" "}
+      <strong>•••</strong> menu, choose <strong>Add connections</strong>, and
+      pick your connection.
+    </li>
+  </ol>
+  <p>
+    Share the database itself. If the database appears on another page as a
+    linked view, sharing that page isn't enough.
+  </p>
+  <p>
+    Last, copy the database's ID. Open the database as a full page and copy its
+    link: the ID is the 32-character string in it, before any <code>?v=</code>.
+  </p>
+
+  <h2>Add the Notion source</h2>
+  <p>In an empty folder, start a Blume project:</p>
+  <CodeBlock code="npx blume init" lang="bash" />
+  <p>
+    When it asks where your content lives, pick both <code>filesystem</code>{" "}
+    and <code>notion</code>. That keeps a local <code>docs/</code> folder for
+    pages you'd rather write in Markdown, like the home page, and adds{" "}
+    <code>@notionhq/client</code>, the Notion SDK the source needs, to your
+    dependencies. In an existing Blume project, install the SDK yourself:
+  </p>
+  <CodeBlock code="npm install @notionhq/client" lang="bash" />
+  <p>
+    Then point the source at your database. Replace the ID with yours, and pick
+    a <code>prefix</code>: every Notion page is served under it.
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { filesystem, notion } from "blume/sources";
+
+export default defineConfig({
+  title: "Acme Docs",
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      notion({
+        database: "8f2c1e0a4b7d4f3c9e6a5d2b1c0f9e8d",
+        prefix: "handbook",
+        publishedValue: "Done",
+      }),
+    ],
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>publishedValue</code> defaults to <code>Published</code>, so a
+    database on Notion's default statuses publishes nothing until you set it to{" "}
+    <code>Done</code>. If your properties have other names, map them with{" "}
+    <code>properties</code>, for example{" "}
+    <code>{'properties: { slug: "URL", order: "Position" }'}</code>. The keys
+    are <code>title</code>, <code>description</code>, <code>slug</code>,{" "}
+    <code>order</code>, and <code>status</code>.
+  </p>
+  <p>
+    The source reads its token from <code>NOTION_TOKEN</code>. Blume loads{" "}
+    <code>.env.local</code> for you, and <code>blume init</code> already
+    listed it in <code>.gitignore</code>, so put the token there:
+  </p>
+  <CodeBlock
+    code={`echo "NOTION_TOKEN=paste-your-token-here" >> .env.local`}
+    lang="bash"
+  />
+
+  <h2>Check the imported pages</h2>
+  <p>Start the dev server:</p>
+  <CodeBlock code="npx blume dev" lang="bash" />
+  <p>
+    Your Notion pages appear under <code>/handbook/</code>, in a sidebar group
+    of their own beside your Markdown pages, sorted by Order. A page with a
+    Slug is served at that path under the prefix, and one without is served at
+    its title, lowercased and hyphenated. Walk through a few pages and check:
+  </p>
+  <ul>
+    <li>
+      <strong>Headings.</strong> The title is already the page's top heading,
+      so write sections with Notion's Heading 2 and Heading 3. A Heading 1
+      becomes a second top heading.
+    </li>
+    <li>
+      <strong>Callouts, toggles, and columns.</strong> Callouts become Blume
+      callouts, toggles become accordions, and columns stay columns. A callout's
+      emoji and color don't carry over.
+    </li>
+    <li>
+      <strong>Code blocks.</strong> Code keeps its text exactly and its
+      language, so it's highlighted like any code block on the site.
+    </li>
+    <li>
+      <strong>Images.</strong> Notion's image links are signed and expire, so
+      Blume downloads each image at build time and serves it from your own site.
+      The published pages don't depend on Notion at all.
+    </li>
+    <li>
+      <strong>Links.</strong> Links keep their target, so a link to another
+      Notion page opens Notion, not your site. Link to the page's path on your
+      site instead, like <code>/handbook/setup</code>.
+    </li>
+  </ul>
+  <p>
+    Paragraphs, lists, to-dos, quotes, dividers, and videos carry over too.
+    Tables, bookmarks, embeds, equations, synced blocks, and child pages don't:
+    they're left out of the page without a warning, so check any page that
+    uses them.
+  </p>
+  <p>
+    The dev server fetches the database once and then serves its snapshot, so
+    restarting stays fast. After you edit a page in Notion, pull the latest
+    content and the running server reloads:
+  </p>
+  <CodeBlock code="npx blume sync" lang="bash" />
+  <p>
+    To pick up edits on their own while you work, set{" "}
+    <code>pollInterval</code> (in seconds) on the source. It only affects the
+    dev server.
+  </p>
+
+  <h2>Keep drafts off the site</h2>
+  <p>
+    The page you left In progress shows up in <code>blume dev</code>, so you
+    can review drafts before they go out. A production build leaves it out.
+    Build the site and serve the result:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+npx blume preview`}
+    lang="bash"
+  />
+  <p>
+    Open the draft's URL on the preview server: it's a 404, and it's missing
+    from the sidebar, the search index, and the sitemap. Set its Status to
+    Done, build again, and it's there. To share a build that includes drafts
+    for review, run <code>npx blume build --preview</code> and deploy it only
+    behind <a href="/docs/deployment#private-docs">access protection</a>,
+    never to your public domain.
+  </p>
+
+  <h2>Deploy</h2>
+  <p>
+    A Notion-backed site builds to static files, so it runs on any static
+    host. This guide uses Vercel: Blume detects the site URL there, and its
+    deploy hooks drive the next step.
+  </p>
+  <ol>
+    <li>Push the project to a GitHub repository.</li>
+    <li>
+      Import the repository in Vercel. Set the build command to{" "}
+      <code>npm run build</code> and the output directory to <code>dist</code>{" "}
+      if Vercel doesn't detect them, and use Node.js 22 or later.
+    </li>
+    <li>
+      In the project's settings, add <code>NOTION_TOKEN</code> as an
+      environment variable, for Production and Preview alike.
+    </li>
+    <li>Deploy.</li>
+  </ol>
+  <p>
+    The source reads the token while the site builds, not while it serves, so
+    the token never reaches your readers. For another host, the same settings
+    are on the <a href="/docs/deployment">deployment page</a>.
+  </p>
+
+  <h2>Rebuild when Notion changes</h2>
+  <p>
+    Blume imports Notion at build time, so an edit reaches readers on the next
+    build, not the moment you type it. Give Notion a way to start that build.
+    In your Vercel project's settings, open <strong>Git</strong>, and under{" "}
+    <strong>Deploy Hooks</strong> create a hook for your production branch.
+    Vercel gives you a URL that starts a build whenever something sends it a{" "}
+    <code>POST</code> request. Anyone with the URL can trigger a build, so
+    treat it like a password.
+  </p>
+  <p>
+    On a paid Notion plan, let Notion call it. Add a database automation with
+    the <strong>Property edited</strong> trigger on Status, and a{" "}
+    <strong>Send webhook</strong> action with the deploy hook URL. Setting a
+    page to Done then publishes it. A property trigger only watches the
+    property you pick, so edits to the body of a page that's already published
+    won't fire it on their own. Pair it with a schedule, or run the hook by
+    hand.
+  </p>
+  <p>
+    On any plan, rebuild on a schedule instead. Save the hook URL as a
+    repository secret named <code>VERCEL_DEPLOY_HOOK</code>, then add a
+    workflow that calls it every hour:
+  </p>
+  <CodeBlock
+    code={`name: Rebuild docs from Notion
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -fsS -X POST "$DEPLOY_HOOK"
+        env:
+          DEPLOY_HOOK: \${{ secrets.VERCEL_DEPLOY_HOOK }}`}
+    lang="yaml"
+    title=".github/workflows/rebuild-docs.yml"
+  />
+  <p>
+    <code>workflow_dispatch</code> adds a button to run it by hand from the
+    repository's Actions tab. Change a page in Notion, run the workflow, and
+    the change is live once the build finishes.
+  </p>
+
+  <h2>What stays private</h2>
+  <p>
+    Blume can only read what you shared with the connection, and only pages
+    that pass the Status gate are built. Everything in a published page's body
+    becomes public, but the rest of your workspace, the properties Blume
+    doesn't map, and your drafts stay in Notion. So does the token, which lives
+    in your environment variables rather than your repository.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>No Notion pages show up</h3>
+  <p>
+    Every page is probably a draft. Check that <code>publishedValue</code>{" "}
+    matches your published option exactly, capitals included. Without it,
+    Blume looks for <code>Published</code>, which Notion's default statuses
+    don't have. If your status property isn't called Status, name it with{" "}
+    <code>properties.status</code>.
+  </p>
+  <h3>A page you published is missing</h3>
+  <p>
+    Its Status doesn't match <code>publishedValue</code>, or the build ran
+    before you changed it. Rebuild, and in dev run <code>npx blume sync</code>,
+    since the dev server serves its snapshot until you do.
+  </p>
+  <h3>Notion can't find the database</h3>
+  <p>
+    The connection doesn't have access to it. Share the database itself with
+    the connection, not a page that shows a linked view of it, and check the ID
+    is the database's and not a view's. Blume passes on Notion's own error in
+    a <code>BLUME_SOURCE_FETCH_FAILED</code> diagnostic.
+  </p>
+  <h3>The build fails with BLUME_MISSING_SECRET</h3>
+  <p>
+    <code>NOTION_TOKEN</code> isn't set where the build runs. Blume warns
+    about it first, then the source stops before calling Notion, since Notion
+    answers nothing without a token. With a snapshot to serve instead, as a
+    dev server that fetched once already has, you get only the warning and the
+    cached pages. Locally, check <code>.env.local</code> is in the folder you
+    run Blume from. On your host, add the variable to the environment that ran
+    the build, then redeploy: a changed variable only applies to new builds.
+  </p>
+  <h3>The build says a package isn't installed</h3>
+  <p>
+    <code>@notionhq/client</code> isn't in your dependencies. On a fresh build
+    the source stops with <code>BLUME_SOURCE_SDK_MISSING</code>, naming the
+    package and its install command. Install it with{" "}
+    <code>npm install @notionhq/client</code> and build again.
+  </p>
+  <h3>The site shows old content with a warning</h3>
+  <p>
+    <code>BLUME_SOURCE_OFFLINE</code> means the fetch failed and Blume served
+    the last snapshot it had instead. The warning includes the reason. A fresh
+    build machine has no snapshot to fall back on, so there the same failure
+    stops the build and your last deployment stays live.
+  </p>
+</GuidePage>

@@ -2,18 +2,19 @@ import { readFile } from "node:fs/promises";
 
 import { hasGeneratedChangelog } from "../astro/pages.ts";
 import { CHANGELOG_INDEX_ROUTE } from "../core/changelog-index.ts";
-import { rewriteRelativeImages } from "../core/content-assets.ts";
+import { rewriteRelativeAssets } from "../core/content-assets.ts";
 import { discoverPages, discoverPagesSync } from "../core/custom-pages.ts";
 import matter from "../core/frontmatter.ts";
 import type { BlumeProject } from "../core/project-graph.ts";
 import { readExpandedEntryText } from "../core/sources/read.ts";
-import type { RouteManifestEntry } from "../core/types.ts";
+import type { PageRecord, RouteManifestEntry } from "../core/types.ts";
 import { advertisedConfig, servesMcp } from "./agent-surface.ts";
 import { buildChangelogIndexMarkdown } from "./changelog-markdown.ts";
 import { downlevelComponents } from "./component-markdown.ts";
 import { buildLlmsIndex } from "./llms.ts";
 import { relativeLinkRewriter } from "./relative-links.ts";
 import { projectComponentSerializers } from "./serializers.ts";
+import { servesSkillsIndex } from "./skills.ts";
 import { applyAgentVisibility } from "./visibility.ts";
 
 /** One route's raw-Markdown variants. */
@@ -63,8 +64,10 @@ export const buildRawMarkdown = async (
   const components = projectComponentSerializers(project);
   const rewriteLinks = relativeLinkRewriter(project);
 
-  const readRoute = async (route: RouteManifestEntry): Promise<string> => {
-    const page = pageById.get(route.id);
+  const readRoute = async (
+    route: RouteManifestEntry,
+    page: PageRecord | undefined
+  ): Promise<string> => {
     if (page) {
       return await readExpandedEntryText(project, page);
     }
@@ -73,9 +76,10 @@ export const buildRawMarkdown = async (
 
   const entries = await Promise.all(
     project.manifest.routes.map(async (route) => {
-      let text = await readRoute(route);
+      const page = pageById.get(route.id);
+      let text = await readRoute(route, page);
       if (route.sourcePath) {
-        text = rewriteRelativeImages({
+        text = rewriteRelativeAssets({
           deployBase: project.config.deployment.options.base,
           projectRoot: project.context.root,
           source: text,
@@ -86,6 +90,7 @@ export const buildRawMarkdown = async (
       // agent fetched resolves it to, and `/install` gains the base and the
       // page's locale the rendered link has — remote content included.
       text = rewriteLinks(text, {
+        entryId: page?.entryId,
         route: route.path,
         sourcePath: route.sourcePath,
       });
@@ -115,7 +120,7 @@ export const buildRawMarkdown = async (
         config: advertisedConfig(project.config, {
           mcp: servesMcp(project, userPages),
           // Skills are collected at the end of the build, after this runs.
-          skills: Boolean(project.config.agents.skills),
+          skills: servesSkillsIndex(project.config),
         }),
       }),
     };

@@ -1,0 +1,508 @@
+---
+// PDF and EPUB export: checked against the export, theming, syntax, and
+// frontmatter docs, PageActions.astro (the Export menu and the EPUB
+// rewrite), RootLayout.astro (where the rail renders), the print rules in
+// theme/entry.ts, and epub-gen-memory 1.1.2's browser bundle. Ran headless
+// Chromium (Playwright) against the docs dev server: printed
+// /docs/content/syntax and /docs/configuration/export to PDF in light and
+// dark themes, downloaded real EPUBs from the Export menu and unzipped them,
+// injected images, a long code line, and a closed accordion to test those
+// cases, and applied the theme.css print rules below as an injected style
+// tag. Rendered the test page's diagram with the pinned mermaid-cli
+// command. Browser dialog labels come from the Chromium and Firefox string
+// files; WebP's status from the EPUB 3.2 and 3.3 specs. Not yet run end to
+// end on a fresh project (the test page itself was not built), and the EPUBs
+// were not opened in Apple Books, calibre, or an e-ink reader.
+// Updated for the print and EPUB fixes on main (e12b668a, 2dda5feb):
+// the print block in theme/entry.ts, the beforeprint switch in
+// head-scripts.ts, and the EPUB metadata, link, and image handling in
+// PageActions.astro. Read in the source; not rerun in a browser.
+// Updated for the page actions in the mobile On this page menu (2c113598):
+// RootLayout.astro, TableOfContents.astro, and PageActions.astro. Opened the
+// menu on a probe site in Chrome at 390, 768, and 1,100 pixels, and ran
+// Export to PDF and Export to EPUB from it before and after a client-side
+// navigation.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("documentation-pdf-epub-export")}>
+  <p>
+    Readers can save a docs page for offline use once you turn on Blume's{" "}
+    <code>export</code> option. Every docs page then gets an{" "}
+    <strong>Export</strong> action under its table of contents, with{" "}
+    <strong>Export to PDF</strong> and <strong>Export to EPUB</strong>. PDF
+    goes through the browser's print dialog, with a print stylesheet that
+    strips the site down to the article. EPUB is generated in the reader's
+    browser and downloads as a <code>.epub</code> file for Apple Books,
+    calibre, or an e-reader. Neither needs a server, so a static site stays
+    static.
+  </p>
+  <p>
+    Both formats export the one page the reader is on, not your documentation
+    as a book. If you need a whole manual with a cover and chapters, that's a
+    publishing pipeline Blume doesn't provide. For PDF alone, you may not need
+    the option: the print stylesheet ships on every Blume site, so a reader who
+    presses Ctrl+P (Cmd+P on a Mac) already gets the stripped-down page.{" "}
+    <code>export</code> adds a menu entry that opens the print dialog, plus
+    the EPUB generator.
+  </p>
+  <p>
+    This guide turns the action on, builds a test page with the content that
+    exports worst, checks both files against a checklist, and fixes what
+    doesn't carry over.
+  </p>
+
+  <h2>Turn on the Export action</h2>
+  <p>Add <code>export</code> to your config. <code>true</code> turns on both formats:</p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme Docs",
+  export: true,
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    To offer one format, pass an object instead. A format you leave out stays
+    off, so this shows only the PDF entry:
+  </p>
+  <CodeBlock code={`export: { pdf: true },`} lang="ts" title="blume.config.ts" />
+  <p>
+    The action sits below the table of contents. Where that is depends on the
+    window and the page:
+  </p>
+  <ul>
+    <li>
+      In a window at least 1,280 pixels wide, it's in the right-hand rail. In
+      a narrower window or on a phone, it's at the bottom of the{" "}
+      <strong>On this page</strong> menu above the content, and its PDF and
+      EPUB entries open right under it.
+    </li>
+    <li>
+      Pages whose <a href="/docs/content/frontmatter#layout">layout mode</a>{" "}
+      drops the table of contents (<code>wide</code>, <code>center</code>,{" "}
+      <code>frame</code>, and <code>custom</code>) have no rail and no menu,
+      and API operation pages have neither.
+    </li>
+    <li>
+      Turning the outline off with <code>toc: false</code> keeps both, so the
+      action stays. The menu then holds only the page actions.
+    </li>
+  </ul>
+
+  <h2>Build a test page</h2>
+  <p>
+    Exports go wrong on particular content, so test with a page that has all
+    of it: a long command, a titled code block, a collapsed code block, tabs, a
+    diagram, an image, a callout, and an accordion. Save this as{" "}
+    <code>docs/export-test.mdx</code>, and put any screenshot at{" "}
+    <code>docs/images/dashboard.png</code>:
+  </p>
+  <CodeBlock
+    code={`---
+title: Send your first message
+description: Install the Acme SDK, send a test SMS, and check that it arrived.
+---
+
+Install the SDK with the package manager your project uses:
+
+\`\`\`package-install
+npm i @acme/messages
+\`\`\`
+
+## Set your API key
+
+<Tabs>
+  <Tab title="macOS and Linux">
+    On macOS or Linux, export the key in your shell:
+
+    \`\`\`bash
+    export ACME_KEY="sk_test_123"
+    \`\`\`
+
+  </Tab>
+  <Tab title="Windows">
+    On Windows, set the key in PowerShell:
+
+    \`\`\`powershell
+    $env:ACME_KEY = "sk_test_123"
+    \`\`\`
+
+  </Tab>
+</Tabs>
+
+## Send a message
+
+Send a test SMS from the command line:
+
+\`\`\`bash
+curl -X POST https://api.acme.example/v1/messages -H "Authorization: Bearer $ACME_KEY" -H "Content-Type: application/json" -d '{"to":"+15550100","channel":"sms","template":"welcome"}'
+\`\`\`
+
+Or from your code:
+
+\`\`\`ts send.ts
+import { Acme } from "@acme/messages";
+
+const acme = new Acme({ apiKey: process.env.ACME_KEY });
+const message = await acme.messages.send({
+  to: "+15550100",
+  channel: "sms",
+  template: "welcome",
+});
+console.log(message.id, message.status);
+\`\`\`
+
+The API answers with the new message:
+
+\`\`\`json response.json expandable
+{
+  "id": "msg_01J9ZKQ4",
+  "object": "message",
+  "channel": "sms",
+  "to": "+15550100",
+  "template": "welcome",
+  "status": "queued",
+  "created_at": "2026-09-27T10:00:00Z",
+  "updated_at": "2026-09-27T10:00:00Z",
+  "segments": 1,
+  "error": null,
+  "metadata": {
+    "source": "quickstart"
+  },
+  "links": {
+    "self": "https://api.acme.example/v1/messages/msg_01J9ZKQ4"
+  }
+}
+\`\`\`
+
+## Check delivery status
+
+\`\`\`mermaid
+sequenceDiagram
+  participant App
+  participant API as Acme API
+  participant Phone
+  App->>API: POST /messages
+  API-->>App: 202, status queued
+  API->>Phone: SMS
+  App->>API: GET /messages/msg_01J9ZKQ4
+  API-->>App: status delivered
+\`\`\`
+
+![The Acme dashboard with the test message marked Delivered](./images/dashboard.png)
+
+| Status      | Meaning                        |
+| ----------- | ------------------------------ |
+| \`queued\`    | Accepted, not yet sent         |
+| \`sent\`      | Handed to the carrier          |
+| \`delivered\` | The carrier confirmed delivery |
+| \`failed\`    | See the \`error\` field          |
+
+:::warning
+Test keys only send to phone numbers you've verified in the dashboard.
+:::
+
+<Accordion>
+  <AccordionItem title="Why is my message still queued?">
+    A message to a new number can wait a few minutes for carrier checks.
+    Resend it from [Send a message](#send-a-message), or go back to
+    [the overview](/).
+  </AccordionItem>
+</Accordion>`}
+    lang="mdx"
+    title="docs/export-test.mdx"
+  />
+  <p>
+    Run <code>npx blume dev</code> and open <code>/export-test</code>. Wait
+    for the diagram to draw before you export. Mermaid renders in the browser after the page loads, and a diagram
+    that hasn't finished prints as a blank space.
+  </p>
+
+  <h2>Check the PDF</h2>
+  <p>
+    You can export from either theme. When a reader prints from the dark
+    theme, Blume switches the page to the light theme for the printout and
+    back again afterward, so the PDF has dark text on white paper.
+  </p>
+  <p>
+    Choose <strong>Export</strong>, then <strong>Export to PDF</strong>. In
+    Chrome, pick <strong>Save as PDF</strong> as the destination, open{" "}
+    <strong>More settings</strong>, and turn on{" "}
+    <strong>Background graphics</strong> so the callout keeps its fill. In
+    Firefox, the destination is <strong>Save to PDF</strong> and the option is{" "}
+    <strong>Print backgrounds</strong>. Other browsers word it differently.
+  </p>
+  <p>
+    The header, sidebar, rail, and breadcrumbs are gone, and so is everything
+    after the article: feedback, "Last updated", previous and next links, and
+    the site footer. Code blocks print without their buttons, and{" "}
+    <code>response.json</code> prints in full even though it's collapsed on
+    screen. Links stay clickable, and in Chrome they point at full URLs on
+    your site. Compare the rest against the{" "}
+    <a href="#export-checklist">checklist</a> below. On this page, expect two
+    problems: the <code>curl</code> command is cut off at the right margin,
+    and the accordion prints only its title.
+  </p>
+
+  <h2>Check the EPUB</h2>
+  <p>
+    Choose <strong>Export</strong>, then <strong>Export to EPUB</strong>. The
+    entry reads <strong>Generating…</strong> while Blume loads the generator
+    and downloads the page's images, then the browser saves{" "}
+    <code>export-test.epub</code>. The file is named after the page's path,
+    with slashes turned into hyphens, so <code>/guides/setup</code> becomes{" "}
+    <code>guides-setup.epub</code>.
+  </p>
+  <p>
+    None of the site's CSS or JavaScript goes into the file. Blume rewrites the
+    article as plain HTML with a small built-in e-reader stylesheet, and the
+    result is one chapter:
+  </p>
+  <ul>
+    <li>The book's title is the page's title.</li>
+    <li>It opens on a contents page with a single entry, then the page.</li>
+    <li>
+      The author and publisher are your site's <code>title</code>, and the
+      language is the page's language, so a translated page exports as a book
+      in that language.
+    </li>
+    <li>
+      Links to other pages become full URLs on your site, since the book holds
+      only this page.
+    </li>
+  </ul>
+  <p>
+    Open the file in Apple Books and in calibre's E-book viewer, and on an
+    e-reader if your readers use one. Reading apps lay out the same file
+    differently, so check each one against the checklist.
+  </p>
+
+  <h2>Export checklist</h2>
+  <p>
+    What happens to each part of the test page. The PDF column comes from
+    Chrome's print output, and the EPUB column from the file's contents.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">On the page</th>
+        <th scope="col">In the PDF</th>
+        <th scope="col">In the EPUB</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Header, sidebar, rail, breadcrumbs</td>
+        <td>Removed</td>
+        <td>Not included</td>
+      </tr>
+      <tr>
+        <td>Feedback, "Last updated", previous and next links, site footer</td>
+        <td>Removed</td>
+        <td>Not included</td>
+      </tr>
+      <tr>
+        <td>Code highlighting</td>
+        <td>Kept</td>
+        <td>Plain monospace</td>
+      </tr>
+      <tr>
+        <td>Long code lines</td>
+        <td>Cut off at the margin</td>
+        <td>Wrapped</td>
+      </tr>
+      <tr>
+        <td>Code block titles, like <code>send.ts</code></td>
+        <td>Printed</td>
+        <td>Dropped</td>
+      </tr>
+      <tr>
+        <td><code>expandable</code> code blocks</td>
+        <td>Printed in full</td>
+        <td>Complete</td>
+      </tr>
+      <tr>
+        <td>Copy buttons and icons</td>
+        <td>Buttons removed, icons printed</td>
+        <td>Dropped</td>
+      </tr>
+      <tr>
+        <td>Tabs, including package installs</td>
+        <td>Every panel, under the tab strip</td>
+        <td>Every panel, with no tab labels</td>
+      </tr>
+      <tr>
+        <td>Accordions</td>
+        <td>Title only, unless open when printed</td>
+        <td>Title and body; the reader decides how to show them</td>
+      </tr>
+      <tr>
+        <td>Mermaid diagrams</td>
+        <td>Printed, once rendered</td>
+        <td>Dropped</td>
+      </tr>
+      <tr>
+        <td>Images</td>
+        <td>Printed</td>
+        <td>Downloaded into the file</td>
+      </tr>
+      <tr>
+        <td>Links to other pages</td>
+        <td>Full URLs to your site</td>
+        <td>Full URLs to your site</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Two EPUB rows need a closer look in each app. Blume converts colocated
+    images to WebP, which EPUB only made a core image format in version 3.3,
+    so check that images show on the oldest reader you care about. And an
+    image without alt text gets the alt text "image-placeholder" in the file.
+  </p>
+
+  <h2>Adjust the page for readable exports</h2>
+  <p>
+    Most fixes are to the content, and they make the web page clearer too.
+  </p>
+
+  <h3>Wrap long code lines</h3>
+  <p>
+    Paper can't scroll, so wrap long lines. Append <code>wrap</code> to one
+    fence (<code>```bash wrap</code>), or wrap every block on the site:
+  </p>
+  <CodeBlock
+    code={`markdown: {
+  code: { wrap: true },
+},`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Both wrap on screen too. The print rules further down wrap only on paper.
+    See <a href="/docs/content/syntax#long-lines-and-long-blocks">Long lines
+    and long blocks</a> for the other fence options.
+  </p>
+
+  <h3>Say in the text what the chrome said</h3>
+  <p>
+    The EPUB drops code block titles and tab labels, so don't let them carry
+    information alone. Name the file in the sentence before the block
+    ("Or from your code, in <code>send.ts</code>:"), and name the platform
+    inside each tab panel. The test page's tabs already do this, which is why
+    they still read correctly without labels.
+  </p>
+
+  <h3>Give every diagram a text fallback</h3>
+  <p>
+    A Mermaid diagram draws itself with JavaScript, so it never reaches the
+    EPUB. Add a sentence after it that states what it shows. When a diagram
+    has to survive in both formats, render it to an image and reference that
+    instead. Move the diagram source into <code>diagrams/delivery.mmd</code>,
+    outside your content folder, then run:
+  </p>
+  <CodeBlock
+    code={`npx -y -p @mermaid-js/mermaid-cli@12.0.0 mmdc -i diagrams/delivery.mmd -o docs/images/delivery.svg`}
+    lang="bash"
+  />
+  <p>
+    Replace the fence with{" "}
+    <code>![How a message moves from your app to a phone](./images/delivery.svg)</code>.
+    The image doesn't follow the site's dark theme the way a live diagram
+    does, so save this for diagrams readers need offline. The CLI also draws
+    with Mermaid's own defaults, not Blume's dagre layout and classic look; to
+    match the site, start the <code>.mmd</code> file with a front matter block
+    that sets <code>layout: dagre</code> and <code>look: classic</code> under{" "}
+    <code>config:</code>. The{" "}
+    <a href="/guides/architecture-documentation-mermaid">Mermaid guide</a>{" "}
+    covers writing diagrams in the first place.
+  </p>
+
+  <h3>Keep must-read content out of collapsed places</h3>
+  <p>
+    An accordion prints only its title unless the reader opened it before
+    printing. Use accordions for optional detail, and keep a step or a
+    required value where it prints. <code>expandable</code> code blocks don't
+    have this problem: they print in full.
+  </p>
+
+  <h3>Host images next to the page</h3>
+  <p>
+    Reference images by relative path, as the test page does, and give each
+    one alt text. The EPUB export downloads every image on the page, and a
+    browser can only download an image from another host when that host
+    allows it with CORS headers. An image it can't download is left out of the
+    book.
+  </p>
+
+  <h3>Tidy the printout with theme.css</h3>
+  <p>
+    Blume's print stylesheet already removes the page chrome and opens{" "}
+    <code>expandable</code> blocks. What it leaves alone is long lines, which
+    print cut off. To wrap them on paper only, add a print rule to a{" "}
+    <a href="/docs/configuration/theming#themecss"><code>theme.css</code></a>{" "}
+    in your project root:
+  </p>
+  <CodeBlock
+    code={`@media print {
+  .prose pre,
+  .prose pre code {
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere;
+  }
+}`}
+    lang="css"
+    title="theme.css"
+  />
+  <Callout type="warning">
+    These selectors target Blume's markup, not a documented styling API, so
+    they can change in an update. Export the test page again after you upgrade
+    Blume. They also only affect PDF, since the EPUB carries none of your CSS.
+  </Callout>
+
+  <h2>Troubleshooting</h2>
+  <h3>There's no Export action</h3>
+  <p>
+    Check that <code>export</code> is set in <code>blume.config.ts</code> and
+    that the page uses the default layout mode. In a window narrower than
+    1,280 pixels, open the <strong>On this page</strong> menu above the
+    content: the action is at the bottom of it. API operation pages never show
+    it.
+  </p>
+  <h3>An image from another host is missing from the EPUB</h3>
+  <p>
+    Open the browser console. A warning that starts with{" "}
+    <code>[blume] EPUB export left out an image it couldn't fetch</code> names
+    the image the browser couldn't download, usually one on another host
+    without CORS headers. The rest of the book still exports. Download the
+    image into your content folder and reference it by relative path.
+  </p>
+  <h3>An image is missing from an EPUB made in dev</h3>
+  <p>
+    In <code>blume dev</code>, optimized images come from Astro's image
+    endpoint, a URL with no file extension, and the EPUB records them without
+    a media type. Do your final EPUB check on a production build:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+npx blume preview`}
+    lang="bash"
+  />
+  <h3>A diagram prints in dark colors</h3>
+  <p>
+    The page prints in the light theme, but a Mermaid diagram redraws itself
+    for a theme change in the background, and a print that starts before the
+    redraw finishes keeps the dark drawing. Switch the site to the light
+    theme, wait for the diagram to redraw, and export again.
+  </p>
+  <h3>A diagram is blank in the PDF</h3>
+  <p>
+    It was printed before Mermaid finished drawing it. Wait until the diagram
+    shows on screen, then print again.
+  </p>
+</GuidePage>

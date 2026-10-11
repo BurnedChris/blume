@@ -9,7 +9,10 @@ import { validateLinks } from "../src/core/links.ts";
 import { scanProject } from "../src/core/project-graph.ts";
 import type { BlumeProject } from "../src/core/project-graph.ts";
 import {
+  bareRedirect,
+  compileEveryRedirect,
   compileRedirects,
+  destinationPrefix,
   encodeCapture,
   exactFirst,
   expandRedirect,
@@ -126,6 +129,17 @@ describe("parsing and validation", () => {
   });
 });
 
+describe(destinationPrefix, () => {
+  it("cuts a target at its first capture reference", () => {
+    expect(destinationPrefix("/guides/:slug*")).toBe("/guides/");
+    expect(destinationPrefix("/v2/*")).toBe("/v2/");
+    expect(destinationPrefix("/new/article-*")).toBe("/new/article-");
+    expect(destinationPrefix("/a/:x/b/:y")).toBe("/a/");
+    expect(destinationPrefix("/:page")).toBe("/");
+    expect(destinationPrefix("/exact/path")).toBeUndefined();
+  });
+});
+
 describe(expandRedirect, () => {
   it("splits a rest into the bare path and one or more segments", () => {
     const rules = expandRedirect(BETA);
@@ -161,6 +175,28 @@ describe(expandRedirect, () => {
     expect(expandRedirect({ from: "/a/*/b", status: 301, to: "/" })).toEqual(
       []
     );
+  });
+});
+
+describe(bareRedirect, () => {
+  it("names the bare path a rest also matches, and where it goes", () => {
+    expect(bareRedirect(BETA)).toStrictEqual({ from: "/beta", to: "/v2" });
+    expect(bareRedirect(SPLAT)).toStrictEqual({
+      from: "/legacy",
+      to: "/?from=legacy",
+    });
+    expect(
+      bareRedirect({ from: "/mcp/*", status: 301, to: "/user-api/*" })
+    ).toStrictEqual({ from: "/mcp", to: "/user-api" });
+  });
+
+  it("has none for an exact path, a pattern without a rest, or a capture left", () => {
+    expect(bareRedirect({ from: "/old", status: 301, to: "/new" })).toBeNull();
+    expect(bareRedirect(ONE)).toBeNull();
+    expect(bareRedirect(ARTICLE)).toBeNull();
+    expect(
+      bareRedirect({ from: "/v/:version/:slug*", status: 301, to: "/" })
+    ).toBeNull();
   });
 });
 
@@ -238,6 +274,27 @@ describe("matching", () => {
     ]);
     expect(matchCompiledRedirect(compiled, "/old/7")).toBeNull();
     expect(encodeCapture("a?b#c")).toBe("a%3Fb%23c");
+  });
+
+  it("compiles exact redirects too for the dev server, ahead of patterns", () => {
+    const every = compileEveryRedirect([
+      BETA,
+      { from: "/beta/a.b/", status: 307, to: "/ü" },
+      { from: "/", status: 302, to: "/start" },
+    ]);
+    expect(every.slice(0, 2)).toStrictEqual([
+      [String.raw`^/beta/a\.b/?$`, "/%C3%BC", 307],
+      ["^/$", "/start", 302],
+    ]);
+    expect(every.slice(2)).toStrictEqual(compileRedirects([BETA]));
+    expect(matchCompiledRedirect(every, "/beta/a.b/")).toStrictEqual([
+      "/%C3%BC",
+      307,
+    ]);
+    expect(matchCompiledRedirect(every, "/beta/axb")).toStrictEqual([
+      "/v2/axb",
+      301,
+    ]);
   });
 
   it("reads a request URL's decoded path, keeping a malformed escape", () => {
@@ -437,11 +494,14 @@ describe("the generated Astro config", () => {
     root: "/p",
     themeFile: null,
   };
-  const configFor = (input: BlumeConfigInput): string =>
+  const configFor = (
+    input: BlumeConfigInput,
+    contentRoutes: string[] = []
+  ): string =>
     astroConfigTemplate({
       askPath: "/p/.blume/src/generated/Ask.astro",
       config: blumeConfigSchema.parse(input),
-      contentRoutes: [],
+      contentRoutes,
       context,
       examplesPath: "/p/.blume/src/generated/examples.ts",
       examplesThemePath: "/p/.blume/src/generated/examples.css",
@@ -453,19 +513,70 @@ describe("the generated Astro config", () => {
       themePath: "/p/.blume/src/generated/app.css",
     });
 
-  it("gives Astro the exact redirects and the dev server the patterns", () => {
+  it("gives Astro the exact redirects and the dev server every one", () => {
     const generated = configFor({
       basePath: "/docs",
-      redirects: [{ from: "/old", to: "/new" }, BETA],
+      redirects: [BETA, { from: "/old", status: 302, to: "/new" }],
     });
     expect(generated).toContain(
-      'redirects: {"/docs/old":{"destination":"/docs/new","status":301}}'
+      'redirects: {"/docs/old":{"destination":"/docs/new","status":302}}'
+    );
+    // Astro's dev handler would answer the exact one with a 301.
+    expect(generated).toContain(
+      '"redirects":[["^/docs/old/?$","/docs/new",302],["^/docs/beta/?$","/docs/v2",301],["^/docs/beta/(.+?)/?$","/docs/v2/$1",301]]'
+    );
+    expect(configFor({})).not.toContain('"redirects":[');
+  });
+
+  it("moves a moved page's Markdown copies with it", () => {
+    const generated = configFor(
+      {
+        basePath: "/docs",
+        deployment: vercel({ base: "/base" }),
+        redirects: [{ from: "/old", status: 307, to: "/new" }],
+      },
+      ["/docs/new"]
     );
     expect(generated).toContain(
-      '"redirects":[["^/docs/beta/?$","/docs/v2",301],["^/docs/beta/(.+?)/?$","/docs/v2/$1",301]]'
+      'redirects: {"/docs/old":{"destination":"/base/docs/new","status":307},"/docs/old.md":{"destination":"/base/docs/new.md","status":307},"/docs/old.mdx":{"destination":"/base/docs/new.mdx","status":307}}'
     );
-    const exactOnly = configFor({ redirects: [{ from: "/old", to: "/new" }] });
-    expect(exactOnly).not.toContain('"redirects":[');
+    expect(generated).toContain(
+      '"redirects":[["^/docs/old/?$","/base/docs/new",307],["^/docs/old\\\\.md/?$","/base/docs/new.md",307],["^/docs/old\\\\.mdx/?$","/base/docs/new.mdx",307]]'
+    );
+  });
+
+  it("writes no redirect page over a page's own index.html", () => {
+    // Astro would write the redirect page to `guide/index.html/index.html`,
+    // where the page `/guide` is written as a file: the build fails with
+    // EISDIR. The host files and the dev server still answer it.
+    const redirects = [
+      { from: "/guide/index.html", to: "/guide" },
+      { from: "/index.html", to: "/" },
+      { from: "/gone/index.html", to: "/" },
+    ];
+    const generated = configFor({ redirects }, ["/", "/guide"]);
+    expect(generated).toContain(
+      'redirects: {"/gone/index.html":{"destination":"/","status":301}},'
+    );
+    expect(generated).toContain(
+      '"redirects":[["^/guide/index\\\\.html/?$","/guide",301],["^/index\\\\.html/?$","/",301],["^/gone/index\\\\.html/?$","/",301]]'
+    );
+    // A server build writes no redirect pages, and its adapter routes them.
+    expect(
+      configFor({ deployment: vercel(), redirects }, ["/", "/guide"])
+    ).toContain('"/guide/index.html":{"destination":"/guide","status":301}');
+  });
+
+  it("leaves the home page's Markdown copies to their endpoint", () => {
+    // `/index.md` is the home page's copy: a redirect there would replace it
+    // with a redirect page pointing at itself.
+    const generated = configFor({ redirects: [{ from: "/index", to: "/" }] }, [
+      "/",
+    ]);
+    expect(generated).toContain(
+      'redirects: {"/index":{"destination":"/","status":301}},'
+    );
+    expect(generated).toContain('"redirects":[["^/index/?$","/",301]]');
   });
 });
 
@@ -494,11 +605,77 @@ describe("the scan", () => {
     ]);
     expect(conflicts[0]?.file).toBe(join(root, "blume.config.ts"));
 
+    // An exact redirect shadows its page on every host: a warning.
+    const shadowed = await scanProject(
+      await scratch({
+        "blume.config.ts": `export default ${JSON.stringify({
+          redirects: [
+            { from: "/intro/", to: "/" },
+            { from: "/gone", to: "/" },
+          ],
+        })};\n`,
+        "docs/index.md": "---\ntitle: Home\n---\n\nHome.\n",
+        "docs/intro.md": "---\ntitle: Intro\n---\n\nIntro.\n",
+      }),
+      { mode: "build" }
+    );
+    expect(
+      shadowed.diagnostics
+        .filter(
+          (diagnostic) => diagnostic.code === "BLUME_REDIRECT_MATCHES_PAGE"
+        )
+        .map((diagnostic) => [diagnostic.severity, diagnostic.message])
+    ).toEqual([
+      [
+        "warning",
+        "The redirect from /intro/ is also the page /intro, which never publishes: its URL redirects to / instead.",
+      ],
+    ]);
+
     // A link into a pattern is a valid target, like one to an exact `from`.
+    // Only the first redirect's own target is reported: nothing is served
+    // under `/tutorials/`.
     const links = await validateLinks(scanned.graph, {
       publicDir: null,
       redirects: scanned.config.redirects,
     });
-    expect(links).toEqual([]);
+    expect(links.map((diagnostic) => diagnostic.message)).toEqual([
+      "The redirect from /guides/:slug* sends readers to /tutorials/:slug*, but nothing is served under /tutorials/.",
+    ]);
+  });
+
+  it("warns on an exact redirect from a page's Markdown copy", async () => {
+    const scanned = await scanProject(
+      await scratch({
+        "blume.config.ts": `export default ${JSON.stringify({
+          redirects: [
+            { from: "/intro.md", to: "/intro" },
+            { from: "/index.mdx", to: "/llms.txt" },
+            // No page has these copies, and `/index` is no copy at all.
+            { from: "/gone.md", to: "/" },
+            { from: "/index", to: "/" },
+          ],
+        })};\n`,
+        "docs/index.md": "---\ntitle: Home\n---\n\nHome.\n",
+        "docs/intro.md": "---\ntitle: Intro\n---\n\nIntro.\n",
+      }),
+      { mode: "build" }
+    );
+    expect(
+      scanned.diagnostics
+        .filter(
+          (diagnostic) => diagnostic.code === "BLUME_REDIRECT_MATCHES_PAGE"
+        )
+        .map((diagnostic) => [diagnostic.severity, diagnostic.message])
+    ).toEqual([
+      [
+        "warning",
+        "The redirect from /intro.md is also the Markdown copy of the page /intro, so that copy never publishes: its URL redirects to /intro instead.",
+      ],
+      [
+        "warning",
+        "The redirect from /index.mdx is also the Markdown copy of the page /, so that copy never publishes: its URL redirects to /llms.txt instead.",
+      ],
+    ]);
   });
 });

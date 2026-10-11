@@ -6,6 +6,8 @@ description: >-
 
 Jede Seite akzeptiert die folgenden Frontmatter-Felder. Alle Felder sind optional.
 
+Frontmatter ist YAML. Setz einen Wert deshalb in Anführungszeichen, wenn er einen Doppelpunkt gefolgt von einem Leerzeichen enthält, etwa `description: "Setup: the easy way"`. Ohne Anführungszeichen liest YAML den zweiten Doppelpunkt als Beginn eines verschachtelten Schlüssels, und Blume meldet Datei und Zeile als `BLUME_FRONTMATTER_INVALID`.
+
 <TypeTable
   type={{
     title: { type: "string", description: "Page title." },
@@ -22,7 +24,7 @@ Jede Seite akzeptiert die folgenden Frontmatter-Felder. Alle Felder sind optiona
     authors: {
       type: "string | string[] | object[]",
       description:
-        "Post author(s) for blog/changelog content — a name, or objects with a name plus optional avatar/url and any extra fields. Preserved as-is.",
+        "Post author(s) for blog/changelog content — a name, or objects with a name plus optional avatar/url and any extra fields. Credited as Person nodes in the page's JSON-LD; other fields are preserved as-is.",
     },
     slug: {
       type: "string",
@@ -50,6 +52,23 @@ Jede Seite akzeptiert die folgenden Frontmatter-Felder. Alle Felder sind optiona
       default: "false",
       description: "Shorthand for seo.noindex.",
     },
+    narration: {
+      type: "boolean",
+      default: "true",
+      description:
+        "Set to false to leave this page without the Listen to this page player when narration is on.",
+    },
+    related: {
+      type: "(string | { [title]: string })[] | false",
+      description:
+        "Pages to suggest at the foot of this one, up to ten: root-relative paths, absolute URLs, or { Title: link } to name a link. See Related pages below.",
+    },
+    pagination: {
+      type: "boolean",
+      default: "true",
+      description:
+        "Set to false to drop the previous and next links at the foot of the page. The page stays in the order, so its neighbors still link to it.",
+    },
     icon: {
       type: "string",
       description:
@@ -60,8 +79,63 @@ Jede Seite akzeptiert die folgenden Frontmatter-Felder. Alle Felder sind optiona
       description:
         'Pin the page\'s "last updated" date (ISO or YAML date); overrides the git-derived date.',
     },
+    mode: {
+      type: '"default" | "wide" | "center" | "custom" | "frame"',
+      default: '"default"',
+      description: "What the page shows around its content. See Layout below.",
+    },
+    api: {
+      type: "string",
+      description:
+        "An endpoint this page documents by hand, as an HTTP method and a path or URL (POST /v1/users). See Hand-written API pages.",
+    },
+    authMethod: {
+      type: '"bearer" | "basic" | "key" | "none"',
+      description:
+        "How an api page's endpoint authenticates, over the site's api.auth.",
+    },
+    playground: {
+      type: '"interactive" | "simple" | "none"',
+      default: '"interactive"',
+      description:
+        "What an api page shows: the Try it panel and samples, the samples only, or neither.",
+    },
   }}
 />
+
+## Layout
+
+`mode` legt fest, was eine Seite um ihren Inhalt herum anzeigt:
+
+| Modus | Sidebar | Titel und Inhaltsverzeichnis | Links am Seitenende und Footer | Inhaltsbreite |
+| --- | --- | --- | --- | --- |
+| `default` | Ja | Ja | Ja | Die Fließtextbreite |
+| `wide` | Ja | Nur Titel | Ja | Die gesamte Spalte |
+| `center` | Nein | Nur Titel | Ja | Eine breitere, zentrierte Spalte |
+| `frame` | Ja | Nein | Nein | Die gesamte Spalte |
+| `custom` | Nein | Nein | Nein | Die gesamte Seite |
+
+`wide` eignet sich für eine Seite mit breiten Tabellen oder Diagrammen, `center` für Release Notes oder eine Ankündigung, die von oben nach unten gelesen wird. `custom` behält nur den Header, etwa für eine in MDX geschriebene Landingpage, und `frame` behält zusätzlich die Sidebar, etwa für ein Tool oder Dashboard, das in der Navigation der Doku sitzt. Keiner der beiden Modi rendert Titel oder Beschreibung der Seite, schreib also deine eigene Überschrift. Jeder Modus bleibt in der Suche und behält seine Markdown-Kopie.
+
+```yaml lineNumbers
+title: Welcome
+mode: custom
+```
+
+Die Werte entsprechen denen von Mintlify. Dessen `assistant`-Modus, ein ganzseitiger Chat, hat keine Entsprechung.
+
+## Verwandte Seiten [#related-pages]
+
+`related` listet Seiten auf, die am Ende dieser Seite als Karten unter der Überschrift **Verwandte Seiten** vorgeschlagen werden:
+
+```yaml lineNumbers
+related:
+  - /guides/deployment
+  - Search setup: /configuration/search
+  - https://astro.build
+```
+
+Ein root-relativer Pfad verweist auf eine andere Seite, die die Karte mit deren Titel und Beschreibung anzeigt. Auf einer übersetzten Seite verlinkt er auf die Übersetzung, sofern es eine gibt. Ein `Title: link`-Eintrag legt den Titel der Karte selbst fest, und eine absolute URL verlinkt unter ihrem Hostnamen auf eine externe Website. Pfade werden wie jeder andere Link auf der Seite geprüft, sodass [`blume validate`](/docs/cli/validate) einen Pfad meldet, der zu keiner Seite passt. Der Schlüssel entspricht dem von Mintlify, sodass migrierte Seiten ihn unverändert behalten.
 
 ## Sidebar
 
@@ -75,7 +149,7 @@ sidebar:
   display: page
 ```
 
-`hidden` entfernt die Seite aus der Sidebar und aus der Zurück/Weiter-Paginierung. Auf der `index`-Seite eines Ordners entfernt es nur die eigene Zeile der Seite: Die Gruppenzeile verlinkt weiterhin auf die Seite, und die Zurück/Weiter-Links führen weiterhin durch sie hindurch.
+`hidden` entfernt die Seite aus der Sidebar und aus der Zurück/Weiter-Paginierung und damit auch aus der Sitemap, der Suche und `llms.txt` (siehe [Versteckte Seiten](/docs/content/navigation#hidden-pages)). Auf der `index`-Seite eines Ordners entfernt es nur die eigene Zeile der Seite: Die Gruppenzeile verlinkt weiterhin auf die Seite, sodass die Zurück/Weiter-Links weiterhin durch sie hindurchführen und die Seite in der Sitemap, der Suche und `llms.txt` bleibt. Auf der Startseite, der `index`-Seite des Stammverzeichnisses, entfernt es ebenfalls nur die Zeile: Die Seite bleibt in der Sitemap, der Suche und `llms.txt`.
 
 `display` legt den Darstellungsmodus der Ordnergruppe der Seite fest ([Überschreibungen pro Gruppe](/docs/content/navigation#per-group-overrides)) und ist nur auf der `index`-Seite eines Ordners in der generierten Sidebar sinnvoll — überall sonst (auf einer Nicht-Index-Seite, der eigenen `index`-Seite des Content-Stammverzeichnisses oder jeder Seite unter einer expliziten `navigation.sidebar`) gibt es keine Gruppe zu konfigurieren, und Blume warnt mit `BLUME_SIDEBAR_DISPLAY_IGNORED`.
 
@@ -92,7 +166,7 @@ seo:
     creator: "@jane"
 ```
 
-`noindex` gibt ein robots-`noindex` aus, entfernt die Seite aus der Sitemap und lässt ihre strukturierten Daten weg. `x.creator` schreibt die Seite einem X-Account zu (`twitter:creator`) — etwa der Person, die einen Gastbeitrag verfasst hat. Alle Felder findest du unter [Metadaten](/docs/discoverability/metadata#per-page-overrides).
+`noindex` gibt ein robots-`noindex` aus, entfernt die Seite aus der Sitemap und lässt ihre strukturierten Daten weg. Ein `canonical`, das auf eine andere URL verweist, entfernt die Seite ebenfalls aus der Sitemap, da die Sitemap nur kanonische URLs auflistet. `x.creator` schreibt die Seite einem X-Account zu (`twitter:creator`) — etwa der Person, die einen Gastbeitrag verfasst hat. Alle Felder findest du unter [Metadaten](/docs/discoverability/metadata#per-page-overrides).
 
 ## Suche [#search]
 
@@ -100,7 +174,11 @@ seo:
 search:
   exclude: false
   tags: [api]
+  keywords: [install, setup]
+  boost: 3
 ```
+
+`exclude` hält die Seite aus der Suche heraus, und `tags` versieht ihren Eintrag mit Labels, nach denen ein gehosteter Such-Adapter filtern kann (siehe [Tags](/docs/configuration/search#tags)). `keywords` sind zusätzliche Begriffe, über die die Seite neben ihrem eigenen Text gefunden wird. `boost` multipliziert die Relevanz der Seite: Werte über 1 ranken sie höher, Werte unter 1 niedriger. Mehr dazu findest du unter [Ranking](/docs/configuration/search#ranking).
 
 ## KI [#ai]
 
@@ -109,7 +187,7 @@ ai:
   exclude: true
 ```
 
-`ai.exclude` hält die Seite aus [`llms.txt` und `llms-full.txt`](/docs/discoverability/llms-txt#excluding-a-page) heraus. Die Seite wird trotzdem gerendert, bleibt in der Suche und behält ihren Platz in der Sitemap.
+`ai.exclude` hält die Seite aus [`llms.txt` und `llms-full.txt`](/docs/discoverability/llms-txt#excluding-a-page) und aus der Seitenübersicht im [Skill deiner Website](/docs/discoverability/agent-discovery#your-sites-skill) heraus. Die Seite wird trotzdem gerendert, bleibt in der Suche, im [MCP-Server](/docs/discoverability/mcp) und in der [JSON-API](/docs/discoverability/json-api) und behält ihren Platz in der Sitemap.
 
 ## Changelog
 

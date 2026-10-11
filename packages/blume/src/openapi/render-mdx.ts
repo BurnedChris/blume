@@ -1,4 +1,4 @@
-import type { Nodes, Root } from "mdast";
+import type { Heading, List, Nodes, Paragraph, Root } from "mdast";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { toString as mdastToString } from "mdast-util-to-string";
 import stringWidth from "string-width";
@@ -10,7 +10,7 @@ import type { GraphqlMember } from "./graphql.ts";
 import { isGraphqlOperationKind } from "./graphql.ts";
 import type { ApiOperationRef, ApiSpecData } from "./model.ts";
 import type { ReferenceSource } from "./references.ts";
-import { asSentence } from "./sentence.ts";
+import { asSentence, closeSentence, endsInLeadIn } from "./sentence.ts";
 import { operationSignature } from "./signature.ts";
 
 /**
@@ -161,9 +161,55 @@ const closeOpenFence = (text: string): string => {
     : `${text}\n${fence}`;
 };
 
-/** Spec prose as MDX that is safe to follow with a component. */
-const descriptionMdx = (text: string): string =>
-  mdxSafe(closeOpenFence(text.trim()));
+/** The deepest heading Markdown can write. */
+const MAX_HEADING_DEPTH = 6;
+
+/** A line break inside a heading's text, with any quote or list indentation. */
+const HEADING_BREAK = /[ \t]*\r?\n[\s>]*/gu;
+
+/** Every heading in a Markdown tree, in document order. */
+const headingsOf = (node: Nodes): Heading[] => {
+  if (node.type === "heading") {
+    return [node];
+  }
+  return "children" in node ? node.children.flatMap(headingsOf) : [];
+};
+
+/**
+ * Spec prose with every heading `by` levels deeper, written as an ATX
+ * heading (`#` × depth, capped at 6). A spec's `info.description` is often a
+ * whole document under `# Introduction` and `# Authentication` headings, so
+ * on a page whose title is already its `<h1>` it would add more: the
+ * overview's description and an operation's sit under the title (`#` becomes
+ * `##`), and a tag's under its `##` section (`#` becomes `###`). Headings are
+ * found in the same `<`-masked parse as `mdxSafe`'s, since the emitted MDX
+ * has no HTML blocks to hide one in; a setext heading's lines join into one.
+ */
+const demoteHeadings = (text: string, by: number): string => {
+  let out = "";
+  let cursor = 0;
+  for (const heading of headingsOf(
+    fromMarkdown(text.replaceAll("<", HTML_MASK))
+  )) {
+    // fromMarkdown always stamps positions; 0 is an unreachable guard.
+    const start = heading.position?.start.offset ?? 0;
+    const from = heading.children[0]?.position?.start.offset ?? start;
+    const to = heading.children.at(-1)?.position?.end.offset ?? from;
+    const depth = Math.min(heading.depth + by, MAX_HEADING_DEPTH);
+    out += `${text.slice(cursor, start)}${"#".repeat(depth)} ${text
+      .slice(from, to)
+      .replace(HEADING_BREAK, " ")}`.trimEnd();
+    cursor = heading.position?.end.offset ?? start;
+  }
+  return out + text.slice(cursor);
+};
+
+/**
+ * Spec prose as MDX that is safe to follow with a component, its headings
+ * demoted `by` levels under the page's own (see {@link demoteHeadings}).
+ */
+const descriptionMdx = (text: string, by: number): string =>
+  mdxSafe(closeOpenFence(demoteHeadings(text.trim(), by)));
 
 /**
  * Frontmatter emitted for one operation or overview page. Boolean flags are
@@ -193,6 +239,51 @@ export interface RenderedPage {
 const META_DESCRIPTION_MAX = 160;
 const WHITESPACE = /\s+/gu;
 const TRAILING_WORD = /\s+\S*$/u;
+// A list item's own closing mark, dropped where the items join into one line.
+const ITEM_END = /[.;。；]$/u;
+
+/** Markdown as single-line plain text. */
+const flatten = (node: Nodes): string =>
+  mdastToString(node).replace(WHITESPACE, " ").trim();
+
+/** The innermost last node of `node`: the one its text ends in. */
+const lastLeaf = (node: Nodes): Nodes => {
+  const last = "children" in node ? node.children.at(-1) : undefined;
+  return last ? lastLeaf(last) : node;
+};
+
+/**
+ * Whether a paragraph ends in a lead-in colon. Only a colon in the prose
+ * counts: one closing inline code (`tenant:`) is part of the literal.
+ */
+const leadsIn = (paragraph: Paragraph): boolean => {
+  const leaf = lastLeaf(paragraph);
+  return leaf.type === "text" && endsInLeadIn(leaf.value);
+};
+
+/** A list as one line: each item's first paragraph, joined by semicolons. */
+const listProse = (list: List): string =>
+  list.children
+    .map((item) => {
+      const paragraph = item.children.find(
+        (child) => child.type === "paragraph"
+      );
+      if (!paragraph) {
+        return "";
+      }
+      const text = flatten(paragraph);
+      // A closing mark in inline code (`SELECT 1;`) is part of the literal.
+      if (lastLeaf(paragraph).type !== "text") {
+        return text;
+      }
+      // A nested list's lead-in ("Modes:") closes like any other.
+      return (leadsIn(paragraph) ? asSentence(text) : text).replace(
+        ITEM_END,
+        ""
+      );
+    })
+    .filter(Boolean)
+    .join("; ");
 
 /**
  * Flatten markdown prose to its first paragraph as single-line plain text,
@@ -200,12 +291,25 @@ const TRAILING_WORD = /\s+\S*$/u;
  * was lossy on literal prose — `snake_case` → `snakecase`, `C#` → `C` — and
  * these strings ship as `seo.description` meta tags. A description with no
  * paragraph (say, only a heading or list) falls back to its first block.
+ *
+ * A first paragraph that leads in to a list ("Supports two modes:") is cut
+ * from what it introduces, so the list's items follow it on the same line. A
+ * lead-in to anything else, such as a code block, is closed as a sentence.
  */
 const plainProse = (markdown: string): string => {
-  const tree = fromMarkdown(markdown);
-  const first =
-    tree.children.find((node) => node.type === "paragraph") ?? tree.children[0];
-  return first ? mdastToString(first).replace(WHITESPACE, " ").trim() : "";
+  const { children } = fromMarkdown(markdown);
+  const index = children.findIndex((node) => node.type === "paragraph");
+  const paragraph = children[index];
+  if (paragraph?.type !== "paragraph") {
+    return children[0] ? flatten(children[0]) : "";
+  }
+  const text = flatten(paragraph);
+  if (!leadsIn(paragraph)) {
+    return text;
+  }
+  const next = children[index + 1];
+  const items = next?.type === "list" ? listProse(next) : "";
+  return items ? `${text} ${items}` : asSentence(text);
 };
 
 /** Cap `text` at `max` display columns, cutting on a word boundary. */
@@ -274,14 +378,16 @@ const operationDescription = (
     subject = `${operation.method.toUpperCase()} ${operation.path} ${operation.webhook ? "webhook" : "endpoint"}`;
   }
   const suffix = `Reference for the ${subject} in the ${apiPhrase(spec)}.`;
-  // Room for the joining space and the period `asSentence` may add, so a
+  // Room for the joining space and the period `closeSentence` may add, so a
   // title-like summary ("Get a flag") ends before the suffix begins.
   const prose = clip(
     plainProse(operation.description || operation.summary),
     META_DESCRIPTION_MAX - stringWidth(suffix) - 2
   );
+  // `plainProse` has already closed a lead-in colon, so one still at the end
+  // is a literal (`tenant:`) and keeps its period after it.
   return clip(
-    [asSentence(prose), suffix].filter(Boolean).join(" "),
+    [closeSentence(prose), suffix].filter(Boolean).join(" "),
     META_DESCRIPTION_MAX
   );
 };
@@ -289,7 +395,7 @@ const operationDescription = (
 /** Prepend a markdown description (if any) above a component invocation. */
 const withDescription = (description: string, component: string): string =>
   description.trim()
-    ? `${descriptionMdx(description)}\n\n${component}`
+    ? `${descriptionMdx(description, 1)}\n\n${component}`
     : component;
 
 export const operationMdx = (
@@ -337,9 +443,9 @@ export const operationMdx = (
   if (reference?.noindex) {
     seo.noindex = true;
   }
-  const sidebar: RenderedPageData["sidebar"] = {
-    label: operation.summary || operation.path,
-  };
+  // An operation without a summary is labeled as its page is titled, by its
+  // method and path: the path alone repeats for `GET /pets` and `POST /pets`.
+  const sidebar: RenderedPageData["sidebar"] = { label: title };
   // GraphQL operation kinds badge like HTTP methods, but a type page's kind
   // already heads its sidebar group ("Objects", "Enums", …) — an `OBJECT`
   // badge on every row would only repeat it, so type pages get none. The
@@ -408,7 +514,7 @@ export const overviewMdx = (
       continue;
     }
     const description = tag.description.trim()
-      ? [descriptionMdx(tag.description)]
+      ? [descriptionMdx(tag.description, 2)]
       : [];
     tagSections.push(
       [

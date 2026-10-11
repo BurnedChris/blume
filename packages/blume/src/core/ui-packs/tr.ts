@@ -34,6 +34,7 @@ export const tr: UIStringsOverride = {
     error: "Üzgünüz, bir şeyler ters gitti.",
     explainCode: "Bu kodu açıkla.",
     label: "Bir soru sorun",
+    open: "Asistanı aç",
     placeholder: "Bir soru sorun…",
     rateLimited:
       "Çok sayıda soru sordunuz. Birkaç dakika sonra yeniden deneyin.",
@@ -49,6 +50,7 @@ export const tr: UIStringsOverride = {
   banner: { dismiss: "Duyuruyu kapat" },
   changelog: {
     description: "Ürün güncellemeleri ve sürüm notları.",
+    empty: "Değişiklik günlüğünde henüz kayıt yok.",
     title: "Değişiklik günlüğü",
   },
   consent: {
@@ -70,6 +72,7 @@ export const tr: UIStringsOverride = {
     preview: "Önizleme",
     prop: "Özellik",
     selectTab: "Sekme seç",
+    selectView: "Görünüm seç",
     showLess: "Daha az göster",
     showMore: "Daha fazla göster",
     stars: "Yıldızlar",

@@ -2,7 +2,7 @@
 
 import { AbsoluteFill, Easing, interpolate, useCurrentFrame } from "remotion";
 
-// SEO + AEO scene: one centered, frosted `blume.config.ts` card whose seo / ai /
+// SEO + GEO scene: one centered, frosted `blume.config.ts` card whose seo / ai /
 // mcp keys stagger in — the code speaks for itself. Copy sourced from
 // the Discoverability section (discoverability/*) and configuration/ask-ai.
 
@@ -212,7 +212,7 @@ export const SeoAeoScene = () => {
             whiteSpace: "nowrap",
           }}
         >
-          SEO and AEO — optimized by default.
+          SEO and GEO — optimized by default.
         </span>
       </div>
 

@@ -2,7 +2,11 @@ import type { AstroIntegration } from "astro";
 import type { z } from "zod";
 
 import type { AskRetrievalOptions } from "../ai/ask-context.ts";
-import type { AssistantAdapter, AssistantGatewayAdapter } from "../ai/ask.ts";
+import type {
+  AssistantAdapter,
+  AssistantGatewayAdapter,
+  AssistantOpenAIAdapter,
+} from "../ai/ask.ts";
 import type { ComponentMarkdown } from "../ai/component-markdown.ts";
 import type { AnalyticsAdapter } from "../analytics/schema.ts";
 import type { CaptchaAdapter } from "../captcha/schema.ts";
@@ -18,6 +22,8 @@ import type { FontSlug } from "../theme/fonts.ts";
 import type { FooterSocial } from "./footer.ts";
 import type {
   blumeConfigSchema,
+  McpClient,
+  McpCustomClient,
   OpenInChatProvider,
   SidebarDisplay,
   SidebarItemConfig,
@@ -133,7 +139,7 @@ export interface ApiConfig {
   server?: string;
 }
 
-/** A link in a footer column. */
+/** A link in the footer's row. */
 export interface FooterLink {
   /** Link target (internal route or external URL). An external href opens in a new tab. */
   href: string;
@@ -141,26 +147,37 @@ export interface FooterLink {
   label: LocalizableLabel;
 }
 
-/** A footer link column. */
-export interface FooterColumn {
-  /** Links in the column, top to bottom. */
-  items: FooterLink[];
-  /** Column heading, or a map of locale code to heading. */
-  label?: LocalizableLabel;
-}
-
 /**
- * The site footer: social profile icons and link columns, rendered below the
- * content on every page.
+ * The site footer, below the content on every page: a row of links on one
+ * side, social profile icons on the other, and a copyright line centered
+ * between them.
  */
 export interface FooterConfig {
-  /** Link columns, at most four, left to right. */
-  links?: FooterColumn[];
+  /**
+   * A line of plain text centered between the links and the icons, like
+   * `© 2026 Acme, Inc.`, or a map of locale code to text.
+   */
+  copyright?: LocalizableLabel;
+  /** Links in one row, left to right. */
+  links?: FooterLink[];
   /**
    * Social profiles, platform to URL, shown as icons in the order written:
    * `{ github: "https://github.com/acme", x: "https://x.com/acme" }`.
    */
   socials?: Partial<Record<FooterSocial, string>>;
+}
+
+/**
+ * The generated `/changelog` index's heading and description. Each is a
+ * string, or a map of locale code to text; the index renders in the default
+ * locale. Unset, they're the `changelog` UI strings (`Changelog` in English),
+ * which `i18n.ui` translates.
+ */
+export interface ChangelogConfig {
+  /** The index's description, below its heading and in its meta description. */
+  description?: LocalizableLabel;
+  /** The index's heading, page title, and OG card title. */
+  title?: LocalizableLabel;
 }
 
 /**
@@ -172,7 +189,7 @@ export interface FooterConfig {
 export interface ContentConfig {
   /** Default page `type` for content that sets none. Defaults to `doc`. */
   defaultType?: string;
-  /** Glob patterns to ignore. Defaults to `["**\/_*", "**\/.*"]`. Shorthand; not allowed beside `sources`. */
+  /** Glob patterns to ignore, on top of `["**\/_*", "**\/.*"]`; a `!pattern` entry stops ignoring that pattern, a default included. Shorthand; not allowed beside `sources`. */
   exclude?: string[];
   /** Glob patterns to include. Defaults to `["**\/*.{md,mdx}"]`. Shorthand; not allowed beside `sources`. */
   include?: string[];
@@ -382,7 +399,7 @@ export interface NavigationConfig {
   /** Pinned links shown above the generated sidebar sections. */
   featured?: FeaturedLink[];
   /**
-   * The GitHub link in the header. `true` derives it from `github` (the
+   * The GitHub link in the footer. `true` derives it from `github` (the
    * default), `false` hides it, and an absolute URL points it anywhere on
    * GitHub — an organization, say, when the docs repo itself is private.
    */
@@ -514,6 +531,16 @@ export type SearchProviderConfig = AnySearchAdapter | false;
 
 /** The object form of `search`: the adapter plus adapter-independent settings. */
 export interface SearchOptions {
+  /** What search reports to the configured analytics providers. */
+  analytics?: {
+    /**
+     * Send each query's text with the `search` and `search_select` events.
+     * Defaults to `true`. `false` sends the query's length (`queryChars`)
+     * instead, and the text rides only the `blume:track` DOM event, for a
+     * site to forward on its own terms.
+     */
+    queries?: boolean;
+  };
   /** Indexing behavior. */
   indexing?: {
     /**
@@ -537,7 +564,7 @@ export interface SearchOptions {
 /**
  * Search configuration. Pass an adapter directly (`search: algolia({…})`, or
  * `false`) as shorthand for the object form, which also carries `popular`
- * links and `indexing` settings.
+ * links and `indexing` and `analytics` settings.
  */
 export type SearchConfig = SearchProviderConfig | SearchOptions;
 
@@ -612,10 +639,10 @@ export interface AssistantConfig {
   instructions?: string;
   /**
    * Which backend answers: the descriptor an adapter factory returns —
-   * `gateway({ model })`, `openrouter({ model, reasoning })`,
-   * `llmgateway({ model })`, `inkeep({ model })`, or
-   * `openaiCompatible({ baseUrl, name, model, apiKeyEnv })`, all exported
-   * from `blume/ai`. Each adapter owns its model, key env var, reasoning
+   * `openai({ model, baseUrl })`, `anthropic({ model })`,
+   * `gemini({ model })`, `grok({ model })`, `gateway({ model })`,
+   * `openrouter({ model, reasoning })`, `llmgateway({ model })`, or
+   * `inkeep({ model })`, all exported from `blume/ai`. Each adapter owns its model, key env var, reasoning
    * mapping, and `providerOptions` passthrough. Defaults to
    * `gateway({ model: "openai/gpt-5.5" })`.
    */
@@ -638,9 +665,9 @@ export interface AssistantConfig {
   /**
    * Let the model search the docs and read whole pages itself, over several
    * steps, instead of answering only from the excerpts retrieved up front.
-   * Defaults to `true` for `gateway()`, `openrouter()`, and `llmgateway()`,
-   * and to `false` for `openaiCompatible()`, whose model may not support tool
-   * calling. `inkeep()` does its own retrieval and ignores it.
+   * Defaults to `true`, except for `openai()` with a `baseUrl`, whose model
+   * may not support tool calling. `inkeep()` does its own retrieval and
+   * ignores it.
    */
   tools?: boolean;
 }
@@ -700,6 +727,32 @@ export interface LlmsTxtConfig {
 
 /** Expose the docs as an MCP server for connecting agents. */
 export interface McpConfig {
+  /**
+   * The clients the "Connect to MCP" page action installs the server into,
+   * beside its "Copy server URL" row. Defaults to `true` (every built-in
+   * client). Set `false` to list none, or list built-in keys and your own
+   * clients, in order. A custom client's `command` is copied with `{name}`
+   * (the server name as an id) and `{url}` (the server's URL) filled in; its
+   * `label` localizes like a header link's, and `icon` defaults to `terminal`.
+   *
+   * ```ts
+   * agents: {
+   *   mcp: {
+   *     enabled: true,
+   *     clients: [
+   *       "claude-code",
+   *       {
+   *         label: "Copy Copilot CLI command",
+   *         command: "copilot mcp add --transport http {name} {url}",
+   *         icon: "terminal",
+   *       },
+   *       "vscode",
+   *     ],
+   *   },
+   * }
+   * ```
+   */
+  clients?: boolean | (McpClient | McpCustomClient)[];
   /** Turn the MCP server on. Defaults to `false`. */
   enabled?: boolean;
   /** Optional system hint passed to connecting agents. */
@@ -772,6 +825,12 @@ export interface I18nConfig {
   locales: LocaleConfigInput[];
   /** `dir`: locale directories (`fr/page.mdx`). `dot`: filename suffix (`page.fr.mdx`). */
   parser?: "dir" | "dot";
+  /**
+   * Send a visitor who lands on the default language's home page to the home
+   * page in their browser's preferred language, until they pick a language
+   * with the switcher. Defaults to `false`.
+   */
+  routeByBrowserLanguage?: boolean;
   /**
    * Per-locale UI string overrides, e.g.
    * `{ fr: { search: { button: "Rechercher" } } }`.
@@ -978,6 +1037,13 @@ export interface AgentsConfig {
   /** Expose the docs as an MCP server for agents. */
   mcp?: McpConfig;
   /**
+   * Generate the site's own agent skill: a `SKILL.md` named after the site,
+   * built from its navigation and page descriptions, served at `/skill.md`
+   * and in the skills discovery index. Needs `deployment.site`. A skill in
+   * `agents.skills` with the same name replaces it. Defaults to `true`.
+   */
+  skillMd?: boolean;
+  /**
    * Publish Agent Skills for discovery: a directory (resolved against the
    * project root) whose subdirectories each hold a `SKILL.md`. Skills are
    * copied under `/.well-known/agent-skills/` — single-file skills verbatim,
@@ -1033,6 +1099,12 @@ export interface OgPaletteConfig {
 
 /** Per-page Open Graph image generation. */
 export interface OgConfig {
+  /**
+   * Default social image for pages without their own `seo.image`, in place of
+   * the generated card (which then defaults off): one path or URL, or one per
+   * locale, like any localizable label.
+   */
+  image?: string | Record<string, string>;
   /**
    * Card subtitle. Defaults to the site description; a string overrides it,
    * `false` renders the card without one.
@@ -1157,6 +1229,45 @@ export interface SoftwareConfig {
 
 /** Discoverability: OG images, feeds, sitemap, robots, and structured data. */
 export interface SeoConfig {
+  /**
+   * Structured-data entities shared with a parent site (`example.com/docs`),
+   * referenced by absolute `@id` instead of defined again.
+   */
+  jsonLd?: {
+    /** The WebSite's `@id`, which every page names as `isPartOf`. */
+    websiteId?: string;
+    /** The Organization's `@id`; `organization` still adds its details. */
+    organizationId?: string;
+    /** Credited on pages without their own `authors`. */
+    author?: { "@id": string };
+    /** Every page's publisher, over the Organization. */
+    publisher?: { "@id": string };
+    /** Emit the WebSite node. Defaults to true unless `websiteId` is set. */
+    website?: boolean;
+  };
+  /**
+   * Date pages without a front matter `date` by the git commit that added
+   * their source file, following exact renames. Defaults to `false`.
+   */
+  datePublished?: false | "git";
+
+  /**
+   * Meta tags written into every page's head, name to content: site
+   * verification tokens, `theme-color`, an app banner, and anything else
+   * Blume has no setting for. `og:*`, `fb:*`, and `article:*` tags render
+   * with `property`, the rest with `name`. A tag Blume writes itself
+   * (`description`, `robots`, `og:image`, `twitter:card`, …) is refused.
+   *
+   * ```ts
+   * seo: {
+   *   metatags: {
+   *     "google-site-verification": "abc123",
+   *     "theme-color": "#0b5fff",
+   *   },
+   * }
+   * ```
+   */
+  metatags?: Record<string, string>;
   /** Per-page Open Graph image generation. */
   og?: OgConfig;
   /**
@@ -1179,7 +1290,12 @@ export interface SeoConfig {
   /** RSS/Atom feeds. */
   rss?: RssConfig;
   /** Generate sitemap.xml (requires `deployment.site`). Defaults to `true`. */
-  sitemap?: boolean;
+  sitemap?:
+    | boolean
+    | {
+        /** List each page's translations as hreflang links. Defaults to `false`. */
+        alternates?: boolean;
+      };
   /**
    * The documented product, added to the homepage's JSON-LD as a
    * `SoftwareApplication` node. `true` takes every default (name and
@@ -1286,8 +1402,8 @@ export interface MarkdownConfig {
 export interface ReactConfig {
   /**
    * Auto-memoize React components/hooks with the React Compiler
-   * (`babel-plugin-react-compiler`). On by default whenever React is enabled;
-   * set to `false` to skip the compiler's babel pass. Defaults to `true`.
+   * (`oxc-transform-react`). On by default whenever React is enabled;
+   * set to `false` to skip the compiler pass. Defaults to `true`.
    */
   compiler?: boolean;
 }
@@ -1354,9 +1470,11 @@ export type NarrationConfig =
       /**
        * Generate audio at build with a speech model:
        * `gateway({ model: "openai/tts-1-hd", voice: "alloy" })` from
-       * `blume/ai`. Without it, pages are read with browser voices.
+       * `blume/ai`, or `openai({ model, voice })` for OpenAI or, with a
+       * `baseUrl`, any OpenAI-compatible speech endpoint. Without it, pages
+       * are read with browser voices.
        */
-      provider?: AssistantGatewayAdapter;
+      provider?: AssistantGatewayAdapter | AssistantOpenAIAdapter;
     };
 
 /**
@@ -1475,6 +1593,11 @@ export interface BlumeConfig {
    */
   basePath?: string;
   /**
+   * The generated `/changelog` index's title and description, each a string
+   * or a per-locale map. Unset, they're the `changelog` UI strings.
+   */
+  changelog?: ChangelogConfig;
+  /**
    * c15t owns scripts and consent. Defaults to an offline c15t banner when a
    * root `consent.ts` or analytics is present. Use c15t() for a backend
    * (`mode: hosted({ backendURL })`), native() as a compatibility alias, or
@@ -1512,8 +1635,8 @@ export interface BlumeConfig {
    */
   feedback?: boolean | FeedbackConfig;
   /**
-   * The site footer: social profile icons and up to four link columns. Unset,
-   * the site has no footer.
+   * The site footer: a copyright line, a row of links, and social profile
+   * icons. Unset, the site has no footer.
    */
   footer?: FooterConfig;
   /** Opt-in custom frontmatter keys, validated by schemas you supply. */
@@ -1536,11 +1659,13 @@ export interface BlumeConfig {
   narration?: NarrationConfig;
   /** Header, sidebar, tabs, and switchers. */
   navigation?: NavigationConfig;
+  /** Send `X-Powered-By: Blume` with responses. Defaults to `true`. */
+  poweredBy?: boolean;
   /**
    * Limit how often one reader (by IP address) can call the server routes —
    * the assistant, the API playground proxy, server-side search — with an
    * adapter from `blume/ratelimit`: `memory()` (the default, 30 requests per
-   * 10 minutes), `upstash()`, or `cloudflare()`. `false` turns it off.
+   * 10 minutes), `upstash()`, `cloudflare()`, or `unkey()`. `false` turns it off.
    */
   rateLimit?: false | RateLimitAdapter;
   /** React island behavior (compiler auto-memoization). */

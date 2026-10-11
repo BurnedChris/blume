@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { readFile } from "node:fs/promises";
 
 import type { TrackProps } from "../src/components/layout/analytics-client.ts";
 import {
@@ -11,8 +12,9 @@ import type { SettleTimer } from "../src/components/layout/search/analytics.ts";
 /** One event the tracker sent. */
 interface Sent {
   event: string;
-  props: TrackProps;
+  /** What only the `blume:track` DOM event carries, when anything. */
   local?: TrackProps;
+  props: TrackProps;
 }
 
 let sent: Sent[] = [];
@@ -45,10 +47,13 @@ const manualTimer = () => {
   };
 };
 
-const tracker = (clock: ReturnType<typeof manualTimer>) =>
-  createSearchTracker((event, props, local) => {
-    sent.push({ event, local, props });
-  }, clock.timer);
+const tracker = (clock: ReturnType<typeof manualTimer>, queries?: boolean) =>
+  createSearchTracker(
+    (event, props, local) => {
+      sent.push(local ? { event, local, props } : { event, props });
+    },
+    { queries, timer: clock.timer }
+  );
 
 beforeEach(() => {
   sent = [];
@@ -71,8 +76,7 @@ describe(createSearchTracker, () => {
     expect(sent).toStrictEqual([
       {
         event: "search",
-        local: { query: "deploy" },
-        props: { length: 6, path: "/docs/install", results: 2 },
+        props: { path: "/docs/install", query: "deploy", results: 2 },
       },
     ]);
   });
@@ -87,9 +91,9 @@ describe(createSearchTracker, () => {
       "search_select",
     ]);
     expect(sent[1]?.props).toStrictEqual({
-      length: 7,
       path: "/docs/install",
       position: 2,
+      query: "sidebar",
       url: "/docs/navigation",
     });
     expect(clock.pending()).toBe(0);
@@ -118,20 +122,60 @@ describe(createSearchTracker, () => {
     const long = "x".repeat(MAX_QUERY_CHARS + 20);
     search.settled(long, 1);
     search.selected(long, 1, "/docs");
-    expect(
-      sent.map((entry) => String(entry.local?.query).length)
-    ).toStrictEqual([MAX_QUERY_CHARS, MAX_QUERY_CHARS]);
+    expect(sent.map((entry) => String(entry.props.query).length)).toStrictEqual(
+      [MAX_QUERY_CHARS, MAX_QUERY_CHARS]
+    );
+  });
+
+  it("sends a query's length instead of its text when queries are off", () => {
+    const clock = manualTimer();
+    const search = tracker(clock, false);
+    search.settled("my api key sk-123", 2);
+    search.selected("my api key sk-123", 1, "/docs/keys");
+    // Providers get the length; the text rides the DOM event alone.
+    expect(sent).toStrictEqual([
+      {
+        event: "search",
+        local: { query: "my api key sk-123" },
+        props: { path: "/docs/install", queryChars: 17, results: 2 },
+      },
+      {
+        event: "search_select",
+        local: { query: "my api key sk-123" },
+        props: {
+          path: "/docs/install",
+          position: 1,
+          queryChars: 17,
+          url: "/docs/keys",
+        },
+      },
+    ]);
   });
 
   it("waits on the browser's timer by default", async () => {
-    const search = createSearchTracker((event, props, local) => {
-      sent.push({ event, local, props });
+    const search = createSearchTracker((event, props) => {
+      sent.push({ event, props });
     });
     search.settled("default", 3);
     search.settled("default timer", 3);
     await Bun.sleep(SETTLE_MS + 50);
-    expect(sent.map((entry) => entry.local?.query)).toStrictEqual([
+    expect(sent.map((entry) => entry.props.query)).toStrictEqual([
       "default timer",
     ]);
+  });
+});
+
+describe("search dialog query analytics", () => {
+  it("turns query text off from search.analytics.queries", async () => {
+    const source = await readFile(
+      new URL("../src/components/layout/Search.astro", import.meta.url),
+      { encoding: "utf-8" }
+    );
+    expect(source).toContain(
+      'data-redact-queries={data.config.search.analytics.queries ? undefined : ""}'
+    );
+    expect(source).toContain(
+      'queries: !this.hasAttribute("data-redact-queries")'
+    );
   });
 });

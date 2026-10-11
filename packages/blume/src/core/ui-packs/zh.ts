@@ -33,6 +33,7 @@ export const zh: UIStringsOverride = {
     error: "抱歉，出了点问题。",
     explainCode: "解释这段代码。",
     label: "提出问题",
+    open: "打开助手",
     placeholder: "提出问题…",
     rateLimited: "你提的问题太多了，请几分钟后再试。",
     removeCode: "移除代码",
@@ -47,6 +48,7 @@ export const zh: UIStringsOverride = {
   banner: { dismiss: "关闭公告" },
   changelog: {
     description: "产品更新与版本说明。",
+    empty: "暂无更新日志条目。",
     title: "更新日志",
   },
   consent: {
@@ -67,6 +69,7 @@ export const zh: UIStringsOverride = {
     preview: "预览",
     prop: "属性",
     selectTab: "选择标签页",
+    selectView: "选择视图",
     showLess: "显示更少",
     showMore: "显示更多",
     stars: "星标",

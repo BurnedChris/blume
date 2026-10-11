@@ -34,6 +34,7 @@ export const bg: UIStringsOverride = {
     error: "Съжаляваме, нещо се обърка.",
     explainCode: "Обясни този код.",
     label: "Задайте въпрос",
+    open: "Отваряне на асистента",
     placeholder: "Задайте въпрос…",
     rateLimited:
       "Зададохте много въпроси. Опитайте отново след няколко минути.",
@@ -49,6 +50,7 @@ export const bg: UIStringsOverride = {
   banner: { dismiss: "Затваряне на съобщението" },
   changelog: {
     description: "Актуализации на продукта и бележки към изданията.",
+    empty: "Все още няма записи в дневника на промените.",
     title: "Дневник на промените",
   },
   consent: {
@@ -70,6 +72,7 @@ export const bg: UIStringsOverride = {
     preview: "Преглед",
     prop: "Свойство",
     selectTab: "Избери раздел",
+    selectView: "Избери изглед",
     showLess: "Покажи по-малко",
     showMore: "Покажи още",
     stars: "Звезди",

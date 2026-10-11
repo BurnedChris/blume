@@ -33,6 +33,8 @@ reference: [
 ],
 ```
 
+[オーバーレイ](/docs/references/openapi#overlays)もここで利用できます。`spec` と並べて、または各ソースに `overlays` を指定してください。埋め込みはオーバーレイを適用した状態の spec をインライン化するため、オーバーレイを指定したリモートの spec は、ブラウザからではなくビルド時に取得されます。オーバーレイを適用できない場合、ビルドは警告を出します。そして、オーバーレイなしで spec を埋め込むのではなく、そのページを除外します。
+
 ルートが異なっていれば、Scalar の埋め込みとネイティブページをリスト内に並べて配置できます。たとえば、現行の API には `openapi()` アダプターを、レガシー API には `scalar()` アダプターを使うといった構成です。ほかのリファレンスと同様に、埋め込みはそれ自体ではヘッダータブを追加しません。表示するには、[ナビゲーションタブ](/docs/content/navigation#tabs)をそのルートに向けてください。
 
 ## 埋め込みでできないこと [#what-the-embed-doesnt-do]
@@ -43,7 +45,7 @@ Scalar でレンダリングされたリファレンスは、独自のルート�
 
 ## Scalar のオプションを渡す [#passing-scalar-options]
 
-`theme` は多くの人が真っ先に使うオプションですが、Scalar はほかにも多くのオプションをサポートしています。`scalar()` に渡したキーのうち、`spec`、`sources`、`route`、`theme` 以外はすべて、[Scalar の設定](https://github.com/scalar/scalar/blob/main/documentation/configuration.md)としてそのまま埋め込みリファレンスに転送されます。Blume はキーを制限しないため、Scalar が受け付けるものはすべてそのまま渡されます（設定は生成されたページにインライン化されるため、使用できるのは JSON 値のみです）。
+`theme` は多くの人が真っ先に使うオプションですが、Scalar はほかにも多くのオプションをサポートしています。`scalar()` に渡したキーのうち、`spec`、`overlays`、`sources`、`route`、`theme` 以外はすべて、[Scalar の設定](https://github.com/scalar/scalar/blob/main/documentation/configuration.md)としてそのまま埋め込みリファレンスに転送されます。Blume はキーを制限しないため、Scalar が受け付けるものはすべてそのまま渡されます（設定は生成されたページにインライン化されるため、使用できるのは JSON 値のみです）。
 
 ```ts blume.config.ts lineNumbers
 reference: [

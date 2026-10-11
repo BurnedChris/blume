@@ -35,6 +35,23 @@ seo:
 ---
 ```
 
+## 独自のタグ [#your-own-tags]
+
+Blume に設定項目がないものについては、`seo.metatags` の下にタグを追加すると、カスタムページや API リファレンスを含むすべてのページにそれらが含まれます。Google、Bing、Facebook のサイト認証トークン、`theme-color`、アプリバナーなどに適しています。
+
+```ts blume.config.ts lineNumbers
+seo: {
+  metatags: {
+    "google-site-verification": "abc123",
+    "msvalidate.01": "def456",
+    "theme-color": "#0b5fff",
+    "apple-itunes-app": "app-id=123456789",
+  },
+}
+```
+
+各キーはタグの名前、各値はその内容です。Open Graph 系のタグ（`og:`、`fb:`、`article:` など）はプロトコルの命名どおり `property` でレンダリングされ、それ以外はすべて `name` でレンダリングされます。このページの冒頭に挙げた、Blume 自身が出力するタグはここでは設定できないため、1 つのタグに 2 つの値が含まれることはありません。ビルドは、それぞれのタグを制御する設定を示します。`og:image` は [`seo.og`](/docs/discoverability/open-graph) またはページの `seo.image` から、`robots` はページの `seo.noindex` から設定されます。
+
 ## ページごとの上書き [#per-page-overrides]
 
 その他のタグはいずれも、`seo` フロントマターでページごとに上書きできます。

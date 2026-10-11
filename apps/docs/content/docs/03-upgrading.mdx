@@ -6,7 +6,7 @@ sidebar:
   order: 2.5
 ---
 
-Blume 2 changes configuration, not content: your Markdown and MDX pages need no edits, unless one sets the removed `search.boost` frontmatter field (see [Frontmatter](#frontmatter)). Settings that used to be a named string or a keyed block — the search provider, the deployment target, content sources, API references, analytics, and the assistant's model backend — are now **adapters** you import from a `blume/*` subpath and call. Ask AI is renamed the assistant, so `ai.ask` becomes `ai.assistant`. The machine-readable settings move from `ai` to a new `agents` key, and `components.ts` overrides are checked before the build. A zero-config site, or one that sets none of these, only needs the version bump.
+Blume 2 changes configuration, not content: your Markdown and MDX pages need no edits (see [Frontmatter](#frontmatter) for one field that now does something). Settings that used to be a named string or a keyed block — the search provider, the deployment target, content sources, API references, analytics, and the assistant's model backend — are now **adapters** you import from a `blume/*` subpath and call. Ask AI is renamed the assistant, so `ai.ask` becomes `ai.assistant`. The machine-readable settings move from `ai` to a new `agents` key, and `components.ts` overrides are checked before the build. A zero-config site, or one that sets none of these, only needs the version bump.
 
 For the c15t integration update, `blume/analytics` is deprecated and remains supported only until the next major release. See the separate [c15t script migration guide](/docs/configuration/analytics-migration) for consent behavior changes and a vendor-by-vendor move to `blume/integrations/*`.
 
@@ -90,7 +90,7 @@ export default defineConfig({
 - `netlify()`, `cloudflare()`, and `node()` work the same way. Naming a host adapter switches to server output; pass `output: "static"` to keep a static build with that host's platform files.
 - A config that only sets `site` or `base` stays as it is: `deployment: { site, base }` is still the static form.
 - `redirects` read `:name` segments and a trailing `*` as patterns, matched the same way on every host (see [Pattern redirects](/docs/deployment#pattern-redirects)). Blume 1 never supported patterns and handed them to each host as written, so check any `from` or `to` that holds one.
-- The `--adapter`, `--output`, and `--base` flags on `blume build` are gone, and passing one stops the build with an error naming the `deployment` setting that replaces it. Set the adapter in `blume.config.ts`, and name it explicitly: server output is no longer inferred from the platform's environment.
+- The `--adapter`, `--output`, and `--base` flags on `blume build` are gone, and passing one stops the build with an error naming the `deployment` setting that replaces it. Set the adapter in `blume.config.ts`, and name it explicitly: server output is no longer inferred from the platform's environment. A CI step that passed a different `--base` per deploy can [read it from an environment variable](/docs/deployment#a-different-base-per-deploy) in the config instead.
 
 See [Deployment](/docs/deployment) for each adapter's options.
 
@@ -135,6 +135,7 @@ export default defineConfig({
 - `mdx-remote`, `sanity`, `notion`, and `obsidian` become `mdxRemote()`, `sanity()`, `notion()`, and `obsidian()`, with every other field moving into the call unchanged. `{ type: "custom", source }` becomes `custom(source)`.
 - `content.root`, `content.include`, and `content.exclude` are still the shorthand for a single folder, but they can't sit beside `sources` any more. Move them into the `filesystem()` entry.
 - Release pages from `githubReleases()` publish in one language now, so a multi-locale site no longer copies them to every other locale's URL (`/de/changelog/…`). If other sites link to those copies, add [redirects](/docs/deployment#redirects) to the default-locale pages.
+- Text typed in Notion renders as written now: a component, `{`, or Markdown character in a `notion()` page shows as typed instead of being read as MDX. If your Notion pages hold components or Markdown typed as text, set [`mdx: true`](/docs/content/sources/notion#writing-mdx-in-notion) on the source.
 
 ## API references
 
@@ -241,7 +242,7 @@ export default defineConfig({
 
 </CodeGroup>
 
-The adapters are `gateway()`, `openrouter()`, `llmgateway()`, `inkeep()`, and `openaiCompatible({ baseUrl, name, model, apiKeyEnv })`. `model`, `apiKeyEnv`, `baseUrl`, `headers`, and `reasoning` move into the adapter; `enabled`, `instructions`, `retrieval`, `suggestions`, `cors`, and `endpoint` move to `ai.assistant` unchanged. Leaving `provider` unset still uses the AI Gateway.
+A 1.x `provider` name maps onto `gateway()`, `openrouter()`, `llmgateway()`, or `inkeep()`, and `openai-compatible` onto `openai({ baseUrl, name, model, apiKeyEnv })`; the [adapter list](/docs/configuration/assistant#adapters) has the rest. `model`, `apiKeyEnv`, `baseUrl`, `headers`, and `reasoning` move into the adapter; `enabled`, `instructions`, `retrieval`, `suggestions`, `cors`, and `endpoint` move to `ai.assistant` unchanged. Leaving `provider` unset still uses the AI Gateway.
 
 The rename reaches every name that said Ask AI:
 
@@ -292,7 +293,7 @@ export default defineConfig({
 
 ## Frontmatter
 
-One frontmatter field is gone: `search.boost`. Blume 1 accepted it, but search never read it, so a page ranked the same without it. Delete it wherever it appears; a page that still sets it fails validation with a hint, and `blume upgrade` lists each one with its file and line.
+Pages keep their frontmatter. One field changes what it does: `search.boost`. Blume 1 accepted it, but search never read it, so a page ranked the same without it. It now multiplies the page's search relevance (see [Ranking](/docs/configuration/search#ranking)). Check any page that sets it: a boost you added and forgot now moves the page up.
 
 ## Component overrides
 

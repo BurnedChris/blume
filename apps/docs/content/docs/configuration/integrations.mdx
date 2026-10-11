@@ -159,7 +159,7 @@ Blume sends its own events through c15t to the integrations whose vendors have a
 
 Each event's properties are listed with its feature: [feedback](/docs/configuration#page-feedback), [search](/docs/configuration/search#search-analytics), [narration](/docs/configuration/narration#analytics), and the [assistant](/docs/configuration/assistant#analytics).
 
-The local `blume:track` browser event remains available to application code even when vendor delivery is denied. It can include raw search queries or assistant text that Blume excludes from vendor metadata. A custom listener must check permissions and select safe fields before forwarding data. Written feedback comments are intentionally sent when that feature is enabled; review their contents and recipients separately.
+The local `blume:track` browser event remains available to application code even when vendor delivery is denied. It can include assistant text that Blume excludes from vendor metadata, and raw search queries when [`search.analytics.queries`](/docs/configuration/search#search-analytics) is `false`. A custom listener must check permissions and select safe fields before forwarding data. Written feedback comments are intentionally sent when that feature is enabled; review their contents and recipients separately.
 
 ## Custom scripts and callbacks
 

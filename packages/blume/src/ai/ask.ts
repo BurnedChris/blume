@@ -34,6 +34,15 @@ export type AssistantProviderOptions = Record<
 /** The AI SDK provider package the OpenAI-compatible adapters install. */
 const OPENAI_COMPATIBLE_DEP = "@ai-sdk/openai-compatible";
 
+/**
+ * The AI SDK packages for the providers Blume calls directly: the package and
+ * the provider factory the route imports from it.
+ */
+const OPENAI_SDK = { factory: "createOpenAI", pkg: "@ai-sdk/openai" };
+const ANTHROPIC_SDK = { factory: "createAnthropic", pkg: "@ai-sdk/anthropic" };
+const GEMINI_SDK = { factory: "createGoogle", pkg: "@ai-sdk/google" };
+const GROK_SDK = { factory: "createXai", pkg: "@ai-sdk/xai" };
+
 // ---------------------------------------------------------------------------
 // Shared options
 // ---------------------------------------------------------------------------
@@ -101,7 +110,8 @@ export interface AssistantGatewayOptions extends AssistantAdapterOptions {
    * How much the model reasons before answering. Sent as the AI SDK's
    * top-level `reasoning` option, which the gateway maps to the model's own
    * control (OpenAI's `reasoning_effort`, for example); the model has to
-   * offer the level you pick. Omitted keeps the model's default.
+   * offer the level you pick. Omitted keeps the model's default. Assistant
+   * only.
    */
   reasoning?: AssistantReasoning;
   /** Narration only: the speech model's voice. Defaults to `alloy`. */
@@ -138,6 +148,250 @@ export const gateway = (
   options,
   requiredSecrets: [options.apiKeyEnv ?? GATEWAY_API_KEY_ENV],
   runtimeDeps: [],
+});
+
+// ---------------------------------------------------------------------------
+// openai()
+// ---------------------------------------------------------------------------
+
+export const OPENAI_API_KEY_ENV = "OPENAI_API_KEY";
+
+/** Options for {@link openai}. */
+export interface AssistantOpenAIOptions extends AssistantAdapterOptions {
+  /**
+   * Name of the env var holding the key. Defaults to `OPENAI_API_KEY`, except
+   * for narration with a `baseUrl`, which sends only a key named here.
+   */
+  apiKeyEnv?: string;
+  /**
+   * An OpenAI-compatible endpoint to call instead of OpenAI
+   * (`https://llm.internal.example.com/v1`): a self-hosted model or an
+   * internal gateway. The route then talks Chat Completions through
+   * `@ai-sdk/openai-compatible`, and the docs tools are off unless
+   * `ai.assistant.tools` turns them on, since the model may not call tools.
+   * For narration, a server with OpenAI's speech API (`/audio/speech`),
+   * called through `@ai-sdk/openai` and sent only the key `apiKeyEnv` names,
+   * if any.
+   */
+  baseUrl?: string;
+  /**
+   * Narration only: how the voice should sound, for speech models that take
+   * instructions ("Read calmly, like a teacher").
+   */
+  instructions?: string;
+  /** The model id (`gpt-5.5`, or a speech model like `gpt-4o-mini-tts`). */
+  model: string;
+  /**
+   * The provider name the AI SDK reports, which a custom endpoint also reads
+   * its `providerOptions` under. Defaults to `openai`, or `openai-compatible`
+   * with a `baseUrl`. Assistant only.
+   */
+  name?: string;
+  /**
+   * How much the model reasons before answering, sent as `reasoning_effort`;
+   * with a `baseUrl`, the endpoint has to accept that parameter. Omitted
+   * keeps the model's default. Assistant only.
+   */
+  reasoning?: AssistantReasoning;
+  /** Narration only: the speech model's voice. Defaults to `alloy`. */
+  voice?: string;
+}
+
+const openaiOptionsSchema = z.strictObject({
+  ...sharedOptions(OPENAI_API_KEY_ENV),
+  baseUrl: z.url().optional(),
+  model: z.string().min(1),
+  name: z.string().min(1).optional(),
+  reasoning: reasoningOption,
+});
+
+export type AssistantOpenAIAdapter = AdapterDescriptor<
+  "openai",
+  AssistantOpenAIOptions
+>;
+
+export const openaiAdapterSchema = adapterDescriptorSchema(
+  "openai",
+  openaiOptionsSchema
+);
+
+/**
+ * Route the assistant to OpenAI, or to any OpenAI-compatible endpoint with
+ * `baseUrl`. Reads `OPENAI_API_KEY` and needs `@ai-sdk/openai` installed; a
+ * custom endpoint needs `@ai-sdk/openai-compatible` instead, since most
+ * don't serve OpenAI's Responses API. Narration generates audio with it
+ * through `@ai-sdk/openai` either way, and with a `baseUrl` sends only the key
+ * `apiKeyEnv` names.
+ */
+export const openai = (
+  options: AssistantOpenAIOptions
+): AssistantOpenAIAdapter => ({
+  kind: "openai",
+  options,
+  requiredSecrets: [options.apiKeyEnv ?? OPENAI_API_KEY_ENV],
+  runtimeDeps: [options.baseUrl ? OPENAI_COMPATIBLE_DEP : OPENAI_SDK.pkg],
+});
+
+/**
+ * Options for the deprecated {@link openaiCompatible}: {@link openai}'s, with
+ * the endpoint and its key env var required.
+ *
+ * @deprecated Use {@link AssistantOpenAIOptions}.
+ */
+export interface AssistantOpenAICompatibleOptions extends AssistantOpenAIOptions {
+  apiKeyEnv: string;
+  baseUrl: string;
+}
+
+/** @deprecated Use {@link AssistantOpenAIAdapter}. */
+export type AssistantOpenAICompatibleAdapter = AssistantOpenAIAdapter;
+
+/**
+ * Route the assistant through an OpenAI-compatible endpoint.
+ *
+ * @deprecated Use `openai({ baseUrl, model, apiKeyEnv })`, which this calls.
+ */
+export const openaiCompatible = (
+  options: AssistantOpenAICompatibleOptions
+): AssistantOpenAIAdapter => openai(options);
+
+// ---------------------------------------------------------------------------
+// anthropic()
+// ---------------------------------------------------------------------------
+
+const ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY";
+
+/** Options for {@link anthropic}. */
+export interface AssistantAnthropicOptions extends AssistantAdapterOptions {
+  /** The Claude model id (`claude-sonnet-5`). */
+  model: string;
+  /**
+   * How much the model reasons before answering. The Anthropic provider
+   * maps the level to the model's thinking: an effort on models with
+   * adaptive thinking, a thinking budget on older ones, and thinking off for
+   * `"none"`. Omitted keeps the model's default.
+   */
+  reasoning?: AssistantReasoning;
+}
+
+const anthropicOptionsSchema = z.strictObject({
+  ...sharedOptions(ANTHROPIC_API_KEY_ENV),
+  model: z.string().min(1),
+  reasoning: reasoningOption,
+});
+
+export type AssistantAnthropicAdapter = AdapterDescriptor<
+  "anthropic",
+  AssistantAnthropicOptions
+>;
+
+export const anthropicAdapterSchema = adapterDescriptorSchema(
+  "anthropic",
+  anthropicOptionsSchema
+);
+
+/**
+ * Route the assistant to Anthropic's Claude API. Reads `ANTHROPIC_API_KEY`
+ * and needs `@ai-sdk/anthropic` installed.
+ */
+export const anthropic = (
+  options: AssistantAnthropicOptions
+): AssistantAnthropicAdapter => ({
+  kind: "anthropic",
+  options,
+  requiredSecrets: [options.apiKeyEnv ?? ANTHROPIC_API_KEY_ENV],
+  runtimeDeps: [ANTHROPIC_SDK.pkg],
+});
+
+// ---------------------------------------------------------------------------
+// gemini()
+// ---------------------------------------------------------------------------
+
+const GEMINI_API_KEY_ENV = "GEMINI_API_KEY";
+
+/** Options for {@link gemini}. */
+export interface AssistantGeminiOptions extends AssistantAdapterOptions {
+  /** The Gemini model id (`gemini-3.5-flash`). */
+  model: string;
+  /**
+   * How much the model reasons before answering. The Google provider maps
+   * the level to the model's thinking level, or to a thinking budget on
+   * models that take one. Omitted keeps the model's default.
+   */
+  reasoning?: AssistantReasoning;
+}
+
+const geminiOptionsSchema = z.strictObject({
+  ...sharedOptions(GEMINI_API_KEY_ENV),
+  model: z.string().min(1),
+  reasoning: reasoningOption,
+});
+
+export type AssistantGeminiAdapter = AdapterDescriptor<
+  "gemini",
+  AssistantGeminiOptions
+>;
+
+export const geminiAdapterSchema = adapterDescriptorSchema(
+  "gemini",
+  geminiOptionsSchema
+);
+
+/**
+ * Route the assistant to Google's Gemini API. Reads `GEMINI_API_KEY` and
+ * needs `@ai-sdk/google` installed.
+ */
+export const gemini = (
+  options: AssistantGeminiOptions
+): AssistantGeminiAdapter => ({
+  kind: "gemini",
+  options,
+  requiredSecrets: [options.apiKeyEnv ?? GEMINI_API_KEY_ENV],
+  runtimeDeps: [GEMINI_SDK.pkg],
+});
+
+// ---------------------------------------------------------------------------
+// grok()
+// ---------------------------------------------------------------------------
+
+const GROK_API_KEY_ENV = "XAI_API_KEY";
+
+/** Options for {@link grok}. */
+export interface AssistantGrokOptions extends AssistantAdapterOptions {
+  /** The Grok model id (`grok-4.7`). */
+  model: string;
+  /**
+   * How much the model reasons before answering, sent as xAI's reasoning
+   * effort on the models that take one. Omitted keeps the model's default.
+   */
+  reasoning?: AssistantReasoning;
+}
+
+const grokOptionsSchema = z.strictObject({
+  ...sharedOptions(GROK_API_KEY_ENV),
+  model: z.string().min(1),
+  reasoning: reasoningOption,
+});
+
+export type AssistantGrokAdapter = AdapterDescriptor<
+  "grok",
+  AssistantGrokOptions
+>;
+
+export const grokAdapterSchema = adapterDescriptorSchema(
+  "grok",
+  grokOptionsSchema
+);
+
+/**
+ * Route the assistant to xAI's Grok models. Reads `XAI_API_KEY` and needs
+ * `@ai-sdk/xai` installed.
+ */
+export const grok = (options: AssistantGrokOptions): AssistantGrokAdapter => ({
+  kind: "grok",
+  options,
+  requiredSecrets: [options.apiKeyEnv ?? GROK_API_KEY_ENV],
+  runtimeDeps: [GROK_SDK.pkg],
 });
 
 // ---------------------------------------------------------------------------
@@ -284,86 +538,38 @@ export const inkeep = (
 });
 
 // ---------------------------------------------------------------------------
-// openaiCompatible()
-// ---------------------------------------------------------------------------
-
-/** Options for {@link openaiCompatible}. */
-export interface AssistantOpenAICompatibleOptions extends AssistantAdapterOptions {
-  /** Name of the env var holding the endpoint's API key. */
-  apiKeyEnv: string;
-  /** The endpoint's base URL (`https://my-gateway.example.com/v1`). */
-  baseUrl: string;
-  /** The model id the endpoint serves. */
-  model: string;
-  /** The provider name the AI SDK reports. Defaults to `openai-compatible`. */
-  name?: string;
-  /**
-   * How much the model reasons before answering, sent in the request as
-   * `reasoning_effort`, so the endpoint has to accept that parameter.
-   * Omitted keeps the model's default.
-   */
-  reasoning?: AssistantReasoning;
-}
-
-const openaiCompatibleOptionsSchema = z.strictObject({
-  ...sharedOptions("API_KEY"),
-  // A generic endpoint has no preset, so the caller names the key env var.
-  apiKeyEnv: z.string().min(1),
-  baseUrl: z.url(),
-  model: z.string().min(1),
-  name: z.string().min(1).default("openai-compatible"),
-  reasoning: reasoningOption,
-});
-
-export type AssistantOpenAICompatibleAdapter = AdapterDescriptor<
-  "openai-compatible",
-  AssistantOpenAICompatibleOptions
->;
-
-export const openaiCompatibleAdapterSchema = adapterDescriptorSchema(
-  "openai-compatible",
-  openaiCompatibleOptionsSchema
-);
-
-/**
- * Route the assistant through any OpenAI-compatible endpoint: supply its `baseUrl`,
- * the `model` it serves, and the env var holding its key. Needs
- * `@ai-sdk/openai-compatible` installed.
- */
-export const openaiCompatible = (
-  options: AssistantOpenAICompatibleOptions
-): AssistantOpenAICompatibleAdapter => ({
-  kind: "openai-compatible",
-  options,
-  requiredSecrets: [options.apiKeyEnv],
-  runtimeDeps: [OPENAI_COMPATIBLE_DEP],
-});
-
-// ---------------------------------------------------------------------------
 // The `ai.assistant.provider` schema
 // ---------------------------------------------------------------------------
 
-/** Which backend answers the assistant: the value of `gateway()`, `openrouter()`, … */
+/** Which backend answers the assistant: the value of `gateway()`, `openai()`, … */
 export type AssistantAdapter =
   | AssistantGatewayAdapter
+  | AssistantOpenAIAdapter
+  | AssistantAnthropicAdapter
+  | AssistantGeminiAdapter
+  | AssistantGrokAdapter
   | AssistantOpenRouterAdapter
   | AssistantLlmGatewayAdapter
-  | AssistantInkeepAdapter
-  | AssistantOpenAICompatibleAdapter;
+  | AssistantInkeepAdapter;
 
 // ---------------------------------------------------------------------------
 // Blume 1 hints
 // ---------------------------------------------------------------------------
 
 /**
- * The 1.x `ai.ask.provider` names — also the adapters' `kind`s — each with the
- * `blume/ai` factory that replaced it.
+ * The adapters' `kind`s and the 1.x `ai.ask.provider` names, each with the
+ * `blume/ai` factory that takes its place.
  */
 const FACTORY_BY_PROVIDER = new Map([
+  ["anthropic", "anthropic"],
   ["gateway", "gateway"],
+  ["gemini", "gemini"],
+  ["grok", "grok"],
   ["inkeep", "inkeep"],
   ["llmgateway", "llmgateway"],
-  ["openai-compatible", "openaiCompatible"],
+  ["openai", "openai"],
+  // 1.x only: an OpenAI-compatible endpoint is `openai()` with a `baseUrl`.
+  ["openai-compatible", "openai"],
   ["openrouter", "openrouter"],
 ]);
 
@@ -428,7 +634,7 @@ const providerNotAdapterMessage = (issue: z.core.$ZodRawIssue): string => {
   const factory = name.success ? FACTORY_BY_PROVIDER.get(name.data) : undefined;
   return factory
     ? `ai.assistant.provider takes an adapter from "blume/ai", not a provider name: \`provider: ${factory}({ model })\`. The 1.x model, apiKeyEnv, baseUrl, headers, and reasoning fields move into the call.`
-    : 'ai.assistant.provider takes an adapter from "blume/ai": gateway(), openrouter(), llmgateway(), inkeep(), or openaiCompatible().';
+    : 'ai.assistant.provider takes an adapter from "blume/ai": openai(), anthropic(), gemini(), grok(), gateway(), openrouter(), llmgateway(), or inkeep().';
 };
 
 /**
@@ -440,10 +646,13 @@ export const assistantAdapterSchema = z.discriminatedUnion(
   "kind",
   [
     gatewayAdapterSchema,
+    openaiAdapterSchema,
+    anthropicAdapterSchema,
+    geminiAdapterSchema,
+    grokAdapterSchema,
     openrouterAdapterSchema,
     llmgatewayAdapterSchema,
     inkeepAdapterSchema,
-    openaiCompatibleAdapterSchema,
   ],
   {
     // A non-object (a 1.x provider name) fails before any discriminator is
@@ -653,6 +862,63 @@ const openaiCompatibleBackend = (
   toolsByDefault,
 });
 
+/**
+ * The backend for a provider Blume calls directly, through that provider's
+ * own AI SDK package, which maps the top-level `reasoning` call option to the
+ * model's control itself. Their models all call tools.
+ */
+const directBackend = (
+  kind: AssistantAdapterKind,
+  label: string,
+  sdk: { factory: string; pkg: string },
+  options: {
+    apiKeyEnv: string;
+    headers?: Record<string, string>;
+    model: string;
+    name?: string;
+    providerOptions?: z.output<typeof providerOptionsSchema>;
+    reasoning?: AssistantReasoning;
+  }
+): AskBackend => ({
+  grounded: true,
+  kind,
+  label,
+  template: {
+    fields: callFields(options),
+    imports: [
+      'import { createTextStreamResponse, streamText, toTextStream } from "ai";',
+      `import { ${sdk.factory} } from ${JSON.stringify(sdk.pkg)};`,
+    ],
+    keyCheck: keyCheck(options.apiKeyEnv),
+    model: `provider(${JSON.stringify(options.model)})`,
+    setup: `\nconst provider = ${sdk.factory}({
+  apiKey: ${secretExpr(options.apiKeyEnv)},${headersLine(options.headers)}${
+    options.name ? `\n  name: ${JSON.stringify(options.name)},` : ""
+  }
+});\n`,
+  },
+  toolsByDefault: true,
+});
+
+/**
+ * `openai()`: OpenAI itself through its own SDK, or, with a `baseUrl`, a
+ * generic endpoint through the OpenAI-compatible provider — Chat Completions,
+ * which most such endpoints serve where the Responses API isn't — with the
+ * tools off by default, since a self-hosted model may not call them.
+ */
+const openaiBackend = (
+  options: z.output<typeof openaiOptionsSchema>
+): AskBackend => {
+  const { baseUrl } = options;
+  return baseUrl
+    ? openaiCompatibleBackend("openai", "OpenAI-compatible", true, false, {
+        ...options,
+        baseUrl,
+        name: options.name ?? "openai-compatible",
+      })
+    : directBackend("openai", "OpenAI", OPENAI_SDK, options);
+};
+
 /** Resolve a parsed `ai.assistant.provider` descriptor into its backend. */
 export const resolveAskBackend = (
   provider: AssistantAdapterConfig = assistantAdapterSchema.parse(
@@ -662,6 +928,20 @@ export const resolveAskBackend = (
   switch (provider.kind) {
     case "gateway": {
       return gatewayBackend(provider.options);
+    }
+    case "anthropic": {
+      return directBackend(
+        "anthropic",
+        "Anthropic",
+        ANTHROPIC_SDK,
+        provider.options
+      );
+    }
+    case "gemini": {
+      return directBackend("gemini", "Gemini", GEMINI_SDK, provider.options);
+    }
+    case "grok": {
+      return directBackend("grok", "Grok", GROK_SDK, provider.options);
     }
     case "openrouter": {
       return openrouterBackend(provider.options);
@@ -681,13 +961,7 @@ export const resolveAskBackend = (
       });
     }
     default: {
-      return openaiCompatibleBackend(
-        "openai-compatible",
-        "OpenAI-compatible",
-        true,
-        false,
-        provider.options
-      );
+      return openaiBackend(provider.options);
     }
   }
 };

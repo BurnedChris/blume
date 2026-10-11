@@ -1,0 +1,40 @@
+---
+title: Obsidian
+description: >-
+  obsidian() source की सहायता से किसी Obsidian vault को उसी स्थान से प्रकाशित करें — wikilinks, properties और vault की images build के समय resolve होती हैं, किसी export चरण के बिना।
+---
+
+बिल्ट-इन `obsidian()` adapter किसी [Obsidian](https://obsidian.md) vault को उसी स्थान पर पढ़ता है। इसमें कोई export चरण नहीं है और आपकी repo में कुछ भी generate नहीं होता: vault ही सत्य का स्रोत बना रहता है, और Blume लोड करते समय Obsidian की dialect को Markdown में रूपांतरित कर देता है।
+
+```ts blume.config.ts
+import { defineConfig } from "blume";
+import { filesystem, obsidian } from "blume/sources";
+
+export default defineConfig({
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      obsidian({
+        prefix: "notes",
+        vault: "vault",
+        // Vault folder names to skip at any depth, on top of dot-folders
+        exclude: ["Templates", "Daily"],
+      }),
+    ],
+  },
+});
+```
+
+`[[Wikilinks]]` route links बन जाते हैं। इन्हें path के बजाय पूरे vault में note के नाम से पहचाना जाता है, ठीक उसी तरह जैसे Obsidian notes को पहचानता है। कस्टम link text (`[[Note|label]]`), heading anchors (`[[Note#Install]]`), पूर्ण paths (`[[folder/Note]]` और `[[folder/Note.md]]`), Obsidian की डिफ़ॉल्ट "shortest path when possible" सेटिंग द्वारा लिखे जाने वाले आंशिक paths (`[[guides/Note]]`), और table cell के भीतर Obsidian द्वारा लिखा जाने वाला `[[Note\|label]]` रूप — ये सभी काम करते हैं। जो note अपने frontmatter में `slug` सेट करता है, उसका link उस route पर बनता है जिसे वह slug प्रकाशित करता है। जब दो notes का नाम एक ही हो, तो सबसे पहले वह note चुना जाता है जिसका पूर्ण vault path ठीक वही नाम है — क्योंकि Obsidian किसी link को नाम से पहले path के रूप में resolve करता है। इसके बाद vault क्रम में पहला note चुना जाता है (Obsidian के file explorer की तरह, notes से पहले folders, case-insensitive रूप से)। Blume केवल तभी चेतावनी देता है जब कोई wikilink वास्तव में ऐसे टकराव के माध्यम से resolve होता है; अस्पष्टता दूर करने के लिए आप लंबा path लिखें। एक block reference (`[[Note#^id]]`) बिना anchor के अपने note से link होता है, क्योंकि blocks बिना किसी id के render होते हैं और इसलिए link के पहुँचने के लिए कोई id नहीं होती। एक heading anchor लक्ष्य note की वास्तविक headings से resolve होता है। Headings का मिलान उसी तरह किया जाता है जैसे Obsidian का autocomplete उन्हें लिखता है (`**bold**`, `` `code` `` और link syntax हटाकर), और उनका slug उसी `extractHeadings` pass से बनता है जो page manifest भरता है। इसलिए `#Install` का link उसी heading पर पहुँचता है, न कि किसी ऐसी id पर जो किसी भी page पर मौजूद नहीं होती। `[[#Install]]` उसी note की किसी heading को इंगित करता है जिसे आप लिख रहे हैं। यदि link की गई heading मौजूद नहीं है, तो page link बना रहता है, anchor हटा दिया जाता है, और चेतावनी दी जाती है।
+
+Frontmatter में वे keys रखी जाती हैं जिन्हें Blume का [page schema](/docs/content/frontmatter) स्वीकार करता है। इनके साथ वे keys भी रखी जाती हैं जिन्हें आप [`frontmatter.extend`](/docs/content/frontmatter#custom-keys) में घोषित करते हैं (या उस `type` के notes के लिए, किसी content type के `frontmatter` में)। अन्य सभी Obsidian properties — Dataview fields, Templater dates, `publish`, और Obsidian की अपनी `tags`, `aliases` और `cssclasses` — note को रूपांतरित करते समय हटा दी जाती हैं। इसलिए Properties UI से लिखा गया vault बिना frontmatter त्रुटियों के build होता है। `aliases` को resolve करने के बजाय हटा दिया जाता है — alias link targets अभी समर्थित नहीं हैं। किसी note के बगल में रखी relative Markdown image (`![chart](./chart.png)`) vault से serve की जाती है। जब vault आपकी git repository के भीतर होता है, तो vault pages को भी किसी अन्य page की तरह git से प्राप्त ["Last updated" तिथियाँ](/docs/configuration#last-modified) मिलती हैं। "Edit this page" links `github.dir` के माध्यम से resolve होते हैं, इसलिए monorepo में docs app के बगल में रखा vault भी अपनी file से link करता है। Repository के बाहर रखे vault को कोई link नहीं मिलता।
+
+Vault के भीतर locale directories और version snapshots को उसी तरह पढ़ा जाता है जैसे filesystem source उन्हें पढ़ता है। [i18n](/docs/content/i18n) कॉन्फ़िगर होने पर `fr/Note.md` `/fr/` के अंतर्गत प्रकाशित होता है, और [संस्करणों](/docs/content/versioning) के साथ `v1.0/Note.md` `/v1.0/` के अंतर्गत। उन notes के wikilinks उसी route की ओर इंगित करते हैं जिसे प्रत्येक note प्रकाशित करता है।
+
+किसी `index` note का link किसी काल्पनिक `/index` के बजाय उसके folder के route पर पहुँचता है। **एक unresolved wikilink build को विफल करने के बजाय build चेतावनी के साथ सादे text में बदल जाता है**, इसलिए जिस vault का refactor अभी चल रहा है, वह भी प्रकाशित हो जाता है। एक-पंक्ति वाले `%%comments%%` हटा दिए जाते हैं। HTML comment के भीतर का wikilink (`<!-- [[Draft]] -->`) जस का तस छोड़ दिया जाता है, क्योंकि Obsidian भी उसे छिपाता है। जिस note के frontmatter में कोई `title` नहीं है, उसका शीर्षक उसके filename से लिया जाता है — यही नियम Obsidian स्वयं भी लागू करता है। `index` note इसका एकमात्र अपवाद है: यह किसी note का नहीं, बल्कि एक route का नाम होता है। इसलिए इसका शीर्षक Blume के सामान्य नियम से तय होता है (पहले पहली heading, फिर humanized segment)। Fenced, indented और inline code बिना किसी बदलाव के आगे जाता है, इसलिए syntax का दस्तावेज़ीकरण करने वाला note भी सही बना रहता है।
+
+Dot-folders छोड़ दिए जाते हैं, जिनमें Obsidian की अपनी `.obsidian` config directory और `.trash` भी शामिल हैं। Dev watcher भी इन्हें अनदेखा करता है, इसलिए app में कोई pane खिसकाने से आपकी site फिर से build नहीं होती। किसी note को संपादित करने पर site फिर से build होती है, और किसी note को trash में डालने पर भी, क्योंकि वह note vault से बाहर चला जाता है। जिन directories को कोई भी content scan नहीं पढ़ता (`node_modules`, `dist`, `.git`, …), वे भी छोड़ दी जाती हैं। इसलिए जिस vault का root स्वयं project ही है, वह dependencies की READMEs प्रकाशित नहीं करता। जिस note के path में `#` या `?` है, उसे एक त्रुटि के साथ बाहर रखा जाता है, ठीक वैसे ही जैसे किसी [content फ़ाइल](/docs/content#files-and-routes) के साथ होता है: Astro उसकी प्रति लोड नहीं कर सकता, इसलिए उसका नाम बदलें। Vault के भीतर के symlinks का अनुसरण किया जाता है, ठीक वैसे ही जैसे filesystem source करता है, इसलिए vault में link किया गया कोई साझा folder भी उसके साथ प्रकाशित होता है। यदि vault filesystem source के root के भीतर है, तो उसे filesystem source से बाहर रखना आवश्यक है (`filesystem({ root: "docs", exclude: ["vault/**"] })`)। इसके बाद [`blume version <id>`](/docs/cli/version) vault को snapshot से बाहर रखता है, क्योंकि vault अपने notes को current के रूप में प्रकाशित करता रहता है।
+
+जो अभी तक रूपांतरित नहीं होता: callouts (`> [!note]`) सादे blockquotes के रूप में render होते हैं, embeds (`![[image.png]]`) बिना किसी बदलाव के आगे जाते हैं, बहु-पंक्ति `%%comments%%` अपनी जगह पर ही छोड़ दिए जाते हैं, और कोई backlink graph उपलब्ध नहीं है।
+
+[Obsidian notes को docs site के रूप में प्रकाशित करें](/guides/publish-obsidian-documentation) में vault से लेकर deployed site तक की पूरी प्रक्रिया शुरू से अंत तक समझाई गई है।

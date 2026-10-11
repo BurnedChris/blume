@@ -1,0 +1,553 @@
+---
+// Choose local, hosted or semantic search: checked against the search and
+// assistant docs, the search adapters, syncs, and dialog clients
+// (search/adapters/*, search/sync/*, components/layout/search/*,
+// components/layout/Search.astro), the Mixedbread endpoint template
+// (astro/templates.ts), BLUME_SERVER_FEATURE_REQUIRED (cli/prepare.ts),
+// BLUME_DEPENDENCY_MISSING (astro/runtime-deps.ts), the .env loader
+// (cli/env.ts), and the assistant and MCP snapshots (ai/ask-data.ts,
+// ai/mcp/data.ts) on main; @mixedbread/cli 2.4.0's help and sync source;
+// Pagefind's multilingual docs; Algolia's record size limits (2026-09-27).
+//
+// What ran, 2026-09-27: search-eval.mjs (Playwright 1.63.0) against the docs
+// dev server, which gave the same Orama row as calling the client directly;
+// the 12 queries through Blume's own Orama, FlexSearch, and Typesense browser
+// clients (Typesense 30.2 run locally, filled by Blume's syncTypesense) and
+// Pagefind 1.5.2 over the 100 English pages as the dev server rendered them.
+// Not run: blume build, Algolia, Orama Cloud, Mixedbread (needs an account).
+// Review, 2026-09-27: reran the Orama and Typesense rows (Typesense 30.2
+// locally, Blume's own sync and client) and the chatbot keyword change, with
+// the same results, and measured the served blume-search.json (3.0 MB, 872 KB
+// gzipped). Rechecked 2026-09-30 against the Pagefind links and language
+// merge, the Typesense alias swap and sort, the Mixedbread result links and
+// errors, the Algolia record split, and the per-locale Orama tokenizers;
+// reran the Typesense row with Blume's own sync and client (Typesense 30.2,
+// same index), and the Japanese, Hindi, and German titles on Orama. Rechecked
+// 2026-09-30 against the failed-sync rule (search/sync/index.ts): with the
+// admin key set, a failed upload fails the build. Not yet run end to end.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const searchEvalMjsCode = `// Runs every query in search-queries.json through a Blume site's search
+// dialog and records where the first correct page ranks.
+// Usage: node search-eval.mjs <site-url> <candidate-name>
+import { existsSync } from "node:fs";
+import { appendFile, readFile } from "node:fs/promises";
+import { chromium } from "playwright";
+
+const [site, candidate] = process.argv.slice(2);
+const queries = JSON.parse(await readFile("search-queries.json", "utf8"));
+const date = new Date().toLocaleDateString("en-CA");
+const pathOf = (href) => {
+  const path = new URL(href).pathname;
+  return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+};
+
+if (!existsSync("results.csv")) {
+  await appendFile("results.csv", "date,candidate,query,kind,rank,results\\n");
+}
+
+const browser = await chromium.launch();
+const page = await browser.newPage();
+await page.goto(site);
+await page.keyboard.press("/");
+const input = page.locator("[data-blume-search-input]");
+await input.waitFor();
+
+let top1 = 0;
+let top3 = 0;
+for (const { query, kind, expect } of queries) {
+  await input.fill(query);
+  // Settled once a row renders, or a message other than the loading "…".
+  await page.waitForFunction(() => {
+    const row = document.querySelector("#blume-search-listbox [role=option]");
+    const note = document.querySelector("[data-blume-search-message]");
+    return row || (note && !note.hidden && note.textContent !== "…");
+  });
+  const urls = await page.$$eval("#blume-search-listbox a[role=option]", (links) =>
+    links.map((link) => link.href)
+  );
+  const rank = urls.map(pathOf).findIndex((url) => expect.includes(url)) + 1;
+  if (rank === 1) top1 += 1;
+  if (rank > 0 && rank <= 3) top3 += 1;
+  const cells = [date, candidate, JSON.stringify(query), kind, rank || "miss", urls.length];
+  await appendFile("results.csv", \`\${cells.join(",")}\\n\`);
+}
+await browser.close();
+console.log(\`\${candidate}: top 1 \${top1}/\${queries.length}, top 3 \${top3}/\${queries.length}\`);`;
+---
+
+<GuidePage guide={guideById("choose-documentation-search")}>
+  <p>
+    For most documentation, the best search is the one Blume already ships: a
+    local Orama index with no keys or service, working in{" "}
+    <code>blume dev</code>. Switch only when a fixed set of real queries shows
+    it missing pages another engine finds. Pagefind is the other local option,
+    built from your rendered HTML. Hosted keyword search (Algolia, Typesense,
+    Orama Cloud) moves the index to a service Blume uploads to on every build.
+    Semantic search (Mixedbread) matches meaning instead of words, but needs
+    server output and an upload step you run yourself.
+  </p>
+  <p>
+    You end with a query set, a script that runs it through the real search
+    dialog of each candidate build, a results file, and a choice that follows
+    from it. We ran the same method on Blume's own docs, and the numbers are
+    below. It covers the search dialog only, since the assistant and the MCP
+    server search their own index. It doesn't compare prices.
+  </p>
+
+  <h2>Local, hosted, and semantic search in Blume</h2>
+  <p>
+    Every adapter comes from <code>blume/search</code> and plugs into the same
+    dialog, so switching is one line of config. What changes is where the
+    index lives and what it can filter:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Adapter</th>
+        <th scope="col">Index</th>
+        <th scope="col">In <code>blume dev</code></th>
+        <th scope="col">Language</th>
+        <th scope="col">Version</th>
+        <th scope="col">Also needs</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>orama()</code>, the default</td>
+        <td>Local, built from your source</td>
+        <td>Yes</td>
+        <td>Scoped</td>
+        <td>Scoped</td>
+        <td>Nothing</td>
+      </tr>
+      <tr>
+        <td><code>flexsearch()</code></td>
+        <td>Local, built from your source</td>
+        <td>Yes</td>
+        <td>Scoped</td>
+        <td>Scoped</td>
+        <td>The <code>flexsearch</code> package</td>
+      </tr>
+      <tr>
+        <td><code>pagefind()</code></td>
+        <td>Local, built from the HTML, loaded in pieces</td>
+        <td>No</td>
+        <td>Scoped</td>
+        <td>All versions</td>
+        <td>Nothing</td>
+      </tr>
+      <tr>
+        <td><code>algolia()</code></td>
+        <td>Hosted, uploaded on each build</td>
+        <td>Last uploaded index</td>
+        <td>Scoped</td>
+        <td>Scoped</td>
+        <td><code>algoliasearch</code>, <code>ALGOLIA_ADMIN_API_KEY</code></td>
+      </tr>
+      <tr>
+        <td><code>typesense()</code></td>
+        <td>Hosted, uploaded on each build</td>
+        <td>Last uploaded index</td>
+        <td>Scoped</td>
+        <td>Scoped</td>
+        <td><code>typesense</code>, <code>TYPESENSE_ADMIN_API_KEY</code></td>
+      </tr>
+      <tr>
+        <td><code>oramaCloud()</code></td>
+        <td>Hosted, uploaded on each build</td>
+        <td>Last uploaded index</td>
+        <td>Scoped</td>
+        <td>All versions</td>
+        <td>
+          <code>@oramacloud/client</code>, <code>ORAMA_PRIVATE_API_KEY</code>,
+          an <code>indexId</code>
+        </td>
+      </tr>
+      <tr>
+        <td><code>mixedbread()</code></td>
+        <td>Semantic, filled by your own sync</td>
+        <td>Through <code>/api/search</code></td>
+        <td>All languages</td>
+        <td>All versions</td>
+        <td>
+          <code>@mixedbread/sdk</code>, <code>MIXEDBREAD_API_KEY</code>, server
+          output
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    What gets indexed differs too. Indexes built from your source strip code
+    blocks unless you set <code>search.indexing.includeCodeBlocks</code>,
+    Pagefind indexes each page's rendered article with its code, and
+    Mixedbread searches the raw Markdown you upload. The{" "}
+    <code>search.keywords</code> and <code>search.boost</code> frontmatter
+    fields reach every adapter except Mixedbread (see{" "}
+    <a href="/docs/configuration/search#whats-indexed">What's indexed</a>).
+  </p>
+
+  <h2>Write a fixed query set</h2>
+  <p>
+    A comparison is only as good as its queries, so take them from what
+    readers type. With an analytics adapter configured, every search is a{" "}
+    <code>search</code> event, and the ones with <code>results: 0</code> are
+    your gaps (see{" "}
+    <a href="/guides/documentation-search-analytics">
+      Find missing documentation from searches with no results
+    </a>). Add questions from support tickets. Cover each kind of query,
+    because engines fail on different ones:
+  </p>
+  <ul>
+    <li>Exact terms, like a config key or an error name.</li>
+    <li>Terms that appear only inside code blocks.</li>
+    <li>Questions typed as sentences.</li>
+    <li>Other words for what a page covers.</li>
+    <li>Typos.</li>
+    <li>
+      A query from a translated page and from an older version, if your docs
+      have them.
+    </li>
+  </ul>
+  <p>
+    Aim for 20 to 40 queries, list every page that correctly answers each,
+    then freeze the file. These are the 12 we used on Blume's own docs:
+  </p>
+  <CodeBlock
+    code={`[
+  { "query": "rate limiting", "kind": "exact term", "expect": ["/docs/configuration/rate-limiting"] },
+  { "query": "llms.txt", "kind": "exact term", "expect": ["/docs/discoverability/llms-txt"] },
+  { "query": "includeCodeBlocks", "kind": "only in code", "expect": ["/docs/configuration/search"] },
+  { "query": "how do I hide a page from search", "kind": "question", "expect": ["/docs/configuration/search", "/docs/content/navigation"] },
+  { "query": "can I host the docs on my own server", "kind": "question", "expect": ["/docs/deployment"] },
+  { "query": "how do I translate my docs", "kind": "question", "expect": ["/docs/content/i18n", "/docs/cli/translate"] },
+  { "query": "chatbot", "kind": "other words", "expect": ["/docs/configuration/assistant"] },
+  { "query": "dark mode", "kind": "other words", "expect": ["/docs/configuration/theming"] },
+  { "query": "keep old links working", "kind": "other words", "expect": ["/docs/deployment"] },
+  { "query": "deploymnet", "kind": "typo", "expect": ["/docs/deployment"] },
+  { "query": "frontmater", "kind": "typo", "expect": ["/docs/content/frontmatter"] },
+  { "query": "sidebar order", "kind": "exact term", "expect": ["/docs/content/meta", "/docs/content/navigation"] }
+]`}
+    lang="json"
+    title="search-queries.json"
+  />
+
+  <h2>Run the set through each candidate</h2>
+  <p>
+    Test the dialog rather than each provider's API, since Blume adds its own
+    filters and ranking. This script opens a built site in headless Chromium,
+    types each query into the search dialog, and appends where the first
+    correct page ranked to <code>results.csv</code>. It reads the dialog's
+    internal markup, which isn't a public API, so check it still works after
+    you upgrade Blume.
+  </p>
+  <CodeBlock
+    code={`npm install --save-dev playwright@1.63.0
+npx playwright install chromium`}
+    lang="bash"
+  />
+  <CodeBlock
+    code={searchEvalMjsCode}
+    lang="js"
+    title="search-eval.mjs"
+  />
+  <p>
+    Build each candidate, changing only <code>search</code> in{" "}
+    <code>blume.config.ts</code>, and serve it with <code>blume preview</code>,
+    which listens on port 4321. Start with the default, since it's your
+    baseline:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+npx blume preview
+# in a second terminal:
+node search-eval.mjs http://localhost:4321 orama`}
+    lang="bash"
+  />
+  <p>
+    Stop the preview before each new build. For Pagefind, set{" "}
+    <code>search: pagefind()</code> and repeat. Always test a build, since
+    Pagefind's index doesn't exist in <code>blume dev</code>. Its results link
+    to the same slashless routes as every other adapter's, and the{" "}
+    <a href="/guides/pagefind-documentation-search">Pagefind guide</a> has a
+    checklist for what else to test.
+  </p>
+
+  <h3>A hosted keyword candidate</h3>
+  <p>
+    Pick one provider to stand for the category. With Algolia, create an
+    index, put the search-only key in the config, and put the admin key in{" "}
+    <code>.env.local</code>, which Blume loads for every command:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { algolia } from "blume/search";
+
+export default defineConfig({
+  search: algolia({
+    appId: "YOUR_APP_ID",
+    apiKey: "YOUR_SEARCH_ONLY_KEY",
+    indexName: "docs_eval",
+  }),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <CodeBlock
+    code={`npm install algoliasearch
+echo "ALGOLIA_ADMIN_API_KEY=your-admin-key" >> .env.local
+npx blume build
+npx blume preview`}
+    lang="bash"
+  />
+  <p>
+    The build log should say <code>Synced 100 record(s) to algolia</code>, with
+    your page count. If it says <code>Search sync skipped:</code> instead,
+    nothing was uploaded and the results don't count. If the upload fails with
+    the key set, the build stops with <code>BLUME_SEARCH_SYNC_FAILED</code>.
+  </p>
+
+  <h3>A semantic candidate</h3>
+  <p>
+    Mixedbread's queries go through a <code>/api/search</code> route on your
+    server, so this candidate needs a host adapter. Use <code>node()</code>,
+    since <code>blume preview</code> can serve its build locally:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { node } from "blume/deploy";
+import { mixedbread } from "blume/search";
+
+export default defineConfig({
+  deployment: node(),
+  search: mixedbread({ storeId: "acme-docs" }),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Blume doesn't upload anything to Mixedbread. You fill the store with
+    Mixedbread's CLI, which reads <code>MXBAI_API_KEY</code>, while Blume's
+    route reads <code>MIXEDBREAD_API_KEY</code>:
+  </p>
+  <CodeBlock
+    code={`npm install @mixedbread/sdk
+npm install --save-dev @mixedbread/cli@2.4.0
+export MXBAI_API_KEY=your-mixedbread-key
+npx mxbai store create acme-docs
+npx mxbai store sync acme-docs "docs/**" --yes
+echo "MIXEDBREAD_API_KEY=your-mixedbread-key" >> .env.local
+npx blume build
+npx blume preview`}
+    lang="bash"
+  />
+
+  <h2>Compare more than rank</h2>
+  <p>
+    The top 1 and top 3 counts are the headline, but read the misses by kind:
+    an engine that only misses typos has a different problem from one that
+    misses every question. Then check what the counts hide.
+  </p>
+  <ul>
+    <li>
+      <strong>Links.</strong> Blume's Mixedbread route links each result to the
+      page its file renders, matched by the path <code>mxbai store sync</code>{" "}
+      recorded for the file, and drops passages from files that aren't pages.
+      Run the sync from your project root, as above, or a folder above it. If
+      semantic results come back empty or short, check which paths your store
+      holds with{" "}
+      <code>npx mxbai store search acme-docs "dark mode" --return-metadata --format json</code>.
+    </li>
+    <li>
+      <strong>Scoping.</strong> Run the script again from a translated page and
+      from a page in an older version, and check that results stay in that
+      language and version where the table says they should. The "All
+      languages" toggle widens every adapter that scopes by language, Pagefind
+      included. Mixedbread always searches every language, so the dialog
+      leaves the toggle out.
+    </li>
+    <li>
+      <strong>Freshness.</strong> A local index is rebuilt with the site. A
+      hosted index holds whatever the last successful upload sent. With the
+      admin key set, a failed upload fails the build; without the key, the
+      build skips the upload with a warning. Typesense imports each build into a new
+      collection and moves an alias onto it once it's complete, so searches
+      keep working while a sync runs. The Mixedbread store changes only when
+      someone runs <code>mxbai store sync</code>, so it needs its own CI step.
+    </li>
+  </ul>
+
+  <h2>What we measured on Blume's docs</h2>
+  <p>
+    We ran the 12 queries on 2026-09-27 against Blume's own docs on the main
+    branch: 100 English pages, docs plus changelog. Orama, FlexSearch, and
+    Typesense ran through Blume's own browser search clients, with Typesense
+    30.2 running locally and filled by Blume's upload, and Pagefind 1.5.2
+    indexed the pages as the dev server rendered them. The script above gave
+    the same Orama row through the dialog. The Typesense row comes from a
+    rerun on 2026-09-30 over the same pages, with Blume's current sort.
+    Mixedbread wasn't measured: it needs an account.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Engine</th>
+        <th scope="col">Top 1</th>
+        <th scope="col">Top 3</th>
+        <th scope="col">Missed</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>Orama, the default</td><td>4</td><td>5</td><td>6</td></tr>
+      <tr><td>FlexSearch</td><td>5</td><td>5</td><td>6</td></tr>
+      <tr><td>Pagefind</td><td>8</td><td>8</td><td>3</td></tr>
+      <tr><td>Typesense</td><td>6</td><td>6</td><td>6</td></tr>
+    </tbody>
+  </table>
+  <ul>
+    <li>
+      Questions were the weak spot everywhere: no engine found the deployment
+      page for <code>can I host the docs on my own server</code>.
+    </li>
+    <li>
+      Only Pagefind found <code>includeCodeBlocks</code>, which appears only
+      inside a code block. Pagefind and Typesense put the right page first
+      for both typos, and Orama found nothing for either.
+    </li>
+    <li>
+      Adding <code>chatbot</code> to the assistant page's{" "}
+      <code>search.keywords</code> moved it to first on Orama.
+    </li>
+    <li>
+      Typesense, which Blume sorts by relevance and then{" "}
+      <code>search.boost</code>, put every page it found first. Its six misses
+      include all three questions.
+    </li>
+    <li>
+      The Orama index ships whole to each reader on first search, every
+      language in one file: 3.0 MB for 300 pages in five languages, about 870
+      KB with gzip. Pagefind's first query loaded about 210 KB, plus its 45 KB
+      script.
+    </li>
+    <li>
+      With English as the default locale, Orama found each of 20 Japanese, 20
+      Hindi, and 20 German pages by its own title in the 2026-09-30 rerun:
+      Blume gives each non-Latin translation a word-segmenting tokenizer of
+      its own.
+    </li>
+    <li>
+      As Algolia records, 23 of the 100 pages are over 10 KB. Algolia caps
+      record size by plan, from 10 KB to 100 KB (checked 2026-09-27), so
+      Blume's sync splits a longer page across several records and the
+      dialog lists the page once.
+    </li>
+  </ul>
+  <p>
+    These are observations from one site and 12 queries, not a ranking of
+    engines. Pagefind's lead here came mostly from a code term and two typos,
+    and one keyword closed one of Orama's misses. Run your own set before you
+    switch.
+  </p>
+
+  <h2>Which search fits your docs</h2>
+  <ul>
+    <li>
+      <strong>Most docs: keep Orama.</strong> Fix misses with{" "}
+      <code>search.keywords</code>, <code>search.boost</code>, and{" "}
+      <code>includeCodeBlocks</code> first. Keywords and boosts also rank
+      pages for the assistant and the MCP server.
+    </li>
+    <li>
+      <strong>Large or many-language static sites, or terms that live in code:
+      Pagefind.</strong> You give up search in <code>blume dev</code> and
+      version scoping. See{" "}
+      <a href="/guides/pagefind-documentation-search">Add Pagefind search</a>.
+    </li>
+    <li>
+      <strong>Versioned docs:</strong> Orama, FlexSearch, Algolia, or
+      Typesense. The others search every version at once.
+    </li>
+    <li>
+      <strong>Pages in a non-Latin script:</strong> Orama or Pagefind, not
+      FlexSearch. Orama segments a non-Latin default language, and gives each
+      translation in another script than the default, like Japanese under
+      English, a tokenizer of its own; the assistant and the MCP server search
+      the same way. On hosted search, set Algolia's index languages, or{" "}
+      <code>locale</code> on <code>typesense()</code>. See{" "}
+      <a href="/guides/cjk-documentation-search">
+        Make docs search work in Chinese, Japanese and Korean
+      </a>.
+    </li>
+    <li>
+      <strong>An index other tools also query, or ranking rules you manage at
+      the provider: hosted keyword.</strong> Algolia keeps its index settings
+      across uploads. Blume moves the Typesense alias onto a new collection on
+      every build, so settings tuned on the old collection need reapplying
+      (see{" "}
+      <a href="/guides/typesense-documentation-search">
+        Self-host documentation search with Typesense
+      </a>). Make sure someone sees the build's upload warning.
+    </li>
+    <li>
+      <strong>Readers ask in their own words and every keyword engine misses:
+      semantic search, or the assistant.</strong> Both need server output (see{" "}
+      <a href="/guides/static-vs-server-documentation">
+        Static or server-rendered documentation
+      </a>). With the{" "}
+      <a href="/guides/ai-assistant-for-documentation">assistant</a> on, the
+      dialog already offers every query to it as an Assistant row.
+    </li>
+  </ul>
+
+  <h2>The assistant and MCP server keep their own index</h2>
+  <p>
+    Your search adapter changes the dialog, nothing else. The assistant{" "}
+    <a href="/docs/configuration/assistant#grounding">grounds each answer</a>{" "}
+    in pages it retrieves from an Orama index baked into the build, whatever
+    the adapter, even with <code>search: false</code>. The MCP server's{" "}
+    <code>search_docs</code> tool and the JSON API's search use the same kind
+    of index. So switching to Mixedbread doesn't make the assistant semantic,
+    and a better dialog score says nothing about its answers. Only the{" "}
+    <code>inkeep()</code> assistant adapter brings its own retrieval. To test
+    answers instead of result lists, see{" "}
+    <a href="/guides/documentation-evals-ci">
+      Test whether your documentation can answer user questions
+    </a>.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>Every query misses on a hosted candidate</h3>
+  <p>
+    Open the dialog yourself. "Something went wrong. Please try again." means
+    the request to the provider failed: check the adapter's public key and
+    host or endpoint. On Mixedbread, the failing request is{" "}
+    <code>/api/search</code>: read the terminal running{" "}
+    <code>blume preview</code>, and check that <code>MIXEDBREAD_API_KEY</code>{" "}
+    is set; a build without it warns with <code>BLUME_MISSING_SECRET</code>.
+  </p>
+  <h3>The hosted index is missing new pages</h3>
+  <p>
+    Look for <code>Search sync skipped:</code> in the build log. It names the
+    cause: an unset admin key, or an <code>oramaCloud()</code> without{" "}
+    <code>indexId</code>. The build still succeeds, so the dialog keeps
+    serving whatever the provider already holds, which on Typesense is the
+    last complete sync. With the key set, the provider rejecting the upload,
+    such as a key without write access, fails the build with{" "}
+    <code>BLUME_SEARCH_SYNC_FAILED</code> instead, and the message says why.
+    Build again once the cause is fixed.
+  </p>
+  <h3>The build fails with BLUME_SERVER_FEATURE_REQUIRED</h3>
+  <p>
+    <code>mixedbread()</code> on a static build fails with{" "}
+    <code>Search (mixedbread) requires server output</code>. Set a host
+    adapter from <code>blume/deploy</code>, like <code>node()</code>.
+  </p>
+  <h3>The build fails with BLUME_DEPENDENCY_MISSING</h3>
+  <p>
+    The FlexSearch, Algolia, Typesense, Orama Cloud, and Mixedbread SDKs don't
+    ship with Blume. Install the package the message names, like{" "}
+    <code>npm install algoliasearch</code>.
+  </p>
+</GuidePage>

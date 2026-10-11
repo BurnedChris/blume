@@ -1,0 +1,515 @@
+---
+// Test whether your documentation can answer user questions: checked against
+// the evals and MCP docs, the eval source (cli/commands/eval.ts,
+// eval/schema.ts, run.ts, agents.ts, prompts.ts, findings.ts, report.ts), the
+// MCP snapshot builder (ai/mcp/data.ts), and the search indexing docs on main;
+// Claude Code's headless, settings, model-config, and env-vars docs; Codex's
+// non-interactive mode docs; GitHub's docs on secrets in fork workflows, path
+// filters, and skipped jobs; and the Ubuntu 24.04 runner image (jq). Ran in a
+// scratch fixture (zero-config `docs/` with four Acme pages and the evals.yaml
+// below): `blume eval --agent claude --json` from the local CLI with Claude
+// Code 2.1.283 and ANTHROPIC_MODEL=claude-sonnet-5, once before the docs fix
+// (exit 1; the jq output below is from that report) and once after it (exit
+// 0, the warning question still missing), plus the jq commands against both
+// reports. Review: rechecked the eval source and the action majors against
+// their GitHub releases (checkout, setup-node, and upload-artifact are all
+// v7). Updated against 400b5ff3 (read, not rerun): a warning question's miss
+// prints as warn and counts as warned (eval/report.ts; JSON status stays
+// "fail" with severity "warning"), --fix reruns with the run's own flags,
+// Claude runs pass --tools "" and --setting-sources "", and only Claude Code
+// reports cost. The workflow itself was not run. Not yet run end to end.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("documentation-evals-ci")}>
+  <p>
+    To catch documentation gaps before users do, write down the questions they
+    ask, list the facts a correct answer must contain, and have an AI agent
+    answer them from your docs alone. In Blume, that's <code>blume eval</code>:
+    a reader agent answers each question in <code>evals.yaml</code> using only
+    your documentation, a second session grades the answer against your facts,
+    and the command exits non-zero when the docs can't answer. Run it in CI
+    and a missing fact fails the pull request instead of becoming a support
+    ticket.
+  </p>
+  <p>
+    You'll end up with an evals file built from support questions, a failing
+    run you've read, the docs change that turns it green, and a GitHub Actions
+    job that runs the evals on docs pull requests with a pinned agent and
+    model. The example is the docs for Acme Messages, a fictional email and SMS
+    API at <code>docs.acme.example</code>.
+  </p>
+  <p>
+    This tests whether the agent and model you configure can answer from your
+    docs. It doesn't measure search rankings or predict what other models say
+    about your product, and every run uses paid model sessions. To catch broken
+    links, <code>blume validate</code> needs no model and gives the same result
+    every time (see <a href="/guides/markdown-link-checking-ci">the link
+    checking guide</a>). It checks the docs against questions, not against
+    your code: to catch pages a code change made wrong, see{" "}
+    <a href="/guides/keep-documentation-updated-agent">Keep documentation updated from merged code changes</a
+    >. And <code>blume eval</code> reads a Blume project, so a site built with
+    another tool needs its own harness.
+  </p>
+
+  <h2>How the eval reads your docs</h2>
+  <p>
+    Each question runs through two sessions of an agent CLI you have installed:
+    Codex by default, or Claude Code with <code>--agent claude</code>. Blume
+    itself holds no API keys.
+  </p>
+  <ol>
+    <li>
+      <strong>The reader</strong> starts in an empty directory with its file,
+      shell, and web tools off. Its only tools are your docs, served over a
+      private <a href="/docs/discoverability/mcp">MCP server</a> with the same{" "}
+      <code>search_docs</code>, <code>get_page</code>, <code>list_pages</code>,
+      and <code>get_navigation</code> tools a real agent uses. Whatever the
+      docs don't say doesn't exist.
+    </li>
+    <li>
+      <strong>The judge</strong> gets the question, your expected facts, and
+      the answer, with no tools. A paraphrase passes. A missing or contradicted
+      fact fails, and so does an answer that says the docs don't cover it.
+    </li>
+  </ol>
+  <p>
+    The reader's snapshot comes from your content sources, so there's no build
+    step, nothing is deployed, and the MCP server doesn't need to be enabled.
+  </p>
+
+  <h2>Turn support questions into expected facts</h2>
+  <p>
+    Start from questions someone asked a person instead of the docs: support
+    threads, GitHub issues, onboarding calls, and site searches that{" "}
+    <a href="/guides/documentation-search-analytics">returned nothing</a>. For
+    each, write down the facts your team gave in reply. For Acme, they go in{" "}
+    <code>evals.yaml</code> at the project root:
+  </p>
+  <CodeBlock
+    code={`questions:
+  - id: send-first-email
+    question: How do I send my first email with the Acme API?
+    expected:
+      - send a POST request to https://api.acme.example/v1/messages
+      - authenticate with an API key as a bearer token
+      - set channel to email
+    routes: /quickstart
+
+  - id: rotate-api-key
+    question: How do I rotate an API key without downtime?
+    expected:
+      - create a new key before revoking the old one
+      - an account can have two active keys at the same time
+      - revoking the old key takes effect immediately
+    routes: /authentication
+
+  - id: log-retention
+    question: How long does Acme keep message logs?
+    expected:
+      - 30 days
+    routes: /limits
+
+  - id: scheduled-send
+    question: Can I schedule a message to send later?
+    expected:
+      - set send_at to an ISO 8601 timestamp
+    severity: warning`}
+    lang="yaml"
+    title="evals.yaml"
+  />
+  <ul>
+    <li>
+      <strong><code>expected</code></strong> lists one checkable fact per
+      line. Write the substance, not the wording: a value (30 days), a name
+      (<code>send_at</code>), an order (create before revoke). A fact like
+      "explains authentication clearly" gives the judge nothing to check.
+    </li>
+    <li>
+      <strong><code>routes</code></strong> names the page that should answer,
+      so a failure is reported against that page's source file.
+    </li>
+    <li>
+      <strong><code>severity: warning</code></strong> reports a miss without
+      failing the run. Scheduled sending ships soon and isn't documented yet,
+      so it shouldn't block anyone. <code>skip: true</code> sits a question
+      out entirely.
+    </li>
+  </ul>
+  <p>
+    <code>rotate-api-key</code> is the one to watch: support answers it every
+    week, and the authentication page never says two keys can be active at
+    once.
+  </p>
+  <Callout type="info">
+    <code>npx blume eval init --agent claude</code> has the agent draft about
+    ten questions from your docs. It grounds every fact in what the docs
+    already say, so a drafted file guards against regressions but can't find a
+    gap. Keep the drafted questions that matter and add the ones users asked.
+  </Callout>
+
+  <h2>Run the evals</h2>
+  <p>
+    This guide uses Claude Code because it's the agent whose model you can
+    pin: it reads <code>ANTHROPIC_MODEL</code>. Blume runs Codex with{" "}
+    <code>--ignore-user-config</code> and passes it no model, so Codex uses its
+    default. Install Claude Code and sign in (or set{" "}
+    <code>ANTHROPIC_API_KEY</code>), then run the evals from the project root:
+  </p>
+  <CodeBlock
+    code={`npm install -g @anthropic-ai/claude-code@2.1.283
+export ANTHROPIC_MODEL=claude-sonnet-5
+npx blume eval --agent claude --json > eval-report.json`}
+    lang="bash"
+  />
+  <p>
+    Progress goes to your terminal, and{" "}
+    <code>--json</code> writes the full report, answers included, to the file.
+    Each question's line shows its status, the judge's score from 0 to 1, its
+    duration, and, with Claude Code, the cost estimate. Missing facts are
+    listed underneath, and a <code>fix:</code> line at the end names the
+    source file to edit.
+  </p>
+
+  <h2>Read a failure</h2>
+  <p>
+    In the run behind this guide, two of the four questions missed and the
+    command exited with code 1. Pull the misses out of the report:
+  </p>
+  <CodeBlock
+    code={`jq '.eval.results[] | select(.status != "pass") | {id, score, missing, notes}' eval-report.json`}
+    lang="bash"
+  />
+  <CodeBlock
+    code={`{
+  "id": "rotate-api-key",
+  "score": 0.1,
+  "missing": [
+    "create a new key before revoking the old one",
+    "an account can have two active keys at the same time"
+  ],
+  "notes": "The answer explicitly claims the documentation lacks this information and fails to state any of the expected facts, instead framing them as unknown/missing."
+}
+{
+  "id": "scheduled-send",
+  "score": 0,
+  "missing": [
+    "set send_at to an ISO 8601 timestamp"
+  ],
+  "notes": "The answer claims scheduling is undocumented and unsupported, directly contradicting the expected fact that a send_at ISO 8601 parameter exists."
+}`}
+    lang="json"
+  />
+  <p>
+    <code>rotate-api-key</code> failed, reported against{" "}
+    <code>docs/authentication.mdx</code>, the file behind its route. The judge
+    credited the third fact, because the page does say revoking takes effect
+    immediately:
+  </p>
+  <CodeBlock
+    code={`---
+title: Authentication
+description: Authenticate Acme Messages API requests with an API key.
+---
+
+Every request needs an API key, sent as a bearer token:
+
+\`\`\`http
+Authorization: Bearer YOUR_API_KEY
+\`\`\`
+
+Create keys in the dashboard under **Settings > API keys**. A key is shown
+once, when you create it, so store it in your secrets manager right away.
+
+## Revoke a key
+
+Select **Revoke** next to the key. Revoking takes effect immediately, and
+requests that use the key get a \`401\` response.`}
+    lang="mdx"
+    title="docs/authentication.mdx"
+  />
+  <p>
+    The reader's full answer is in the report's <code>answer</code> field, or
+    under each failure with <code>--verbose</code>. Here it said the
+    documentation "does not describe a zero-downtime rotation process" and has
+    "no mention of support for multiple simultaneous active keys." It even
+    sketched the usual rotation steps from general knowledge, and still failed:
+    the grade is about what your docs support, not what a model knows.
+  </p>
+  <p>
+    <code>scheduled-send</code> missed too, but as a warning question it
+    doesn't fail the run: its line reads <code>warn</code>, and the summary
+    counts it as warned. In the JSON report it keeps the status{" "}
+    <code>fail</code> with <code>"severity": "warning"</code>, which is why the{" "}
+    <code>jq</code> filter caught it. With no route, its finding points at its
+    line in <code>evals.yaml</code>.
+  </p>
+
+  <h2>Fix the docs, not the question</h2>
+  <p>
+    Add the missing facts to the page the finding names, in its own voice. For
+    Acme, that's a new section above "Revoke a key":
+  </p>
+  <CodeBlock
+    code={`## Rotate a key
+
+An account can have two active keys at the same time, so you can rotate a key
+without downtime:
+
+1. Create a new key under **Settings > API keys**.
+2. Deploy the new key everywhere the old one is used.
+3. Revoke the old key.`}
+    lang="mdx"
+    title="docs/authentication.mdx"
+  />
+  <p>
+    Run the evals again. All three error-level questions pass and the command
+    exits 0. <code>scheduled-send</code> still misses, as a warning that
+    doesn't touch the exit code.
+  </p>
+  <p>
+    Don't edit the question to get to green. If a fact is wrong because the
+    product changed, update the fact and the docs in the same pull request. To
+    hand the fixes to an agent, run{" "}
+    <code>npx blume eval --fix --agent claude</code>. After the run, it opens
+    Claude Code with the report and instructions to add the missing facts to
+    the named pages, never deleting a question or weakening a fact. Those
+    instructions end by rerunning <code>blume eval</code> with the run's own{" "}
+    <code>--agent</code>, <code>--file</code>, <code>--threshold</code>, and{" "}
+    <code>--timeout</code>, so the check uses the same agent and file as the
+    run it fixes. Review the agent's edits before you commit them.
+  </p>
+
+  <h2>Account for model variability</h2>
+  <p>
+    Two model sessions stand between your docs and each verdict, and neither
+    is deterministic: the reader can search differently from run to run, and
+    the judge can weigh a paraphrase differently. A gate is useful only when it
+    fails because the docs changed, so control what you can.
+  </p>
+
+  <h3>Pin what the result depends on</h3>
+  <ul>
+    <li>
+      <strong>Blume</strong>, through your lockfile.
+    </li>
+    <li>
+      <strong>The agent CLI</strong>, installed at an exact version.
+    </li>
+    <li>
+      <strong>The model</strong>, as a full model ID in{" "}
+      <code>ANTHROPIC_MODEL</code>. An alias like <code>sonnet</code> moves to
+      a newer model when one ships.
+    </li>
+    <li>
+      <strong>The evals file</strong>, committed beside the docs, so changes to
+      questions and facts get reviewed.
+    </li>
+  </ul>
+  <p>
+    Blume starts Claude Code with every built-in tool off and without your
+    settings files or <code>CLAUDE.md</code>, so a local run matches CI: your
+    hooks, plugins, and memory can't feed the reader, and a model or{" "}
+    <code>env</code> block in <code>settings.json</code> doesn't apply. Your
+    Claude Code login still works; set <code>ANTHROPIC_MODEL</code>, and{" "}
+    <code>ANTHROPIC_API_KEY</code> if you use one, in your shell.
+  </p>
+
+  <h3>Check that a new question is stable</h3>
+  <p>
+    Before a question joins the gate, run the suite a few times against the
+    same docs and count the outcomes:
+  </p>
+  <CodeBlock
+    code={`export ANTHROPIC_MODEL=claude-sonnet-5
+for i in 1 2 3; do
+  npx blume eval --agent claude --json > "eval-$i.json"
+done
+jq -r '.eval.results[] | "\\(.id) \\(.status)"' eval-*.json | sort | uniq -c`}
+    lang="bash"
+  />
+  <p>
+    Each line counts the runs that gave a question a status. A question that
+    both passes and fails on unchanged docs is noise: usually the page states
+    the fact only indirectly, or the fact itself is vague. Make whichever it
+    is explicit. Keep the question at{" "}
+    <code>severity: warning</code> until it's steady.
+  </p>
+
+  <h2>Know what a run costs</h2>
+  <p>
+    Every question that isn't skipped is two agent sessions, run one after
+    another, so cost and time grow with the file. The sessions bill to
+    whatever the agent CLI signs in with: your subscription or key locally, the
+    API key secret in CI. With Claude Code, Blume prints its estimate after
+    each question and a total on the summary line, and stores the total as{" "}
+    <code>eval.costUsd</code> in the JSON report. Claude Code calls these
+    client-side estimates that can differ from your bill. Codex reports none,
+    so check your provider's usage dashboard.
+  </p>
+  <p>
+    Keep the file to questions that matter, and run it only when the docs
+    change. The <a href="/pricing">pricing page</a> covers what Blume's AI
+    features cost.
+  </p>
+
+  <h2>Add a CI gate on docs changes</h2>
+  <p>
+    Add your Anthropic API key as a repository secret named{" "}
+    <code>ANTHROPIC_API_KEY</code>, then add this workflow. It assumes the
+    Blume project is at the repository root with its content in{" "}
+    <code>docs/</code> and a <code>package-lock.json</code>; adjust the paths
+    and install command to match yours.
+  </p>
+  <CodeBlock
+    code={`name: Docs evals
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "evals.yaml"
+      - "blume.config.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-evals-\${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evals:
+    # Pull requests from forks get no secrets, so the job skips them.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm install -g @anthropic-ai/claude-code@2.1.283
+      - name: Run the evals
+        env:
+          ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: claude-sonnet-5
+        run: npx blume eval --agent claude --json > eval-report.json
+      - name: Summarize
+        if: always()
+        run: |
+          [ -s eval-report.json ] || exit 0
+          {
+            echo "## Docs evals"
+            jq -r '.eval.results[] | "- \\(.id): \\(.status)"' eval-report.json
+            jq -r '"Cost estimate (USD): \\((.eval.costUsd // 0) * 100 | round / 100)"' eval-report.json
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: eval-report
+          path: eval-report.json`}
+    lang="yaml"
+    title=".github/workflows/docs-evals.yml"
+  />
+  <p>Each part keeps the gate scoped:</p>
+  <ul>
+    <li>
+      <strong>The <code>paths</code> filter</strong> runs the evals only when
+      the docs, the questions, or the config change.
+    </li>
+    <li>
+      <strong>The fork check</strong> skips pull requests from forks, which
+      GitHub gives no secrets. A skipped job reports success, so run the evals
+      yourself before merging a fork's docs change.
+    </li>
+    <li>
+      <strong>The API key</strong> is set on the eval step alone, so install
+      scripts that run during <code>npm ci</code> never see it.
+    </li>
+    <li>
+      <strong><code>concurrency</code></strong> cancels a run when a newer
+      push supersedes it.
+    </li>
+    <li>
+      <strong>The report</strong> is uploaded on every run, and the job summary
+      lists each question's status and the cost estimate.
+    </li>
+    <li>
+      <strong><code>timeout-minutes</code></strong> caps the job. The reader
+      gets 180 seconds per question by default (<code>--timeout</code>), so
+      raise the cap as the file grows.
+    </li>
+  </ul>
+  <p>
+    Leave the check optional at first. GitHub leaves a required check pending
+    when a <code>paths</code> filter skips its workflow, so if you make it
+    required, pull requests that don't touch the docs can't merge. Keep it as
+    a signal reviewers read, or drop the filter and run it on every pull
+    request.
+  </p>
+  <p>
+    When you add evals to docs with many known gaps, mark those questions{" "}
+    <code>severity: warning</code> rather than lowering the bar with{" "}
+    <code>--threshold 0.8</code>. A threshold lets any question fail as long as
+    enough others pass; warnings record which gaps you already know about.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The agent CLI isn't found</h3>
+  <p>
+    Blume stops with "Claude Code (<code>claude</code>) was not found on PATH"
+    and the install command. In CI, the install step has to come before the
+    eval step. Without <code>--agent claude</code>, Blume looks for Codex
+    instead.
+  </p>
+  <h3>A question says "run failed" instead of fail</h3>
+  <p>
+    <code>BLUME_EVAL_QUESTION_ERROR</code> means the agent session itself
+    failed, so the docs weren't graded: the reader timed out, the CLI exited
+    with an error, or the judge returned no parseable verdict. The detail line
+    says which. Check the API key for authentication errors, raise{" "}
+    <code>--timeout</code> for slow readers, and rerun. An errored question
+    counts against the gate unless it's a warning question.
+  </p>
+  <h3>The fact is on the page, but the question still fails</h3>
+  <p>
+    The reader finds pages through <code>search_docs</code>, so check that it
+    can. A page with <code>search.exclude</code> in its frontmatter, or one
+    hidden from the sidebar, is left out of that index (see{" "}
+    <a href="/docs/configuration/search#excluding-pages">Excluding pages</a>).
+    Code blocks aren't indexed unless you turn on{" "}
+    <code>search.indexing.includeCodeBlocks</code>, so the reader can miss a
+    fact that only appears in an example; state it in prose too. Content
+    inside <code>&lt;Visibility for="web"&gt;</code> never reaches agents. If
+    users ask in words the page doesn't use, add those words to the page.
+  </p>
+  <h3>A route hint matches no page</h3>
+  <p>
+    <code>BLUME_EVAL_ROUTE_UNKNOWN</code> warns that a question's{" "}
+    <code>routes</code> entry names a page that moved or no longer exists.
+    Update it to the new route; until then, failures point at
+    the question in <code>evals.yaml</code> instead of the page.
+  </p>
+  <h3>The evals file won't load</h3>
+  <p>
+    "Invalid evals file" names the field at fault: an <code>id</code> that
+    isn't kebab-case, a duplicate <code>id</code>, an empty{" "}
+    <code>expected</code> list, or a key the schema doesn't know. "No evals
+    file found" means Blume looked for <code>evals.yaml</code> in the current
+    directory; run it from the project root or pass <code>--file</code>.
+  </p>
+  <h3>It passes locally and fails in CI</h3>
+  <p>
+    Check that both runs used the same <code>ANTHROPIC_MODEL</code> and CLI
+    version. A model set only in your <code>settings.json</code> doesn't count,
+    since eval runs skip that file. If they match, the question may be
+    unstable: run the stability check above and compare the reader's{" "}
+    <code>answer</code> in the CI artifact with your local report.
+  </p>
+</GuidePage>

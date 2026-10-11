@@ -1,0 +1,35 @@
+---
+title: Strapi
+description: >-
+  strapi() ソースを使って Strapi の REST API 経由でコンテンツタイプを読み込み、Strapi 4 と Strapi 5 の両方で Blocks の本文を Markdown に変換します。
+---
+
+組み込みの `strapi()` アダプターは、Strapi REST API（`/api/<pluralApiId>`）を通じてコンテンツタイプを読み込み、各エントリーの Blocks 本文を Markdown に変換します。変換の対象は、段落、見出し、リスト、引用、コードブロック、画像、リンクです。Markdown のリッチテキストフィールドは記述されたとおりにそのまま渡されます。ただし、Web、メール、電話、相対アドレスのいずれでもないリンクは、ラベルのみが残ります。Strapi 5 のレスポンスはそのまま読み込まれます。Strapi 4 の `attributes` エンベロープはフラット化されるため、同じフィールドパスを使用できます。インストールは不要です。
+
+```ts blume.config.ts
+import { defineConfig } from "blume";
+import { filesystem, strapi } from "blume/sources";
+
+export default defineConfig({
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      strapi({
+        prefix: "guides",
+        url: "https://cms.example.com",
+        contentType: "guides",
+        // locale: "en"
+        // Field paths default to title / description / slug / content /
+        // updatedAt; order (no default) sets the sidebar order
+        fields: { body: "body" },
+        // Extra query parameters: filters[...], sort
+        params: { "filters[section][$eq]": "sdk" },
+      }),
+    ],
+  },
+});
+```
+
+API トークンは `STRAPI_API_TOKEN` 環境変数から取得され、Bearer トークンとして送信されます。エントリーは `populate=*` を指定して取得されるため、画像には URL が含まれます（範囲を絞り込むには `populate` を設定してください）。Blocks フィールド内の相対アップロードパス（`/uploads/x.png`）は `url` を基準に解決されます。Markdown フィールドは記述されたとおりにそのまま渡されるため、そこに含まれる相対パスはドキュメントサイトを基準としたままとなり、正しく表示されません。Markdown フィールドでは、Strapi の Markdown エディターが挿入するのと同じように、絶対 URL で画像を指定してください。インポートされるのは公開済みのエントリーのみです。`--preview` を指定すると下書きがリクエストされます（Strapi 5 では `status=draft`、Strapi 4 では `publicationState=preview`）。このとき、一度も公開されたことのないドキュメントは `draft: true` としてステージングされます。公開済みのドキュメントの場合は、最新の下書きがプレビューされます。
+
+[Strapi を使ってドキュメントサイトを管理する](/guides/strapi-documentation-website)では、編集者が Strapi でコンテンツを公開し、公開のたびに静的サイトを再ビルドし、下書きを本番環境に含めないようにするまでの一連の流れを、最初から最後まで解説しています。

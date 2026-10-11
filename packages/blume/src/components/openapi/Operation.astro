@@ -131,6 +131,10 @@ const params = mergeParameters(
 const requestBody = operation?.requestBody
   ? resolveComponentRef(operation.requestBody, components, "requestBodies")
   : undefined;
+// A request body table leaves out `readOnly` fields. A webhook's or
+// callback's body is a request the API sends, so it reads like a response
+// (and like its payload example): `readOnly` fields in, `writeOnly` out.
+const bodyDirection = isWebhook ? "response" : "request";
 const responses = Object.fromEntries(
   Object.entries(operation?.responses ?? {}).map(([status, response]) => [
     status,
@@ -155,6 +159,7 @@ const model =
         parameters: params,
         path: ref.path,
         requestBody,
+        responses,
         schemas,
         security,
         // An operation's own `servers` override its path item's, which
@@ -178,6 +183,8 @@ interface CallbackEntry {
   method: string;
   name: string;
   operation: FullOperation;
+  /** The callback path item's own parameters, which each method inherits. */
+  pathParameters?: ParameterLike[];
 }
 
 // Callbacks: for each named callback (resolved through
@@ -202,6 +209,10 @@ const callbacks: CallbackEntry[] = Object.entries(
               // SAFETY: a path item's method entry is an operation object; the
               // object check above guards a spec that put a scalar there.
               operation: entry as FullOperation,
+              // SAFETY: the object check above passed, and a path item's
+              // `parameters` is a parameter list, which `mergeParameters`
+              // reads the way it reads an operation's.
+              pathParameters: (item as PathItemLike).parameters,
             },
           ]
         : [];
@@ -209,8 +220,13 @@ const callbacks: CallbackEntry[] = Object.entries(
   });
 });
 
-/** A callback's request body and responses, `$ref`s resolved. */
+/** A callback's parameters, request body, and responses, `$ref`s resolved. */
 const callbackParts = (entry: CallbackEntry) => ({
+  parameters: mergeParameters(
+    entry.pathParameters,
+    entry.operation.parameters,
+    components
+  ),
   requestBody: entry.operation.requestBody
     ? resolveComponentRef(entry.operation.requestBody, components, "requestBodies")
     : undefined,
@@ -253,6 +269,8 @@ const callbackParts = (entry: CallbackEntry) => ({
           <ParametersTable parameters={params} schemas={schemas} />
           {requestBody && (
             <RequestBody
+              components={components}
+              direction={bodyDirection}
               expandAll={spec.expandSchemas}
               requestBody={requestBody}
               schemas={schemas}
@@ -298,10 +316,18 @@ const callbackParts = (entry: CallbackEntry) => ({
                           text={entry.operation.description}
                         />
                       )}
+                      <ParametersTable
+                        level={4}
+                        parameters={parts.parameters}
+                        schemas={schemas}
+                      />
                       {parts.requestBody && (
                         <RequestBody
+                          components={components}
+                          direction="response"
                           expandAll={spec.expandSchemas}
                           level={4}
+                          name={`callback-${entry.key}`}
                           requestBody={parts.requestBody}
                           schemas={schemas}
                         />
@@ -339,6 +365,7 @@ const callbackParts = (entry: CallbackEntry) => ({
                 model={model}
                 operation={id}
                 proxy={spec.playground.proxy}
+                proxyConfig="openapi"
                 slug={spec.slug}
               />
             )}

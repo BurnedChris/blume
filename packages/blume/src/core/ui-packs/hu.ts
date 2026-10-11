@@ -34,6 +34,7 @@ export const hu: UIStringsOverride = {
     error: "Sajnáljuk, valami hiba történt.",
     explainCode: "Magyarázd el ezt a kódot.",
     label: "Tegyél fel egy kérdést",
+    open: "Asszisztens megnyitása",
     placeholder: "Tegyél fel egy kérdést…",
     rateLimited: "Sok kérdést tett fel. Próbálja újra néhány perc múlva.",
     removeCode: "Kód eltávolítása",
@@ -48,6 +49,7 @@ export const hu: UIStringsOverride = {
   banner: { dismiss: "Közlemény bezárása" },
   changelog: {
     description: "Termékfrissítések és kiadási megjegyzések.",
+    empty: "A változásnaplóban még nincsenek bejegyzések.",
     title: "Változásnapló",
   },
   consent: {
@@ -69,6 +71,7 @@ export const hu: UIStringsOverride = {
     preview: "Előnézet",
     prop: "Tulajdonság",
     selectTab: "Lap kiválasztása",
+    selectView: "Nézet kiválasztása",
     showLess: "Kevesebb megjelenítése",
     showMore: "Több megjelenítése",
     stars: "Csillagok",

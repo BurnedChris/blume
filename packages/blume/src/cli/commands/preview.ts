@@ -4,15 +4,19 @@ import { preview } from "astro";
 import { defineCommand } from "citty";
 import { join } from "pathe";
 
+import { normalizeBasePath } from "../../core/base-path.ts";
 import { loadConfig } from "../../core/config.ts";
 import { resolveProjectContext } from "../../core/project.ts";
+import { publicFolder } from "../../core/static-host.ts";
 import { deployOutputDir } from "../../deploy/adapter-output.ts";
 import { deployPlatform } from "../../deploy/platforms/index.ts";
+import { distDir } from "../../deploy/platforms/paths.ts";
 import { parsePort } from "../args.ts";
 import { commandMeta } from "../command-meta.ts";
 import { refuseIfEjected } from "../eject-scripts.ts";
 import { normalizeHost } from "../host-args.ts";
 import { logger } from "../log.ts";
+import { previewRedirects, servePreview } from "../preview-pages.ts";
 
 export const previewCommand = defineCommand({
   args: {
@@ -48,7 +52,7 @@ export const previewCommand = defineCommand({
       process.exit(1);
     }
 
-    await preview({
+    const server = await preview({
       logLevel: "info",
       root: context.outDir,
       server: {
@@ -58,5 +62,17 @@ export const previewCommand = defineCommand({
         port: parsePort(args.port),
       },
     });
+    // A static build is served by Vite, which knows nothing of the host's
+    // redirect rules or trailing-slash handling, and whose HTML fallback
+    // would answer a page with the redirect page of a redirect from its
+    // `.html` URL.
+    if (deployment.options.output === "static") {
+      servePreview(server, {
+        base: normalizeBasePath(deployment.options.base),
+        distDir: distDir(context),
+        isPublicFolder: publicFolder(join(context.root, "public")),
+        redirects: previewRedirects(config, context.outDir),
+      });
+    }
   },
 });

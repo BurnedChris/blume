@@ -528,6 +528,14 @@ describe("YouTube", () => {
     ).toBe("[Watch on YouTube](https://www.youtube.com/watch?v=dQw4w9WgXcQ)\n");
   });
 
+  it("links a playlist URL to the playlist", () => {
+    expect(
+      downlevelComponents(
+        '<YouTube url="https://www.youtube.com/embed/videoseries?list=PLabc_-1" title="Course" />\n'
+      )
+    ).toBe("[Course](https://www.youtube.com/playlist?list=PLabc_-1)\n");
+  });
+
   it("stays verbatim when no video id can be resolved", () => {
     const source = '<YouTube url="https://example.com/not-a-video" />\n';
     expect(downlevelComponents(source)).toBe(source);
@@ -641,6 +649,19 @@ describe("frontmatter in scope", () => {
     );
     expect(out).toBe(
       "[Watch on YouTube](https://www.youtube.com/watch?v=dQw4w9WgXcQ)\n"
+    );
+  });
+
+  it("leaves a body expression as written; only props resolve", () => {
+    // The docs say so: `{frontmatter.owner}` in the page's text isn't a prop,
+    // so the Markdown copy keeps it verbatim.
+    const out = downlevelComponents(
+      "Owned by {frontmatter.owner}.\n\n<Callout title={frontmatter.owner}>Body.</Callout>\n",
+      undefined,
+      { owner: "Platform" }
+    );
+    expect(out).toBe(
+      "Owned by {frontmatter.owner}.\n\n> **Platform**\n>\n> Body.\n"
     );
   });
 
@@ -863,6 +884,24 @@ describe("data and inline components", () => {
     );
     expect(md(['<CodeBlock code="plain" />'])).toBe("```txt\nplain\n```\n");
     expect(md(["<CodeBlock code={c()} />"])).toBe("<CodeBlock code={c()} />\n");
+  });
+
+  it("unwraps a fence a CodeBlock wraps in place of a code prop", () => {
+    expect(
+      md([
+        '<CodeBlock title="a.ts">',
+        "",
+        "```ts",
+        "let a = 1",
+        "```",
+        "",
+        "</CodeBlock>",
+      ])
+    ).toBe("```ts\nlet a = 1\n```\n");
+    expect(md(["<CodeBlock />"])).toBe("<CodeBlock />\n");
+    expect(md(["<CodeBlock code={1}>x</CodeBlock>"])).toBe(
+      "<CodeBlock code={1}>x</CodeBlock>\n"
+    );
   });
 
   it("fences a diff from a patch or its two sides, never from files", () => {

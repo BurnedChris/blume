@@ -1,6 +1,9 @@
+import { isAbsolute, join } from "pathe";
+
 import { normalizeRoute, withBasePath } from "../core/base-path.ts";
 import type { ResolvedConfig } from "../core/schema.ts";
 import { trimChar } from "../core/trim.ts";
+import type { GraphqlAuthOptions } from "../reference/options.ts";
 import type { ScalarOptions } from "../reference/scalar.ts";
 import type { ResolvedReferenceAdapter } from "../reference/schema.ts";
 
@@ -54,6 +57,12 @@ export interface ReferenceSource {
    */
   basePath: string;
   label: string;
+  /**
+   * The source's own `label`, when it sets one: it names the sidebar group
+   * of the source's route. An unlabeled source's group keeps the name its
+   * route gives it.
+   */
+  groupLabel?: string;
   /** Whether generated pages are included in llms.txt/llms-full.txt. */
   includeInLlms: boolean;
   /** Whether generated pages are included in site search. */
@@ -68,10 +77,17 @@ export interface ReferenceSource {
   /** Local path or `http(s)` URL, verbatim from config. */
   spec: string;
   /**
+   * OpenAPI Overlay documents applied to `spec` in order (`openapi()` and
+   * `scalar()` only).
+   */
+  overlays?: string[];
+  /**
    * URL of the live GraphQL endpoint the playground and code samples target
    * (GraphQL only — a schema, unlike an OpenAPI document, names no server).
    */
   endpoint?: string;
+  /** How the GraphQL endpoint authenticates (GraphQL only). */
+  auth?: GraphqlAuthOptions;
   /**
    * The `scalar()` adapter's own options (`scalar` kind only): `theme` plus
    * any Scalar config forwarded verbatim to `<ScalarComponent>`, which takes
@@ -176,6 +192,7 @@ const scalarOptionsOf = (
 
 /** A source row with every kind's fields reconciled onto one shape. */
 interface SourceRow {
+  auth?: GraphqlAuthOptions;
   endpoint?: string;
   includeInLlms: boolean;
   includeInSearch: boolean;
@@ -184,13 +201,14 @@ interface SourceRow {
   route?: string;
   seoDescriptionSuffix: boolean;
   spec: string;
+  overlays?: string[];
 }
 
 /**
  * One row per source, with the kind-specific fields already reconciled: a
- * GraphQL source's `endpoint` falls back to the adapter-wide default (the
- * common single-schema case pairs it with the `spec` shorthand); the other
- * kinds have no endpoint at all. A Scalar source carries only `noindex` of
+ * GraphQL source's `endpoint` and `auth` fall back to the adapter-wide
+ * defaults (the common single-schema case pairs them with the `spec`
+ * shorthand); the other kinds have neither. A Scalar source carries only `noindex` of
  * the per-source controls — the embed sits outside search and llms.txt, so
  * the other two read as off.
  */
@@ -198,6 +216,7 @@ const sourceRowsOf = (adapter: ResolvedReferenceAdapter): SourceRow[] => {
   if (adapter.kind === "graphql") {
     return adapter.options.sources.map((source) => ({
       ...source,
+      auth: source.auth ?? adapter.options.auth,
       endpoint: source.endpoint ?? adapter.options.endpoint,
     }));
   }
@@ -252,8 +271,17 @@ const referencesFor = (
     if (adapter.kind === "scalar") {
       reference.scalar = scalarOptionsOf(adapter.options);
     }
+    if (source.label !== undefined) {
+      reference.groupLabel = source.label;
+    }
     if (source.endpoint !== undefined) {
       reference.endpoint = source.endpoint;
+    }
+    if (source.auth !== undefined) {
+      reference.auth = source.auth;
+    }
+    if (source.overlays !== undefined) {
+      reference.overlays = source.overlays;
     }
     return reference;
   });
@@ -338,6 +366,27 @@ export const blumeReferences = (
   }
   return result;
 };
+
+/** A spec or overlay the parser fetches rather than reads from disk. */
+const REMOTE_SPEC = /^https?:\/\//u;
+
+/**
+ * The local files every reference reads, as absolute paths: each spec and
+ * overlay that isn't an `http(s)` URL, resolved from the project root the way
+ * the parser resolves them. `blume dev` watches these, so an edit to a spec
+ * regenerates its reference like an edit to a page does.
+ */
+export const referenceSpecFiles = (
+  config: ResolvedConfig,
+  root: string
+): string[] => [
+  ...new Set(
+    resolveReferences(config)
+      .flatMap((ref) => [ref.spec, ...(ref.overlays ?? [])])
+      .filter((path) => !REMOTE_SPEC.test(path))
+      .map((path) => (isAbsolute(path) ? path : join(root, path)))
+  ),
+];
 
 /** Whether any reference is Scalar-rendered (gates the Scalar pages). */
 export const hasScalarReferences = (config: ResolvedConfig): boolean =>

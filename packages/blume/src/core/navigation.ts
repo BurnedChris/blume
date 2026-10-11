@@ -161,6 +161,40 @@ const stemOf = (filename: string): string =>
 const navStem = (navPath: string): string =>
   stemOf(navPath.split("/").at(-1) ?? navPath);
 
+/**
+ * A page's key in its folder meta `pages` list: its file name without the
+ * extension, ordering prefix, or parentheses (`01-quickstart.mdx` is
+ * `quickstart`).
+ */
+export const pageKey = (filename: string): string =>
+  segmentKey(stemOf(filename));
+
+/**
+ * The keys a folder meta `pages` list can name, by group path: each folder's
+ * pages and subfolders, keyed as `buildFileSystemSidebar` keys its nodes (the
+ * name without its extension, ordering prefix, or parentheses). Read off nav
+ * paths, so it covers pages the sidebar leaves out, like hidden ones.
+ */
+export const folderChildKeys = (
+  navPaths: Iterable<string>
+): Map<string, Set<string>> => {
+  const keys = new Map<string, Set<string>>();
+  const add = (group: string, key: string): void => {
+    const children = keys.get(group) ?? new Set<string>();
+    children.add(key);
+    keys.set(group, children);
+  };
+  for (const navPath of navPaths) {
+    const dirs = navPath.split("/");
+    const filename = dirs.pop() ?? navPath;
+    for (const [depth, dir] of dirs.entries()) {
+      add(dirs.slice(0, depth).join("/"), segmentKey(dir));
+    }
+    add(dirs.join("/"), pageKey(filename));
+  }
+  return keys;
+};
+
 interface MutablePage {
   kind: "page";
   key: string;
@@ -397,16 +431,21 @@ const applyFolderMeta = (
 
 /**
  * Warn when an index page's own frontmatter title diverges from its folder's
- * explicit `meta.title`. The sidebar label and the page's own `<title>`/heading
- * are resolved from two independent sources — under i18n, a translator can
- * update the folder's `meta.ts` and forget the index page's own frontmatter
- * (or vice versa), and a correct-looking sidebar hides the mismatch.
+ * explicit `meta.title`. The sidebar label and the page's own title (its
+ * heading, and its `<title>` unless `seo.title` replaces that) are resolved
+ * from two independent sources — under i18n, a translator can update the
+ * folder's `meta.ts` and forget the index page's own frontmatter (or vice
+ * versa), and a correct-looking sidebar hides the mismatch.
  *
  * Only fires when the index page's own sidebar row is hidden
  * (`sidebar.hidden`), so the linked group header is the only sidebar label the
  * page has. A visible index row shows the page's own label beneath the header,
  * so the sidebar already carries both titles and a divergence there is a
- * deliberate pairing ("CLI" over "Overview"), not drift.
+ * deliberate pairing ("CLI" over "Overview"), not drift. A hidden index keeps a
+ * different title on purpose the same way any page does: its `sidebar.label`
+ * names the folder title, so the label its own row would carry agrees with the
+ * header. The suggestion names only ways out that clear the warning:
+ * `validate --strict` fails on any warning, so leaving it is not one.
  *
  * Only fires when the page has an explicit frontmatter `title` of its own:
  * when it's absent, `page.title` is derived from the first heading or the
@@ -440,15 +479,19 @@ const indexTitleMismatchDiagnostic = (
   const meta =
     folderMeta.get(metaKey(folderPath, metaPrefix)) ??
     sharedMeta.get(metaKey(folderPath, sharedMetaPrefix));
-  if (!meta?.title || meta.title === page.title) {
+  if (
+    !meta?.title ||
+    meta.title === page.title ||
+    meta.title === page.meta.sidebar.label
+  ) {
     return undefined;
   }
   return {
     code: "BLUME_NAV_INDEX_TITLE_MISMATCH",
     file: page.sourcePath ?? page.id,
-    message: `Index page "${page.navPath}" has title "${page.title}", but its folder's meta.title is "${meta.title}" — the sidebar shows the folder title while the page's own <title>/heading still say "${page.title}".`,
+    message: `Index page "${page.navPath}" has title "${page.title}", but its folder's meta.title is "${meta.title}". The page hides its own sidebar row, so "${meta.title}" is the only sidebar label it has.`,
     severity: "warning",
-    suggestion: `Update the page's frontmatter title to match ("${meta.title}"), or leave it if the divergence is intentional.`,
+    suggestion: `Change the page's title or the folder's meta.ts title so they match, set the page's sidebar.label to "${meta.title}" to keep its title on purpose, or remove sidebar.hidden so the sidebar also lists the page under its own label.`,
   };
 };
 
@@ -622,10 +665,16 @@ const hoistPages = (
  * group's *children*, not the tree root — so hoisting only the root leaves a
  * tab section's loose pages interleaved with its groups. Hoist the top level of
  * every group that owns a tab (matched on its URL path), mirroring the root.
+ *
+ * The section is the outermost group at the tab's path, the one render-time
+ * scoping shows (`sectionChildren`). A `(group)` folder inside it adds no
+ * route segment, so it shares that path, but it is a group in the section, not
+ * the section itself: below a matched group its path no longer matches, and
+ * the (group)'s own level hoists only by the `hoistPages` rules.
  */
 const hoistTabSections = (
   nodes: MutableNode[],
-  tabPaths: Set<string>,
+  tabPaths: ReadonlySet<string>,
   display: SidebarDisplay
 ): void => {
   for (const node of nodes) {
@@ -634,6 +683,10 @@ const hoistTabSections = (
     }
     if (node.routePath !== undefined && tabPaths.has(node.routePath)) {
       hoistPages(node.children, display, true);
+      const inner = new Set(tabPaths);
+      inner.delete(node.routePath);
+      hoistTabSections(node.children, inner, display);
+      continue;
     }
     hoistTabSections(node.children, tabPaths, display);
   }
@@ -1049,6 +1102,11 @@ const resolveTabHref = (
     return path;
   }
   const rest = pathUnder(path, roots.tabs);
+  // An archived tree's root tab links back to the current docs: its section
+  // is the whole current tree, no page of which this tree holds.
+  if (rest === "/" && roots.tree !== roots.tabs) {
+    return path;
+  }
   const section =
     rest === undefined || rest === "/" ? path : joinRoute(roots.tree, rest);
   let first: string | undefined;
@@ -1058,10 +1116,12 @@ const resolveTabHref = (
       if (route === section) {
         return true;
       }
+      // `isUnderPath`, not a `${section}/` prefix: a root tab's section is
+      // `/`, which every route sits under but none starts `//`.
       if (
         first === undefined &&
         route !== undefined &&
-        route.startsWith(`${section}/`)
+        isUnderPath(route, section)
       ) {
         first = route;
       }

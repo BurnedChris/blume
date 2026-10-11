@@ -1,0 +1,675 @@
+---
+// Build an engineering handbook with RFCs, ADRs, and runbooks: checked
+// against the frontmatter, configuration, navigation, folder meta, MCP, JSON
+// API, and deployment docs, and against core/schema.ts (content.types and the
+// facet check), search/facets.ts, ai/mcp/query.ts and data.ts, and
+// core/ordering-prefix.ts on main. The config and every document below were
+// scanned in-process (scanProject, buildMcpData, createMcpFetchHandler) from
+// a throwaway fixture: no diagnostics, and the list_pages and search_docs
+// output shown here is what the handler returned, with the dev server URL as
+// the site. The same harness produced the BLUME_FRONTMATTER_INVALID and
+// BLUME_CONFIG_INVALID messages and a hidden page that list_pages and
+// search_docs skip but get_page still returns. Updated for main: filters
+// match a number or boolean against its string form (ai/mcp/query.ts,
+// 0a38c27f); read in the source, not rerun.
+// Claude Code's --scope and --header flags and Cloudflare Access service
+// token headers were checked against their official docs. Not yet run end to
+// end: the rendered pages, directory cards, and `{frontmatter.status}` Callout
+// title were not viewed in `blume dev`.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import Callout from "blume/components/content/Callout.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const rfcMdxCode = `---
+title: "RFC 1: Idempotency keys for message sends"
+description: Let clients retry POST /messages without sending the same email or SMS twice.
+type: rfc
+owner: messaging
+status: accepted
+---
+
+## Problem
+
+When a client's request to \`POST /messages\` times out, the client can't tell whether we sent the message. Retrying risks a duplicate email or SMS.
+
+## Proposal
+
+Accept an \`Idempotency-Key\` header on \`POST /messages\`. Store each key with the response for 24 hours, and return the stored response when the same key arrives again.
+
+## Alternatives considered
+
+Deduplicating on the message body would block legitimate repeat sends, like two identical password reset codes.
+
+## Open questions
+
+None. Accepted in the platform review on 2026-08-12.`;
+---
+
+<GuidePage guide={guideById("engineering-handbook-markdown")}>
+  <p>
+    Keep your RFCs, architecture decision records (ADRs), and runbooks as
+    Markdown files in one Git repository, and give each kind its own frontmatter{" "}
+    <code>type</code> with the fields it must carry, like an owner and a status.
+    Blume builds them into one searchable site, fails the build when a document
+    is missing its metadata, and serves an MCP endpoint where an agent can ask
+    for only the accepted decisions a team owns.
+  </p>
+  <p>
+    By the end, you have the Acme Engineering Handbook: three sections with a
+    card index each, validated <code>owner</code>, <code>status</code>, and{" "}
+    <code>service</code> fields, and an MCP server you can query by content type
+    and by those fields. The example holds one RFC, two decisions, and one
+    runbook, so you can see every piece working before you move your own
+    documents in.
+  </p>
+  <p>
+    Blume publishes and indexes the handbook. It doesn't run your process: pull
+    requests stay the place where RFCs get reviewed and approved. It also has no
+    sign-in or per-page permissions. The whole site is private or public at your
+    host, so if some pages must be hidden from some readers, publish them as a
+    separate site or use a tool with page-level permissions.
+  </p>
+
+  <h2>Plan the content types</h2>
+  <p>
+    Every Blume page has a <code>type</code> in its frontmatter, and{" "}
+    <code>doc</code> is the default. You can invent your own types and attach
+    required fields to each one. Fields you list as facets become filters an
+    agent can use. The handbook uses three:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Type</th>
+        <th scope="col">Folder</th>
+        <th scope="col">Required fields</th>
+        <th scope="col">Facets</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>rfc</code></td>
+        <td><code>rfcs/</code></td>
+        <td><code>owner</code>, <code>status</code></td>
+        <td><code>owner</code>, <code>status</code></td>
+      </tr>
+      <tr>
+        <td><code>adr</code></td>
+        <td><code>decisions/</code></td>
+        <td><code>owner</code>, <code>status</code></td>
+        <td><code>owner</code>, <code>status</code></td>
+      </tr>
+      <tr>
+        <td><code>runbook</code></td>
+        <td><code>runbooks/</code></td>
+        <td>
+          <code>owner</code>, <code>service</code>, <code>reviewed</code>
+        </td>
+        <td><code>owner</code>, <code>service</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The folder decides where a page appears in the sidebar, and the type decides
+    which fields it must have. They're independent, so every page states its
+    type even though the folder already hints at it. RFCs and decisions both use{" "}
+    <code>status</code>, with different values, and both include{" "}
+    <code>accepted</code>, so one filter can find accepted documents of either
+    kind.
+  </p>
+
+  <h2>Create the project</h2>
+  <p>Scaffold a Blume project and add Zod for the field schemas:</p>
+  <CodeBlock
+    code={`npx blume init acme-handbook --template docs
+cd acme-handbook
+npm install zod@4.6.5`}
+    lang="bash"
+  />
+  <p>
+    Keep the default <code>docs</code> content folder when <code>init</code>{" "}
+    asks. Any Standard Schema library works for the schemas (Valibot and
+    ArkType too); this guide uses Zod. By the end, the project looks like this:
+  </p>
+  <CodeBlock
+    code={`acme-handbook/
+├── blume.config.ts
+├── package.json
+└── docs/
+    ├── index.mdx
+    ├── rfcs/
+    │   ├── meta.ts
+    │   ├── index.mdx
+    │   └── 0001-idempotency-keys-for-message-sends.mdx
+    ├── decisions/
+    │   ├── meta.ts
+    │   ├── index.mdx
+    │   ├── 0001-retry-webhooks-at-a-fixed-interval.mdx
+    │   └── 0002-retry-webhooks-with-exponential-backoff.mdx
+    └── runbooks/
+        ├── meta.ts
+        ├── index.mdx
+        └── webhook-delivery-backlog.mdx`}
+    lang="txt"
+  />
+
+  <h2>Define the types and their required fields</h2>
+  <p>Replace <code>blume.config.ts</code> with:</p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { z } from "zod";
+
+// The teams that can own a document. A typo on any page fails the build.
+const owner = z.enum(["platform", "payments", "messaging"]);
+
+export default defineConfig({
+  title: "Acme Engineering Handbook",
+  description:
+    "How Acme's engineers propose changes, record decisions, and run production.",
+  content: {
+    types: {
+      rfc: {
+        facets: ["owner", "status"],
+        frontmatter: {
+          owner,
+          status: z.enum(["draft", "review", "accepted", "rejected", "withdrawn"]),
+        },
+      },
+      adr: {
+        facets: ["owner", "status"],
+        frontmatter: {
+          owner,
+          status: z.enum(["proposed", "accepted", "deprecated", "superseded"]),
+        },
+      },
+      runbook: {
+        facets: ["owner", "service"],
+        frontmatter: {
+          owner,
+          service: z.string().regex(/^[a-z0-9-]+$/),
+          reviewed: z.coerce.date(),
+        },
+      },
+    },
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>Here's what each part enforces:</p>
+  <ul>
+    <li>
+      Every key under a type's <code>frontmatter</code> is checked on every page
+      of that type, including when it's missing. A decision without an{" "}
+      <code>owner</code> fails, and so does <code>status: acepted</code>. See{" "}
+      <a href="/docs/content/frontmatter#per-type-keys">Per-type keys</a> for
+      the full rules.
+    </li>
+    <li>
+      The keys stay unknown on every other type, so a stray{" "}
+      <code>status</code> on the home page also fails. Blume's frontmatter is
+      strict everywhere, and these keys are the only additions.
+    </li>
+    <li>
+      <code>facets</code> must name keys the type declares. Only string, number,
+      and boolean values become facets, so <code>reviewed</code>, a date, is
+      checked but can't be filtered on.
+    </li>
+    <li>
+      Facet filters match exact strings. Enums and a lowercase pattern for{" "}
+      <code>service</code> keep values like <code>Webhooks</code> and{" "}
+      <code>webhooks</code> from splitting one service in two.
+    </li>
+  </ul>
+  <p>
+    An RFC's <code>status: draft</code> is your own field and has nothing to do
+    with Blume's built-in <code>draft: true</code>, which leaves a page out of
+    production builds entirely. An RFC in draft should still be published, so
+    people can comment on it.
+  </p>
+
+  <h2>Write the documents</h2>
+  <h3>An RFC</h3>
+  <CodeBlock
+    code={rfcMdxCode}
+    lang="mdx"
+    title="docs/rfcs/0001-idempotency-keys-for-message-sends.mdx"
+  />
+
+  <h3>Two decisions, one superseding the other</h3>
+  <p>
+    Decision records are never edited after they're accepted. When a decision
+    changes, a new record replaces it and the old one is marked{" "}
+    <code>superseded</code>. Both records link to each other through{" "}
+    <code>related</code>, which shows them as cards at the foot of each page:
+  </p>
+  <CodeBlock
+    code={`---
+title: "ADR 1: Retry webhooks at a fixed interval"
+description: Retry failed webhook deliveries every 60 seconds, up to 10 times.
+type: adr
+owner: messaging
+status: superseded
+related:
+  - /decisions/retry-webhooks-with-exponential-backoff
+---
+
+<Callout type="info" title={\`Status: \${frontmatter.status}\`}>
+  A record doesn't change once it's accepted. To reverse it, write a new record
+  that supersedes it.
+</Callout>
+
+## Context
+
+Customer endpoints fail for short periods, and we need a retry policy before launch.
+
+## Decision
+
+Retry each failed delivery every 60 seconds, up to 10 times.
+
+## Consequences
+
+Simple to build. Superseded by ADR 2 after a customer outage turned our retries into a flood.`}
+    lang="mdx"
+    title="docs/decisions/0001-retry-webhooks-at-a-fixed-interval.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: "ADR 2: Retry webhooks with exponential backoff"
+description: Back off exponentially between webhook retries, with jitter, for up to 24 hours.
+type: adr
+owner: messaging
+status: accepted
+related:
+  - /decisions/retry-webhooks-at-a-fixed-interval
+---
+
+<Callout type="info" title={\`Status: \${frontmatter.status}\`}>
+  A record doesn't change once it's accepted. To reverse it, write a new record
+  that supersedes it.
+</Callout>
+
+## Context
+
+When a customer's endpoint was down for an hour, ADR 1's fixed 60-second retries sent a burst of deliveries the moment it recovered.
+
+## Decision
+
+Double the delay after each failed attempt, starting at 30 seconds, with up to 20% random jitter. Stop after 24 hours and mark the delivery failed.
+
+## Consequences
+
+Recovering endpoints see a gradual ramp instead of a burst. A delivery can now arrive hours late, so the webhook docs say so.`}
+    lang="mdx"
+    title="docs/decisions/0002-retry-webhooks-with-exponential-backoff.mdx"
+  />
+  <p>
+    Blume validates your custom fields but doesn't print them on the page. The
+    callout reads the status from the frontmatter, so it can't drift from the
+    field agents filter on, and the page's Markdown copy for agents shows the
+    same "Status: accepted". Keep frontmatter references in component props
+    like <code>title</code>: an expression in the page's own text, like{" "}
+    <code>{"{frontmatter.owner}"}</code>, stays as written in that{" "}
+    <a href="/docs/discoverability/markdown">Markdown copy</a>.
+  </p>
+  <p>
+    The <code>0001-</code> prefix sorts the records in the sidebar and is
+    dropped from the URL, so ADR 2 lives at{" "}
+    <code>/decisions/retry-webhooks-with-exponential-backoff</code>. Keep the
+    number in the title, where people cite it.
+  </p>
+
+  <h3>A runbook</h3>
+  <CodeBlock
+    code={`---
+title: Webhook delivery backlog
+description: The webhook queue is growing faster than workers drain it.
+type: runbook
+owner: messaging
+service: webhooks
+reviewed: 2026-09-01
+---
+
+## Alert
+
+\`WebhookQueueDepthHigh\` fires when more than 50,000 deliveries wait for over 10 minutes.
+
+## Check
+
+1. Open the webhooks dashboard and find the endpoints with the most pending deliveries.
+2. If one endpoint holds most of the backlog, it's that customer's outage, not ours. Backoff handles it (see ADR 2).
+3. If the backlog is spread across endpoints, check the worker error rate.
+
+## Fix
+
+- Scale the webhook workers: \`kubectl scale deployment webhook-worker --replicas=12 -n messaging\`.
+- If workers are crashing, roll back the last webhooks deploy.
+
+## Escalate
+
+Page the messaging team's secondary on-call if the queue is still growing 30 minutes after scaling.`}
+    lang="mdx"
+    title="docs/runbooks/webhook-delivery-backlog.mdx"
+  />
+  <p>
+    When several runbooks repeat the same steps, like how to page the
+    secondary on-call, keep those steps in one partial and include it in each
+    runbook, as the{" "}
+    <a href="/guides/reuse-markdown-snippets">snippets guide</a> shows.
+  </p>
+
+  <h2>Build the navigation</h2>
+  <p>
+    Blume builds the sidebar from your folders, one group per folder. Give each
+    group a label and an icon, and turn its landing page into an index of the
+    documents inside it, with a <code>meta.ts</code>:
+  </p>
+  <CodeBlock
+    code={`import { defineMeta } from "blume";
+
+export default defineMeta({
+  title: "Decisions",
+  icon: "scale",
+  directory: "card",
+});`}
+    lang="ts"
+    title="docs/decisions/meta.ts"
+  />
+  <p>
+    Add the same file to the other two folders, with <code>title: "RFCs"</code>{" "}
+    and <code>icon: "message-square-text"</code> in <code>docs/rfcs/meta.ts</code>,
+    and <code>title: "Runbooks"</code> and <code>icon: "siren"</code> in{" "}
+    <code>docs/runbooks/meta.ts</code>. Without the <code>title</code>, the
+    RFCs group would read "Rfcs".
+  </p>
+  <p>
+    <code>directory: "card"</code> lists the group's pages as cards, each with
+    its title and description, below the folder's <code>index</code> page (see{" "}
+    <a href="/docs/content/navigation#directory-listings">Directory listings</a>).
+    The listing needs that page to show on, so give each folder one:
+  </p>
+  <CodeBlock
+    code={`---
+title: Decisions
+description: Architecture decision records. One decision per page, never edited after it's accepted.
+---
+
+Each record captures one decision, the context it was made in, and its consequences. To change a decision, write a new record that supersedes it, and set the old one's \`status\` to \`superseded\`.`}
+    lang="mdx"
+    title="docs/decisions/index.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: RFCs
+description: Proposals for changes that cross team boundaries, open for comment before anyone builds them.
+---
+
+Write an RFC before a change that affects another team's service, a public API, or how we store customer data. Copy an existing RFC, set \`status: draft\`, and open a pull request.`}
+    lang="mdx"
+    title="docs/rfcs/index.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Runbooks
+description: What the on-call engineer does when an alert fires, one runbook per alert.
+---
+
+Each runbook matches one alert. If an alert has no runbook, write one after the incident.`}
+    lang="mdx"
+    title="docs/runbooks/index.mdx"
+  />
+  <p>Finally, replace the home page:</p>
+  <CodeBlock
+    code={`---
+title: Acme Engineering Handbook
+description: How Acme's engineers propose changes, record decisions, and run production.
+---
+
+This handbook holds three kinds of document:
+
+- [RFCs](/rfcs) propose a change and collect feedback before anyone builds it.
+- [Decisions](/decisions) record what we chose and why, one decision per page.
+- [Runbooks](/runbooks) tell the on-call engineer what to do when something breaks.
+
+Every RFC, decision, and runbook names the team that owns it.`}
+    lang="mdx"
+    title="docs/index.mdx"
+  />
+  <p>
+    Run <code>npx blume dev</code> and open <code>http://localhost:4321</code>.
+    The sidebar has Decisions, RFCs, and Runbooks groups, and each group's page
+    ends in a card per document. For a long decision log, try{" "}
+    <code>directory: "accordion"</code>, which lists pages as rows instead.
+    Search covers every page, whatever its type.
+  </p>
+
+  <h2>Query by type and facet through MCP</h2>
+  <p>
+    Humans browse the sidebar. Agents do better with a filter: "list the
+    accepted decisions the messaging team owns" should be one call, not a crawl.
+    Turn on Blume's MCP server, and name a host adapter, because the server is a
+    live endpoint and a static build can't include it. Add the import and the
+    two new keys to <code>blume.config.ts</code>:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { vercel } from "blume/deploy"; // or netlify, cloudflare, node
+import { z } from "zod";
+
+// ...the owner schema from above
+
+export default defineConfig({
+  // ...title, description, and content from above
+  agents: {
+    mcp: {
+      enabled: true,
+      instructions:
+        "Pages have a content type: rfc (proposals), adr (architecture decisions), or runbook (on-call steps). Scope search_docs and list_pages with contentTypes, and with filters on owner, status (rfc and adr), or service (runbook). Facet values are lowercase.",
+    },
+  },
+  deployment: vercel(),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>instructions</code> is passed to every agent that connects, so it
+    learns your types and facets before its first call. The{" "}
+    <a href="/guides/mcp-server-for-documentation">MCP server guide</a> covers
+    the adapter choice and deployment in detail.
+  </p>
+
+  <h3>Try a filter</h3>
+  <p>
+    With <code>npx blume dev</code> running, the server answers at{" "}
+    <code>http://localhost:4321/mcp</code>. Ask <code>list_pages</code> for
+    accepted decisions. The last line uses <code>jq</code> to unwrap the
+    tool's text result; drop it to see the raw JSON-RPC response.
+  </p>
+  <CodeBlock
+    code={`curl -s http://localhost:4321/mcp \\
+  -H "Content-Type: application/json" \\
+  -H "Accept: application/json, text/event-stream" \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_pages","arguments":{"contentTypes":["adr"],"filters":{"status":"accepted"}}}}' \\
+  | jq -r '.result.content[0].text'`}
+    lang="bash"
+  />
+  <p>Only ADR 2 comes back, with its facet values:</p>
+  <CodeBlock
+    code={`[
+  {
+    "contentType": "adr",
+    "description": "Back off exponentially between webhook retries, with jitter, for up to 24 hours.",
+    "facets": {
+      "owner": "messaging",
+      "status": "accepted"
+    },
+    "lastModified": null,
+    "route": "/decisions/retry-webhooks-with-exponential-backoff",
+    "title": "ADR 2: Retry webhooks with exponential backoff",
+    "url": "http://localhost:4321/decisions/retry-webhooks-with-exponential-backoff"
+  }
+]`}
+    lang="json"
+  />
+  <p>
+    Swap the <code>arguments</code> object to ask other questions.{" "}
+    <code>search_docs</code> takes the same <code>contentTypes</code> and{" "}
+    <code>filters</code> beside its <code>query</code>:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Question</th>
+        <th scope="col">Tool</th>
+        <th scope="col">Arguments</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Every decision record, with its status</td>
+        <td><code>list_pages</code></td>
+        <td><code>{'{"contentTypes": ["adr"]}'}</code></td>
+      </tr>
+      <tr>
+        <td>Accepted RFCs and decisions</td>
+        <td><code>list_pages</code></td>
+        <td><code>{'{"filters": {"status": "accepted"}}'}</code></td>
+      </tr>
+      <tr>
+        <td>Runbooks for the webhooks service that mention a backlog</td>
+        <td><code>search_docs</code></td>
+        <td>
+          <code>
+            {'{"query": "queue backlog", "contentTypes": ["runbook"], "filters": {"service": "webhooks"}}'}
+          </code>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Every entry in <code>filters</code> must match, and a page whose type
+    doesn't declare a key never matches a filter on it. That's why the second
+    row returns RFC 1 and ADR 2 but never a runbook. To read a document in
+    full, an agent passes its <code>route</code> to <code>get_page</code>,
+    which returns the Markdown with its frontmatter, so the owner and status
+    come along. The{" "}
+    <a href="/docs/discoverability/mcp#scoping-by-content-type-and-facets">MCP docs</a>{" "}
+    list every argument the tools take.
+  </p>
+  <p>
+    The same page list, facets included, is also a static file at{" "}
+    <code>/api/docs/pages.json</code>, part of the{" "}
+    <a href="/docs/discoverability/json-api">JSON API</a>, for scripts that
+    don't speak MCP.
+  </p>
+
+  <h3>Connect Claude Code</h3>
+  <p>From the handbook repository, register the local server for everyone who clones it:</p>
+  <CodeBlock
+    code="claude mcp add --transport http --scope project acme-handbook http://localhost:4321/mcp"
+    lang="bash"
+  />
+  <p>
+    <code>--scope project</code> writes the server to a <code>.mcp.json</code>{" "}
+    you commit. Anyone with the repository runs <code>npx blume dev</code>, and
+    their agent can ask "Which accepted decisions does the messaging team own?"
+    and answer it with one <code>list_pages</code> call.
+  </p>
+
+  <h2>Keep the handbook private</h2>
+  <p>
+    An engineering handbook is usually internal, and Blume has no sign-in of
+    its own. Privacy comes from your host, which checks every request before
+    it serves anything. On Vercel, turn on Deployment Protection with the{" "}
+    <strong>All Deployments</strong> scope, so production is covered and not
+    only previews; Vercel Authentication then lets in members of your Vercel
+    team. <a href="/docs/deployment#private-docs">Private docs</a> lists the
+    equivalent on Netlify, Cloudflare, GitHub Pages, and your own server.
+    Protection covers the pages, the search index, the Markdown copies,{" "}
+    <code>llms.txt</code>, and the MCP endpoint alike.
+  </p>
+  <Callout type="warning">
+    Hiding a page is not access control.{" "}
+    <a href="/docs/content/navigation#hidden-pages"><code>sidebar.hidden: true</code></a>{" "}
+    removes a page from the sidebar, search, and <code>list_pages</code>, but
+    the page is still built and served at its URL, and <code>get_page</code>{" "}
+    returns it in full to anyone who knows the route. <code>draft: true</code>{" "}
+    leaves a page out of production builds, but it's meant for unfinished work.
+    Anything some readers must not see belongs in a separate, protected site.
+  </Callout>
+  <p>
+    Host protection also stops agents: a client that can't sign in gets a login
+    page, not the MCP server. The local server from the last section avoids
+    that, since the repository's permissions decide who can run it. To serve
+    agents from the deployed site instead, you need a host that accepts
+    credentials from a non-browser client. Cloudflare Access does, with a
+    service token and a policy whose action is Service Auth. Claude Code can
+    send the token's two headers:
+  </p>
+  <CodeBlock
+    code={`claude mcp add --transport http acme-handbook https://handbook.acme.example/mcp \\
+  --header "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \\
+  --header "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET"`}
+    lang="bash"
+  />
+  <p>
+    Leave this one at the default local scope, so the token stays in your own
+    Claude Code settings and out of the repository. The{" "}
+    <a href="/guides/private-documentation-cloudflare-access">Cloudflare Access guide</a>{" "}
+    walks through protecting a Blume site on Cloudflare. And if you switch to a hosted search
+    provider later, remember that it keeps its own copy of your content outside
+    the protection. The built-in search index stays in your build.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The build fails with BLUME_FRONTMATTER_INVALID</h3>
+  <p>
+    A page is missing a required field or has a value the schema rejects. The
+    diagnostic names the file and the field, such as{" "}
+    <code>owner: Invalid option: expected one of "platform"|"payments"|"messaging"</code>.
+    Fix the page, or add the new value to the enum if it's a new team.{" "}
+    <code>blume dev</code> reports the same error and leaves the page out of the
+    site, so a page that's missing in dev is worth checking in the terminal.
+  </p>
+  <h3>A page fails with "Unrecognized keys"</h3>
+  <p>
+    The page's <code>type</code> is misspelled, like <code>type: runbok</code>.
+    Blume then treats it as a type with no fields of its own, so{" "}
+    <code>owner</code>, <code>service</code>, and <code>reviewed</code> are
+    unknown keys. Correct the type.
+  </p>
+  <h3>The config fails with BLUME_CONFIG_INVALID on a facet</h3>
+  <p>
+    A name in <code>facets</code> isn't a field the type declares, as in{" "}
+    <code>Facet "severity" for type "runbook" is not a declared custom frontmatter key</code>.
+    Add the field to the type's <code>frontmatter</code> map, or remove it from{" "}
+    <code>facets</code>.
+  </p>
+  <h3>A filter returns nothing, or everything</h3>
+  <p>
+    Nothing: facet values match exactly and are case-sensitive, so{" "}
+    <code>"Accepted"</code> doesn't find <code>accepted</code>. Check the
+    values <code>list_pages</code> reports. Everything: a filter value must be
+    a string, number, or boolean, and any other shape is dropped without an
+    error, so <code>{'{"status": ["accepted"]}'}</code> filters nothing. Send
+    one value per key. A number or boolean matches its string form, so{" "}
+    <code>1</code> and <code>"1"</code> find the same pages.
+  </p>
+  <h3>A document doesn't show up in list_pages or search_docs</h3>
+  <p>
+    First check the terminal for a frontmatter error, which leaves the page out
+    of the site entirely. Then check its frontmatter: <code>sidebar.hidden: true</code>{" "}
+    drops it from <code>list_pages</code>, and from <code>search_docs</code>{" "}
+    unless <code>search.indexing.includeHiddenPages</code> is on, while{" "}
+    <code>search.exclude: true</code> drops it from <code>search_docs</code>{" "}
+    only. Either way, <code>get_page</code> still returns it.
+  </p>
+  <h3>The build fails with BLUME_SERVER_FEATURE_REQUIRED</h3>
+  <p>
+    The MCP server is on, but the build is static. Set <code>deployment</code>{" "}
+    to a host adapter from <code>blume/deploy</code>, and if it has{" "}
+    <code>output: "static"</code>, remove that.
+  </p>
+</GuidePage>

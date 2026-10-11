@@ -1,0 +1,574 @@
+---
+// Self-host docs with Docker and Node.js: checked against the deployment,
+// MCP, agent discovery, assistant, and rate limiting docs, and on main
+// against the Node platform and its entry wrapper (deploy/platforms/node.ts,
+// deploy/node-headers.ts), the server-dependency links
+// (astro/render-deps.ts), the MCP handler and discovery documents
+// (ai/mcp/server.ts, ai/mcp/discovery.ts), the static-build gate
+// (cli/prepare.ts), @astrojs/node 11.1.5's standalone server, Astro 7.3.2's
+// X-Forwarded-For handling (core/app/node.js trusts the header only for a
+// host in security.allowedDomains, which node({ allowedDomains }) sets), and
+// Docker's Dockerfile, Compose, and Node.js guides, Caddy's docs
+// (reverse_proxy ignores a reader's own X-Forwarded-For by default), and
+// nginx's docs. Ran the guide's tools/list request
+// against createMcpFetchHandler under Bun, and the health check one-liner
+// under Node 24. Docker isn't installed here, so neither image was built.
+// Not yet run end to end.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("self-host-documentation-docker")}>
+  <p>
+    To self-host your docs in Docker, build them with Blume's{" "}
+    <code>node()</code> deployment adapter, which turns the site into a
+    standalone Node.js server. Then ship that server in an image together with
+    the project's installed <code>node_modules</code>, and start it with{" "}
+    <code>HOST</code> and <code>PORT</code> set. One process serves every page,
+    the MCP endpoint at <code>/mcp</code>, and the discovery files agents read
+    to find it.
+  </p>
+  <p>
+    By the end, you have a two-stage Dockerfile, a Compose file that runs the
+    docs behind Caddy for HTTPS, a health check, and a few commands that prove
+    a page, the MCP endpoint, and the discovery files all work from the
+    container. The example is an Acme docs site at{" "}
+    <code>docs.acme.example</code>.
+  </p>
+  <p>
+    You only need a server for request-time features: the MCP server, the
+    built-in <a href="/docs/configuration/assistant">assistant</a>, the API playground
+    proxy, and Mixedbread search. Without them, a static build is plain files
+    that any web server can serve, and the last section shows that container
+    instead. If you'd rather not run a server at all, see{" "}
+    <a href="/guides/cloudflare-workers-documentation"
+      >Deploy documentation and an MCP endpoint to Cloudflare Workers</a
+    >.
+  </p>
+
+  <h2>Static container or server build</h2>
+  <p>
+    Both kinds of container start from the same project. What changes is what
+    the build produces, and so what the image has to hold:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col"></th>
+        <th scope="col">Static-file container</th>
+        <th scope="col">Node server container</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Config</td>
+        <td><code>deployment: {"{ site }"}</code></td>
+        <td><code>deployment: node({"{ site }"})</code></td>
+      </tr>
+      <tr>
+        <td>Image holds</td>
+        <td><code>dist/</code> only</td>
+        <td><code>dist/</code> and <code>node_modules/</code></td>
+      </tr>
+      <tr>
+        <td>Runs</td>
+        <td>Any web server, like nginx</td>
+        <td><code>node dist/server/entry.mjs</code></td>
+      </tr>
+      <tr>
+        <td>Pages, search, <code>llms.txt</code>, <code>.md</code> copies</td>
+        <td>Yes</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>MCP server and assistant</td>
+        <td>No: the build fails</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>Redirects</td>
+        <td>Redirect pages, or rules you write</td>
+        <td>Answered with the configured status</td>
+      </tr>
+      <tr>
+        <td>Discovery file headers</td>
+        <td>Yours to configure</td>
+        <td>Set by Blume</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The rest of this guide builds the server container. The{" "}
+    <a href="/guides/static-vs-server-documentation"
+      >static or server-rendered guide</a
+    >{" "}
+    covers the choice in more depth.
+  </p>
+
+  <h2>Build with the Node adapter</h2>
+  <p>
+    Import <code>node</code> from <code>blume/deploy</code>, give it your
+    public URL, and turn on the MCP server:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { node } from "blume/deploy";
+
+export default defineConfig({
+  title: "Acme Docs",
+  deployment: node({
+    site: "https://docs.acme.example",
+    allowedDomains: [{ hostname: "docs.acme.example" }],
+  }),
+  agents: {
+    mcp: { enabled: true },
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Set <code>site</code> here, because a Node server has no platform
+    environment for Blume to read it from. It's baked in at build time: the
+    MCP discovery files, the <strong>Connect to MCP</strong> menu, the sitemap,
+    and canonical URLs all use it. Moving to another domain means building a
+    new image. <code>allowedDomains</code> is for the reverse proxy you'll put
+    in front, which{" "}
+    <a href="#run-it-with-compose-and-https">Run it with Compose and HTTPS</a>{" "}
+    explains.
+  </p>
+  <p>Build it and start the server on your machine before you containerize:</p>
+  <CodeBlock
+    code={`npm run build
+PORT=8080 node dist/server/entry.mjs`}
+    lang="bash"
+  />
+  <p>
+    The build summary names the <code>node</code> adapter, your site URL, and
+    the MCP server. Open <code>http://localhost:8080</code> to check a page,
+    then stop the server. <code>npx blume preview</code> serves the same build
+    if you prefer.
+  </p>
+
+  <h2>What the server needs at runtime</h2>
+  <p>A Node server build writes two halves into <code>dist/</code>:</p>
+  <ul>
+    <li>
+      <code>dist/client/</code> holds the prerendered pages, assets, search
+      index, <code>llms.txt</code>, and the <code>.well-known</code> discovery
+      files.
+    </li>
+    <li>
+      <code>dist/server/</code> holds the server. With the MCP server on,{" "}
+      <code>entry.mjs</code> is a small Blume wrapper that sets the discovery
+      files' media types and CORS headers and answers redirects, with Astro's
+      own entry moved beside it as <code>astro-entry.mjs</code>.
+    </li>
+  </ul>
+  <p>
+    The server doesn't bundle every package it uses. Blume gives{" "}
+    <code>dist/server</code> its own <code>node_modules</code> of relative
+    links, one per package the server imports, each pointing at the copy in
+    your project's <code>node_modules</code>. So <code>dist/</code> alone
+    won't start: ship it with the <code>node_modules</code> it was built
+    against, in the same layout. Keep <code>dist/client</code> and{" "}
+    <code>dist/server</code> side by side, too, since the server finds its
+    static files relative to itself.
+  </p>
+  <p>
+    Your Markdown, <code>blume.config.ts</code>, and <code>.blume/</code> can
+    stay out of the final image. The MCP server answers from a snapshot of
+    your pages bundled into the server at build time.
+  </p>
+
+  <h2>Write the Dockerfile</h2>
+  <p>
+    First, keep your local build output, dependencies, and secrets out of the
+    build context. Dependencies installed on macOS or Windows carry native
+    binaries for that system, like <code>sharp</code>'s, so they must never
+    reach a Linux image:
+  </p>
+  <CodeBlock
+    code={`node_modules
+.blume
+dist
+.git
+.env*
+npm-debug.log*`}
+    lang="text"
+    title=".dockerignore"
+  />
+  <p>
+    The Dockerfile installs and builds in one stage, then copies the
+    dependencies and the build into a clean runtime stage. Both stages use the
+    same base image, so the native binaries <code>npm ci</code> installs match
+    the system that runs them:
+  </p>
+  <CodeBlock
+    code={`# syntax=docker/dockerfile:1
+
+FROM node:24-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:24-slim
+WORKDIR /app
+ENV NODE_ENV=production \\
+    HOST=0.0.0.0 \\
+    PORT=8080
+COPY --from=build --chown=node:node /app/package.json ./package.json
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/dist ./dist
+USER node
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \\
+  CMD ["node", "-e", "fetch('http://127.0.0.1:' + process.env.PORT + '/').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+CMD ["node", "dist/server/entry.mjs"]`}
+    lang="dockerfile"
+    title="Dockerfile"
+  />
+  <p>A few lines matter more than they look:</p>
+  <ul>
+    <li>
+      <strong><code>HOST=0.0.0.0</code>.</strong> The server listens on{" "}
+      <code>localhost:4321</code> unless <code>HOST</code> and{" "}
+      <code>PORT</code> are set when it starts. Inside a container,{" "}
+      <code>localhost</code> can't be reached from outside, and{" "}
+      <code>host</code> or <code>port</code> passed to <code>node()</code>{" "}
+      have no effect.
+    </li>
+    <li>
+      <strong>The same <code>/app</code> path in both stages.</strong> The
+      links in <code>dist/server/node_modules</code> are relative, so they
+      resolve as long as <code>dist</code> and <code>node_modules</code> keep
+      their places beside each other.
+    </li>
+    <li>
+      <strong><code>NODE_ENV</code> only in the runtime stage.</strong> Set in
+      the build stage, it would make <code>npm ci</code> skip dev
+      dependencies the build might need.
+    </li>
+    <li>
+      <strong><code>CMD</code> runs <code>node</code> directly.</strong> The
+      Node.js image's best practices recommend this over{" "}
+      <code>npm start</code>, which can swallow the stop signal.
+    </li>
+    <li>
+      <strong>The health check uses <code>fetch</code>.</strong> Slim Node
+      images don't include <code>curl</code>, and Node 24 has{" "}
+      <code>fetch</code> built in. It requests the home page, which is
+      enough to show the process is up and serving.
+    </li>
+  </ul>
+  <p>
+    The example uses npm. With another package manager, install from its
+    lockfile in the build stage instead; the runtime stage stays the same,
+    since it copies <code>node_modules</code> exactly as installed.
+  </p>
+
+  <h2>Run it with Compose and HTTPS</h2>
+  <p>
+    The Node server speaks plain HTTP, so put a reverse proxy in front for
+    TLS. Caddy gets and renews certificates on its own, which keeps the setup
+    to one short file:
+  </p>
+  <CodeBlock
+    code={`docs.acme.example {
+	reverse_proxy docs:8080
+}`}
+    lang="text"
+    title="Caddyfile"
+  />
+  <CodeBlock
+    code={`services:
+  docs:
+    build: .
+    image: acme-docs
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    env_file:
+      - path: .env.production
+        required: false
+
+  caddy:
+    image: caddy:2.11
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      docs:
+        condition: service_healthy
+
+volumes:
+  caddy_data:
+  caddy_config:`}
+    lang="yaml"
+    title="compose.yaml"
+  />
+  <p>
+    <code>init: true</code> runs a small init process as PID 1, as the Node.js
+    image's best practices recommend, since Node wasn't designed to run as PID
+    1. The
+    docs port is published on <code>127.0.0.1</code> only, so you can run the
+    checks below from the host while the public goes through Caddy. The{" "}
+    <code>caddy_data</code> volume keeps certificates across restarts. Caddy
+    waits for the docs container's health check to pass before it starts.
+  </p>
+  <p>
+    Behind Caddy, every request reaches the Node server from Caddy's address.
+    Caddy passes the <code>Host</code> header through and sets{" "}
+    <code>X-Forwarded-For</code> to the reader's address, ignoring any value
+    the reader sent. The <code>allowedDomains</code> entry in{" "}
+    <code>blume.config.ts</code> tells the server to trust that header on
+    requests for <code>docs.acme.example</code>, so Blume's{" "}
+    <a href="/docs/configuration/rate-limiting#behind-a-reverse-proxy">rate limit</a>{" "}
+    counts each reader apart. Without it, all readers share Caddy's count.
+  </p>
+
+  <h3>Pass secrets at runtime</h3>
+  <p>
+    The MCP server needs no secrets. If you also turn on the assistant, its
+    key is read when a request arrives, not at build time, so it belongs in
+    the container's environment, never in the image. Put it in{" "}
+    <code>.env.production</code> beside <code>compose.yaml</code>, and keep
+    that file out of Git:
+  </p>
+  <CodeBlock
+    code="AI_GATEWAY_API_KEY=replace-with-your-key"
+    lang="bash"
+    title=".env.production"
+  />
+  <p>
+    The Docker build then warns with <code>BLUME_MISSING_SECRET</code>,
+    because the key isn't there while the image builds. That's expected: the
+    warning exists for keys that only live in the deploy environment. The{" "}
+    <a href="/docs/deployment#environment-variables">environment variables</a>
+    {" "}table lists the variable each adapter reads.
+  </p>
+
+  <h2>Test a page, the MCP endpoint, and discovery</h2>
+  <p>Build the image and start both services:</p>
+  <CodeBlock
+    code={`docker compose up -d --build
+docker compose ps`}
+    lang="bash"
+  />
+  <p>
+    Once the first health check passes, the docs service's status shows{" "}
+    <code>(healthy)</code>. Run the rest of these on the server itself, where
+    port 8080 is published. First, a page:
+  </p>
+  <CodeBlock
+    code={`curl -s -o /dev/null -w "%{http_code}\\n" http://127.0.0.1:8080/`}
+    lang="bash"
+  />
+  <p>
+    That should print <code>200</code>. Next, ask the MCP endpoint for its
+    tools. The endpoint takes JSON-RPC over <code>POST</code>, and the request
+    must accept both JSON and event streams:
+  </p>
+  <CodeBlock
+    code={`curl -s http://127.0.0.1:8080/mcp \\
+  -H "Content-Type: application/json" \\
+  -H "Accept: application/json, text/event-stream" \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`}
+    lang="bash"
+  />
+  <p>
+    The response is JSON whose <code>result.tools</code> lists{" "}
+    <code>search_docs</code>, <code>get_page</code>, <code>list_pages</code>,
+    and <code>get_navigation</code>. This request loads the server-rendered
+    route and the MCP SDK, so it also proves the server's dependencies
+    resolve.
+  </p>
+  <p>Then check the discovery files agents use to find the endpoint:</p>
+  <CodeBlock
+    code={`curl -s http://127.0.0.1:8080/.well-known/mcp.json
+curl -sI http://127.0.0.1:8080/.well-known/api-catalog`}
+    lang="bash"
+  />
+  <p>
+    In <code>mcp.json</code>, the server's <code>url</code> should be{" "}
+    <code>https://docs.acme.example/mcp</code>, your public address, never
+    localhost. The API catalog's headers should include{" "}
+    <code>application/linkset+json</code> as its content type and{" "}
+    <code>Access-Control-Allow-Origin: *</code>. The standalone server's
+    static file handler sets neither on its own, so seeing them confirms
+    Blume's entry wrapper is in front of it.
+  </p>
+  <p>Last, check the links the build generated inside the image:</p>
+  <CodeBlock
+    code={`docker compose exec docs ls dist/server
+docker compose exec docs find dist/server/node_modules -xtype l`}
+    lang="bash"
+  />
+  <p>
+    The first should list both <code>entry.mjs</code> and{" "}
+    <code>astro-entry.mjs</code>. The second lists broken links, so it should
+    print nothing. When DNS for your domain points at the server, run the
+    discovery check against the public URL too, then connect an agent:
+  </p>
+  <CodeBlock
+    code="claude mcp add --transport http acme-docs https://docs.acme.example/mcp"
+    lang="bash"
+  />
+
+  <h2>Run it in production</h2>
+  <ul>
+    <li>
+      <strong>Rebuild to publish.</strong> Pages, the search index, and the
+      MCP snapshot are all baked into the image. After a content change, run{" "}
+      <code>git pull</code> and <code>docker compose up -d --build</code>{" "}
+      again.
+    </li>
+    <li>
+      <strong>Read the logs.</strong> <code>docker compose logs -f docs</code>{" "}
+      shows the server's output, including provider errors from the
+      assistant.
+    </li>
+    <li>
+      <strong>Keep it private at the proxy.</strong> Blume has no sign-in of
+      its own, so add authentication in front, as{" "}
+      <a href="/docs/deployment#private-docs">Private docs</a> describes, or
+      publish the container through a Cloudflare Tunnel behind{" "}
+      <a href="/guides/private-documentation-cloudflare-access#if-the-site-doesnt-run-on-a-worker">Cloudflare Access</a>.
+      Agents outside it can't reach the MCP endpoint either.
+    </li>
+    <li>
+      <strong>Let the proxy set the reader's address.</strong>{" "}
+      <code>allowedDomains</code> trusts the first address in{" "}
+      <code>X-Forwarded-For</code>, so a proxy that appends to the header a
+      reader sent, instead of replacing it, lets them pick a fresh address and
+      a fresh rate-limit count with every request. If you swap Caddy for
+      nginx, set <code>proxy_set_header X-Forwarded-For $remote_addr;</code>.
+      The MCP endpoint isn't rate limited.
+    </li>
+  </ul>
+
+  <h2>Serve a static build instead</h2>
+  <p>
+    If you don't need the MCP server or the assistant, drop them, and use the
+    plain <code>deployment</code> object instead of <code>node()</code>:
+  </p>
+  <CodeBlock
+    code={`deployment: {
+  site: "https://docs.acme.example",
+},`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>dist/</code> is then the whole site, and the runtime stage is a web
+    server with no Node and no <code>node_modules</code>:
+  </p>
+  <CodeBlock
+    code={`# syntax=docker/dockerfile:1
+
+FROM node:24-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM nginx:1.30-alpine
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html`}
+    lang="dockerfile"
+    title="Dockerfile"
+  />
+  <CodeBlock
+    code={`server {
+  listen 80;
+  root /usr/share/nginx/html;
+  charset utf-8;
+  error_page 404 /404.html;
+
+  location / {
+    try_files $uri $uri/index.html $uri.html =404;
+  }
+
+  location ~ \\.mdx?$ {
+    types { }
+    default_type "text/markdown; charset=utf-8";
+  }
+}`}
+    lang="nginx"
+    title="nginx.conf"
+  />
+  <p>
+    <code>try_files</code> serves <code>/guide</code> from{" "}
+    <code>guide/index.html</code> without redirecting to a trailing slash,
+    which matches Blume's slashless URLs. nginx has no type for{" "}
+    <code>.md</code> files, so the second block serves the Markdown copies
+    agents read as <code>text/markdown</code>. Redirects work as redirect
+    pages. For real HTTP redirects, turn <code>dist/blume-redirects.json</code>
+    {" "}into nginx rules; <code>dist/_headers</code> lists the other headers
+    Blume sets on hosts that read it.
+  </p>
+  <Callout type="info">
+    A static build with <code>agents.mcp.enabled</code> or the assistant on
+    stops with <code>BLUME_SERVER_FEATURE_REQUIRED</code>. That's the build
+    telling you this container can't serve them.
+  </Callout>
+
+  <h2>Troubleshooting</h2>
+  <h3>The container is up, but nothing answers on the port</h3>
+  <p>
+    The server is listening on <code>localhost</code> inside the container.
+    Check that <code>HOST=0.0.0.0</code> is in the runtime stage's environment,
+    and that the published port matches <code>PORT</code>. The server logs the
+    address it listens on when it starts.
+  </p>
+  <h3>The server can't find a package</h3>
+  <p>
+    An <code>ERR_MODULE_NOT_FOUND</code> error at startup, or a 500 on the
+    first <code>/mcp</code> request, means the server's dependencies aren't
+    where its links point. Ship <code>node_modules</code> with{" "}
+    <code>dist/</code>, keep both under the same directory, and run the{" "}
+    <code>find</code> check above to list any broken link.
+  </p>
+  <h3>sharp or another native module fails to load</h3>
+  <p>
+    The image is running binaries built for a different system. Make sure{" "}
+    <code>.dockerignore</code> excludes <code>node_modules</code>, so the
+    dependencies are installed inside the build stage, and that both stages
+    use the same base image.
+  </p>
+  <h3>The MCP endpoint answers 406 or 405</h3>
+  <p>
+    A <code>406</code> means the request's <code>Accept</code> header doesn't
+    list both <code>application/json</code> and{" "}
+    <code>text/event-stream</code>. A <code>405</code> means it was a{" "}
+    <code>GET</code>: the endpoint takes <code>POST</code> only, so a browser
+    visit to <code>/mcp</code> gets a 405 even when everything works.
+  </p>
+  <h3>The discovery files point at the wrong address</h3>
+  <p>
+    They're written from <code>site</code> at build time. Without it,{" "}
+    <code>mcp.json</code> holds a relative <code>/mcp</code>, the server card
+    has no remote address, and the <strong>Connect to MCP</strong> menu
+    doesn't appear. Set <code>site</code> in <code>node()</code> and rebuild
+    the image.
+  </p>
+  <h3>The assistant answers 503</h3>
+  <p>
+    The response reads "The assistant is not configured", naming the variable
+    it needs. The key isn't in the container's environment: check that{" "}
+    <code>.env.production</code> sets it, then recreate the container with{" "}
+    <code>docker compose up -d</code>.
+  </p>
+</GuidePage>

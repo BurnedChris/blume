@@ -63,13 +63,48 @@ Sobald du mindestens einen Eintrag mit `type: changelog` hast, generiert Blume a
 - Das Datum folgt dem konfigurierten [`dateFormat`](/docs/configuration#date-format), ohne das Jahr, das die Gruppe der Zeile bereits anzeigt.
 - Entwürfe und Einträge mit `sidebar.hidden` werden übersprungen.
 
-Die Seite erscheint nur, wenn die Route `/changelog` nicht bereits belegt ist. Um sie durch dein eigenes Design zu ersetzen, füge unter `pages/changelog.astro` eine [benutzerdefinierte Seite](/docs/advanced/custom-pages) hinzu – sie übernimmt, und Blume generiert die Standard-Übersicht nicht mehr. Die `<Update>`-Komponente, aus der die bisherige Timeline aufgebaut war, steht weiterhin für eine von Hand verfasste Seite zur Verfügung, die Release Notes inline zeigen soll. Sie gehört nicht zu den MDX-Komponenten, importiere sie also direkt in der `.astro`-Seite: `import Update from "blume/components/content/Update.astro";`.
+Die Seite trägt die Überschrift **Changelog** (auf Englisch), darunter steht eine einzeilige Beschreibung. Lege mit `changelog` in deiner Konfiguration eigene fest; sie werden außerdem zum `<title>` der Seite, zu ihrer Meta-Description und OG-Card sowie zum Anfang ihres Markdown-Spiegels unter `/changelog.md`:
 
-Ein Header-[Tab](/docs/content/navigation#tabs), der auf `/changelog` zeigt, öffnet diese Übersicht – ein `href` ist nicht nötig.
+```ts blume.config.ts
+changelog: {
+  title: "Release notes",
+  description: "Every Acme SDK release, newest first.",
+},
+```
+
+Beide akzeptieren auch eine Zuordnung von Locale-Code zu Text, wie ein [Label eines Header-Tabs](/docs/content/i18n#per-locale-navigation). Die Übersicht wird in der Standard-Locale gerendert und zeigt daher den Eintrag dieser Locale. Lässt du eines davon weg, bleibt der eingebaute Text erhalten, den ein [Überschreiben der UI-Strings](/docs/content/i18n#translated-ui) (`changelog.title` und `changelog.description` unter `i18n.ui`) ersetzt.
+
+Die Seite erscheint nur, wenn die Route `/changelog` nicht bereits belegt ist.
+
+### Eine eigene Übersicht schreiben [#writing-your-own-index]
+
+Um etwas über der Liste zu platzieren – eine Einleitung, einen Link zum Feed, einen Hinweis zu deinem Release-Rhythmus –, schreibst du die Seite selbst und setzt `<Changelog />` dort ein, wo die Liste hingehört. Die Liste verwaltet weiterhin Blume, du schreibst also nur die Teile, für die es keinen Platz vorsieht:
+
+```mdx changelog/index.mdx
+---
+title: Changelog
+description: Every Acme SDK release, newest first.
+mode: center
+---
+
+Every release, newest first. Subscribe to the [RSS feed](/changelog/rss.xml) to follow along.
+
+<Changelog />
+```
+
+Eine Inhaltsseite unter `/changelog` übernimmt die Route, sodass die generierte Seite zurücktritt und stattdessen deine gerendert wird. Lege sie unter `changelog/index.mdx` neben deinen Einträgen ab, damit die Changelog-Gruppe der Seitenleiste auf sie verlinkt – eine `changelog.mdx` neben dem Ordner fügt der Seitenleiste einen zweiten Changelog-Punkt hinzu. [`mode: center`](/docs/content/frontmatter#layout) gibt ihr das Layout der generierten Seite – keine Seitenleiste, kein Inhaltsverzeichnis, eine breitere zentrierte Spalte –, und die generierte Seite rendert dieselbe Komponente, sodass die beiden nicht auseinanderlaufen können. Auf den Agent-Oberflächen (`/changelog.md`, llms-full.txt, MCP `get_page`, Suche) wird die Liste genauso in Markdown umgewandelt wie die der generierten Seite.
+
+Die Liste enthält immer die Einträge der Standard-Locale, egal wo das Tag steht – nach dieser Regel richtet sich bereits jede Oberfläche, die sie veröffentlicht, sodass eine übersetzte Seite dieselben Releases auflistet, statt sich darüber zu widersprechen, welche existieren. Ihre Datumsangaben erscheinen in der Sprache der jeweiligen Seite.
+
+### Die Seite vollständig ersetzen [#replacing-the-page-entirely]
+
+Für ein Design, das die Komponente nicht abbilden kann, füge unter `pages/changelog.astro` eine [benutzerdefinierte Seite](/docs/advanced/custom-pages) hinzu – sie übernimmt, und Blume generiert die Standard-Übersicht nicht mehr. Die `<Update>`-Komponente, aus der die bisherige Timeline aufgebaut war, steht weiterhin für eine von Hand verfasste Seite zur Verfügung, die Release Notes inline zeigen soll. Sie gehört nicht zu den MDX-Komponenten, importiere sie also direkt in der `.astro`-Seite: `import Update from "blume/components/content/Update.astro";`.
+
+Wenn du die Liste selbst aufbaust, musst du nachbilden, was `<Changelog />` tut – einschließlich einer Sache, die stillschweigend fehlschlägt: Einträge aus einer Quelle, die nicht das Dateisystem ist (etwa [GitHub Releases](#from-github-releases)), werden über eine parallele `staged`-Collection gerendert, sodass eine Seite, die nur `getCollection("docs")` liest, keinen davon auflistet – ohne Warnung. Greif lieber zu `<Changelog />` in einer Inhaltsseite, es sei denn, du brauchst wirklich anderes Markup.
 
 ## Aus GitHub Releases [#from-github-releases]
 
-Statt Einträge von Hand zu verfassen, richte die eingebaute [`githubReleases()`-Quelle](/docs/content/sources#github-releases) auf ein Repository, und jedes Release wird zu einem Eintrag mit `type: changelog` – dieselbe Timeline und derselbe Feed, direkt gespeist aus den Releases, die du ohnehin veröffentlichst. Blumes eigenes [Changelog](/changelog) ist so aufgebaut:
+Statt Einträge von Hand zu verfassen, richte die eingebaute [`githubReleases()`-Quelle](/docs/content/sources/github-releases) auf ein Repository, und jedes Release wird zu einem Eintrag mit `type: changelog` – dieselbe Timeline und derselbe Feed, direkt gespeist aus den Releases, die du ohnehin veröffentlichst. Blumes eigenes [Changelog](/changelog) ist so aufgebaut:
 
 ```ts blume.config.ts
 import { filesystem, githubReleases } from "blume/sources";
@@ -86,7 +121,26 @@ content: {
 }
 ```
 
-Der Name des Releases wird zum Titel, sein Tag zu `changelog.version`, und sein Veröffentlichungsdatum sortiert die Timeline. Jede Release-Seite erhält außerdem eine eindeutige Meta-Description, die aus ihren Notes zusammengefasst wird – Markdown entfernt, Abschnittsüberschriften und Changeset-Commit-Hash-Präfixe verworfen, gekürzt auf die Länge des Such-Snippets, die [`blume audit`](/docs/cli/audit) prüft – statt auf die Site-Beschreibung zurückzufallen. Ein privates Repository authentifiziert sich über die Umgebungsvariable `GITHUB_TOKEN`. Alle Optionen findest du unter [Content sources](/docs/content/sources#github-releases).
+Der Name des Releases wird zum Titel, sein Tag zu `changelog.version`, und sein Veröffentlichungsdatum sortiert die Timeline. Jede Release-Seite erhält außerdem eine eindeutige Meta-Description, die aus ihren Notes zusammengefasst wird – Markdown entfernt, Abschnittsüberschriften und Changeset-Commit-Hash-Präfixe verworfen, gekürzt auf die Länge des Such-Snippets, die [`blume audit`](/docs/cli/audit) prüft – statt auf die Site-Beschreibung zurückzufallen. Ein privates Repository authentifiziert sich über die Umgebungsvariable `GITHUB_TOKEN`. Alle Optionen findest du unter [GitHub Releases](/docs/content/sources/github-releases).
+
+## Einträge aus der Seitenleiste heraushalten [#keep-entries-out-of-the-sidebar]
+
+Changelog-Einträge sind gewöhnliche Seiten, daher listet die generierte Seitenleiste sie wie jede andere auf: Ein `changelog/`-Ordner oder eine `githubReleases()`-Quelle mit `prefix: "changelog"` wird zu einer Changelog-Gruppe, den neuesten Eintrag zuerst, die mit jedem Release wächst. Auch die Vorherige/Nächste-Links laufen durch sie hindurch, sodass die letzte Dokumentationsseite zum neuesten Release führen kann.
+
+Um die Einträge aus der Seitenleiste der Dokumentation herauszuhalten, verlinke das Changelog mit einem Header-[Tab](/docs/content/navigation#tabs) statt mit einer [Header-Aktion](/docs/content/navigation#header-actions):
+
+```ts blume.config.ts
+navigation: {
+  tabs: [
+    { label: "Docs", path: "/" },
+    { label: "Changelog", path: "/changelog" },
+  ],
+}
+```
+
+Der Tab `/changelog` öffnet die Übersicht, ohne dass ein `href` nötig ist, und übernimmt den Abschnitt `changelog/`: Seiten außerhalb davon listen die Releases nicht mehr auf, und ihre Vorherige/Nächste-Links bleiben innerhalb der Dokumentation. Die eigene Seite eines Eintrags zeigt die Release-Liste als Seitenleiste. Die Übersicht, der [RSS-Feed](#the-rss-feed), `llms.txt`, die Sitemap und die Suche listen weiterhin jeden Eintrag. Der `path` des Tabs muss dem Ordner oder `prefix` entsprechen, unter dem die Einträge liegen. Der Tab `Docs` unter `/` ist optional; er gibt Lesern einen Tab, zu dem sie zurückkehren können.
+
+Wenn du `sidebar.hidden` bei den Einträgen setzt, erreichst du das nicht: Damit verschwinden sie überall, auch aus der Übersicht und dem Feed.
 
 ## Der RSS-Feed [#the-rss-feed]
 

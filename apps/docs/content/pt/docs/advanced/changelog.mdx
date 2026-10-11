@@ -63,13 +63,48 @@ Assim que você tiver pelo menos uma entrada `type: changelog`, o Blume gera aut
 - A data segue o [`dateFormat`](/docs/configuration#date-format) configurado, sem o ano que o grupo da linha já mostra.
 - Os rascunhos e as entradas com `sidebar.hidden` são ignorados.
 
-A página só aparece quando nada já ocupa a rota `/changelog`. Para substituí-la pelo seu próprio design, adicione uma [página personalizada](/docs/advanced/custom-pages) em `pages/changelog.astro` — ela assume o controle e o Blume para de gerar o índice padrão. O componente `<Update>`, com o qual a cronologia anterior era construída, continua disponível para uma página escrita à mão que queira as notas de lançamento embutidas. Ele não faz parte dos componentes MDX, então importe-o na própria página `.astro`: `import Update from "blume/components/content/Update.astro";`.
+A página tem o título **Changelog** (em inglês), com uma descrição de uma linha logo abaixo. Defina os seus com `changelog` na sua configuração; eles também viram o `<title>` da página, a meta description e o card OG, além do topo do espelho em Markdown dela em `/changelog.md`:
 
-Uma [aba](/docs/content/navigation#tabs) do cabeçalho que aponta para `/changelog` abre esse índice — sem precisar de `href`.
+```ts blume.config.ts
+changelog: {
+  title: "Release notes",
+  description: "Every Acme SDK release, newest first.",
+},
+```
+
+Cada um também aceita um mapa de código de idioma para texto, como um [rótulo de aba do cabeçalho](/docs/content/i18n#per-locale-navigation). O índice é renderizado no idioma padrão, então mostra a entrada desse idioma. Se você deixar algum deles sem definir, ele mantém o texto integrado, que pode ser substituído por uma [sobrescrita de strings da interface](/docs/content/i18n#translated-ui) (`changelog.title` e `changelog.description` em `i18n.ui`).
+
+A página só aparece quando nada já ocupa a rota `/changelog`.
+
+### Escrever seu próprio índice [#writing-your-own-index]
+
+Para colocar algo acima da lista — uma introdução, um link para o feed, uma nota sobre a frequência dos seus lançamentos — escreva a página você mesmo e coloque `<Changelog />` onde a lista deve ficar. O Blume continua cuidando da lista, então você só escreve as partes para as quais ele não tem espaço:
+
+```mdx changelog/index.mdx
+---
+title: Changelog
+description: Every Acme SDK release, newest first.
+mode: center
+---
+
+Every release, newest first. Subscribe to the [RSS feed](/changelog/rss.xml) to follow along.
+
+<Changelog />
+```
+
+Uma página de conteúdo em `/changelog` assume a rota, então a página gerada sai de cena e a sua é renderizada no lugar. Coloque-a em `changelog/index.mdx`, ao lado das suas entradas, para que o grupo Changelog da barra lateral leve até ela — um `changelog.mdx` ao lado da pasta adiciona um segundo item Changelog à barra lateral. O [`mode: center`](/docs/content/frontmatter#layout) dá a ela o layout da página gerada — sem barra lateral, sem sumário, com uma coluna centralizada mais larga — e a página gerada renderiza o mesmo componente, então as duas não têm como ficar diferentes. A lista é convertida para Markdown nas superfícies para agentes (`/changelog.md`, llms-full.txt, `get_page` do MCP, busca) exatamente como a da página gerada.
+
+A lista sempre mostra as entradas do idioma padrão, onde quer que a tag esteja — a regra que todas as superfícies que a publicam já seguem, para que uma página traduzida liste as mesmas versões em vez de divergir sobre quais existem. As datas dela aparecem no idioma da própria página.
+
+### Substituir a página por completo [#replacing-the-page-entirely]
+
+Para um design que o componente não consegue expressar, adicione uma [página personalizada](/docs/advanced/custom-pages) em `pages/changelog.astro` — ela assume o controle e o Blume para de gerar o índice padrão. O componente `<Update>`, com o qual a cronologia anterior era construída, continua disponível para uma página personalizada que queira as notas de lançamento embutidas. Ele não faz parte dos componentes MDX, então importe-o na própria página `.astro`: `import Update from "blume/components/content/Update.astro";`.
+
+Construir a lista você mesmo significa reproduzir o que o `<Changelog />` faz, inclusive uma coisa que falha em silêncio: as entradas de uma fonte que não é o sistema de arquivos (como o [GitHub Releases](#from-github-releases)) são renderizadas por uma coleção `staged` paralela, então uma página que lê apenas `getCollection("docs")` não lista nenhuma delas, sem nenhum aviso. Prefira o `<Changelog />` em uma página de conteúdo, a menos que você realmente precise de uma marcação diferente.
 
 ## A partir do GitHub Releases [#from-github-releases]
 
-Em vez de escrever as entradas à mão, aponte a [fonte `githubReleases()`](/docs/content/sources#github-releases) integrada para um repositório e cada versão vira uma entrada `type: changelog` — a mesma cronologia e o mesmo feed, alimentados diretamente pelas versões que você já publica. O próprio [changelog](/changelog) do Blume é construído assim:
+Em vez de escrever as entradas à mão, aponte a [fonte `githubReleases()`](/docs/content/sources/github-releases) integrada para um repositório e cada versão vira uma entrada `type: changelog` — a mesma cronologia e o mesmo feed, alimentados diretamente pelas versões que você já publica. O próprio [changelog](/changelog) do Blume é construído assim:
 
 ```ts blume.config.ts
 import { filesystem, githubReleases } from "blume/sources";
@@ -86,7 +121,26 @@ content: {
 }
 ```
 
-O nome da versão vira o título, a tag dela vira `changelog.version` e a respectiva data de publicação ordena a cronologia. Cada página de versão também recebe uma meta description única, resumida a partir das notas — sem markdown, sem títulos de seção nem prefixos de hash de commit dos changesets, cortada para o comprimento de trecho de busca que o [`blume audit`](/docs/cli/audit) verifica — em vez de recorrer à descrição do site. Um repositório privado se autentica com a variável de ambiente `GITHUB_TOKEN`. Veja [Fontes de conteúdo](/docs/content/sources#github-releases) para todas as opções.
+O nome da versão vira o título, a tag dela vira `changelog.version` e a respectiva data de publicação ordena a cronologia. Cada página de versão também recebe uma meta description única, resumida a partir das notas — sem markdown, sem títulos de seção nem prefixos de hash de commit dos changesets, cortada para o comprimento de trecho de busca que o [`blume audit`](/docs/cli/audit) verifica — em vez de recorrer à descrição do site. Um repositório privado se autentica com a variável de ambiente `GITHUB_TOKEN`. Veja [GitHub Releases](/docs/content/sources/github-releases) para todas as opções.
+
+## Manter as entradas fora da barra lateral [#keep-entries-out-of-the-sidebar]
+
+As entradas do changelog são páginas normais, então a barra lateral gerada as lista como qualquer outra: uma pasta `changelog/`, ou uma fonte `githubReleases()` com `prefix: "changelog"`, vira um grupo Changelog, com a entrada mais recente primeiro, que cresce a cada versão. Os links de anterior/próxima também passam por ele, então a última página da documentação pode levar à versão mais recente.
+
+Para manter as entradas fora da barra lateral da documentação, vincule o changelog com uma [aba](/docs/content/navigation#tabs) do cabeçalho em vez de uma [ação do cabeçalho](/docs/content/navigation#header-actions):
+
+```ts blume.config.ts
+navigation: {
+  tabs: [
+    { label: "Docs", path: "/" },
+    { label: "Changelog", path: "/changelog" },
+  ],
+}
+```
+
+A aba `/changelog` abre o índice, sem precisar de `href`, e fica responsável pela seção `changelog/`: as páginas fora dela deixam de listar as versões, e os links de anterior/próxima delas continuam entre as páginas da documentação. A página da própria entrada mostra a lista de versões como barra lateral. O índice, o [feed RSS](#the-rss-feed), o `llms.txt`, o sitemap e a busca continuam listando todas as entradas. O `path` da aba precisa corresponder à pasta ou ao `prefix` em que as entradas ficam. A aba `Docs` em `/` é opcional; ela dá aos leitores uma aba para onde voltar.
+
+Definir `sidebar.hidden` nas entradas não faz isso: elas deixam de ser listadas em todo lugar, inclusive no índice e no feed.
 
 ## O feed RSS [#the-rss-feed]
 

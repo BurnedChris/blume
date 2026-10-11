@@ -1,0 +1,75 @@
+---
+title: Handgeschriebene API-Seiten
+description: >-
+  Dokumentiere einen Endpunkt in MDX, ganz ohne Spec, und bekomme trotzdem Methode und Pfad, ein Try-it-Panel, Request-Samples und angeheftete Beispiele.
+---
+
+Nicht jede API hat eine OpenAPI-Spec, und manche Endpunkte lesen sich besser, wenn sie von Hand geschrieben sind. Eine Seite mit `api`-Frontmatter dokumentiert einen Endpunkt: Ihre [Felder](/docs/content/components#api-fields) beschreiben Request und Response, und Blume baut daraus den Rest einer [OpenAPI-Referenz](/docs/references/openapi)-Seite. Dazu gehören Methode und Pfad oben, ein Try-it-Panel und Request-Samples in einer Spalte neben dem Inhalt sowie alle [Request- und Response-Beispiele](/docs/content/components#request-and-response-examples), die darunter angeheftet werden.
+
+````mdx docs/users/create.mdx lineNumbers
+---
+title: Create a user
+api: POST /workspaces/{workspaceId}/users
+---
+
+Creates a user and sends them an invite.
+
+<ParamField path="workspaceId" type="string" required>
+  The workspace to add the user to.
+</ParamField>
+
+<ParamField body="email" type="string" required placeholder="ada@example.com">
+  The user's email address.
+</ParamField>
+
+<ParamField body="role" type="string" default="member">
+  One of `owner`, `admin`, or `member`.
+</ParamField>
+
+<ResponseField name="id" type="string" required>
+  The new user's ID.
+</ResponseField>
+
+<ResponseExample>
+
+```json 201
+{ "id": "usr_8f2k", "status": "invited" }
+```
+
+</ResponseExample>
+````
+
+`api` nimmt eine HTTP-Methode und einen Pfad oder eine vollständige URL entgegen. Pfadparameter schreibst du in geschweifte Klammern, etwa `{workspaceId}`. Sie werden aus dem passenden `path`-Feld befüllt. Eine vollständige URL wie `GET https://api.acme.com/v1/users` wird genau so aufgerufen, wie sie dasteht. Ein Pfad wird dagegen an den [`api.server`](#site-defaults) der Site angehängt.
+
+## Playground und Samples [#the-playground-and-samples]
+
+Die `ParamField`s der Seite werden zu den Eingabefeldern des Try-it-Panels, so wie die Parameter einer Operation in einer Spec. `path`-, `query`- und `header`-Felder sind Parameter, und `body`-Felder bilden zusammen einen JSON-Body. Die verschachtelten Felder eines Felds (innerhalb seines [`Expandable`](/docs/content/components#expandable)) werden dabei zu den Properties eines Objekts. Ein `type` von `string[]` ist ein Array. Ein Typ, der kein JSON-Typ ist, etwa `enum<string>`, wird als String gesendet. Der `default` eines Felds füllt den Body, und sein `placeholder` ist der Beispielwert, den die Samples anzeigen. Ein optionales Body-Feld, das keins von beiden hat, ist zunächst leer und wird erst in den Request übernommen, wenn es jemand ausfüllt.
+
+Neben dem Panel bekommt die Seite Request-Samples in cURL, JavaScript und Python. Hat eine Seite ein eigenes `RequestExample`, wird stattdessen dieses angezeigt.
+
+Mit zwei weiteren Frontmatter-Keys kannst du die Seite anpassen:
+
+- `authMethod` legt fest, wie sich der Endpunkt authentifiziert: `bearer`, `basic`, `key` (ein API-Key in einem Header) oder `none`. Damit überschreibst du den Wert von [`api.auth`](#site-defaults) der Site.
+- `playground` legt fest, was die Seite anzeigt: `interactive` (der Standard) für das Try-it-Panel und die Samples, `simple` nur für die Samples oder `none` für keins von beiden. Methode, Pfad und alle Beispiele bleiben in jedem Fall erhalten.
+
+## Site-Standards [#site-defaults]
+
+Mit `api` in `blume.config.ts` legst du fest, was alle Endpunkt-Seiten gemeinsam haben:
+
+```ts blume.config.ts lineNumbers
+export default defineConfig({
+  api: {
+    server: "https://api.acme.com/v1",
+    auth: { method: "key", name: "x-api-key" },
+    playground: { proxy: true },
+  },
+});
+```
+
+- `server` ist die Basis-URL, an die ein `api`-Pfad angehängt wird.
+- `auth` legt fest, wie sich Requests authentifizieren, sofern eine Seite nicht `authMethod` setzt. `method` ist `bearer`, `basic`, `key` oder `none`, und `name` ist der Header, in dem ein API-Key mitgeschickt wird (standardmäßig `x-api-key`). Ohne `auth` senden Seiten keine Zugangsdaten.
+- `playground` nimmt dieselben Werte wie die [Playground-Option](/docs/references/openapi#try-it-playground) einer OpenAPI-Referenz. `false` blendet das Try-it-Panel auf allen Seiten aus. `proxy` leitet die Requests des Panels über einen CORS-Proxy: Gib entweder eine eigene URL an oder `true` für den eingebauten Proxy von Blume. Der eingebaute Proxy braucht [Server-Output](/docs/deployment#server-rendering). Er leitet nur an den Origin von `server` und an die Origins vollständiger URLs im `api`-Frontmatter weiter.
+
+Layout, Felder und Beispiele der Seite verwenden dieselben Komponenten wie überall sonst. Deshalb listet die [Markdown-Kopie](/docs/discoverability/llms-txt) der Seite jedes Feld auf, und die Suche indexiert die Seite wie jede andere.
+
+Die Frontmatter-Keys und Komponenten-Props entsprechen denen von Mintlify. Seiten, die du dafür geschrieben hast, funktionieren also ohne Änderungen weiter.

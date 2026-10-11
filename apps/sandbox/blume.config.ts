@@ -10,15 +10,32 @@ import { z } from "zod";
 
 /**
  * Kitchen-sink sandbox: every Blume feature enabled in one project, for
- * exercising the framework end to end — including the native OpenAPI and
- * AsyncAPI renderers, search, the assistant, MCP, i18n, export, OG images,
- * narration, content variables, pattern redirects, the site footer, written
- * feedback, rate limiting, and cookie consent (the `script()` analytics logs to the console,
- * with every tracked event, only once a reader accepts).
+ * exercising the framework end to end — including the native OpenAPI (with
+ * an overlay) and AsyncAPI renderers, search, the assistant, MCP, i18n, export, OG images,
+ * narration, content variables, pattern redirects, the site footer, a
+ * renamed changelog index, written feedback, rate limiting, and cookie
+ * consent (the `script()` analytics logs to the console, with every tracked
+ * event, only once a reader accepts).
  */
 export default defineConfig({
   agents: {
-    mcp: { enabled: true },
+    mcp: {
+      // A client Blume doesn't ship, between the built-in commands and links.
+      clients: [
+        "claude-code",
+        "codex",
+        {
+          command: "copilot mcp add --transport http {name} {url}",
+          label: {
+            de: "Copilot-CLI-Befehl kopieren",
+            en: "Copy Copilot CLI command",
+          },
+        },
+        "cursor",
+        "vscode",
+      ],
+      enabled: true,
+    },
     skills: "../../skills",
   },
   ai: {
@@ -61,6 +78,10 @@ export default defineConfig({
       },
     },
   },
+  changelog: {
+    description: "Every Blume release, straight from GitHub.",
+    title: { de: "Versionshinweise", en: "Release notes" },
+  },
   consent: native({ policy: "/docs/privacy" }),
   content: {
     sources: [
@@ -80,39 +101,24 @@ export default defineConfig({
   export: true,
   feedback: { comments: true },
   footer: {
+    copyright: {
+      de: "© 2026 Blume. MIT-lizenziert.",
+      en: "© 2026 Blume. MIT licensed.",
+    },
     links: [
       {
-        items: [
-          {
-            href: "/docs",
-            label: { de: "Erste Schritte", en: "Getting started" },
-          },
-          {
-            href: "/docs/components",
-            label: { de: "Komponenten", en: "Components" },
-          },
-          { href: "/changelog", label: "Changelog" },
-        ],
-        label: { de: "Doku", en: "Docs" },
+        href: "/docs",
+        label: { de: "Erste Schritte", en: "Getting started" },
       },
       {
-        items: [
-          { href: "/api", label: "REST API" },
-          { href: "/graphql", label: "GraphQL" },
-          { href: "/events", label: "Events" },
-        ],
-        label: "References",
+        href: "/docs/components",
+        label: { de: "Komponenten", en: "Components" },
       },
-      {
-        items: [
-          { href: "https://github.com/haydenbleasel/blume", label: "GitHub" },
-          { href: "https://useblume.dev", label: "useblume.dev" },
-        ],
-        label: "Project",
-      },
+      { href: "/api", label: "REST API" },
+      { href: "/changelog", label: "Changelog" },
+      { href: "https://useblume.dev", label: "useblume.dev" },
     ],
     socials: {
-      github: "https://github.com/haydenbleasel/blume",
       website: "https://useblume.dev",
       x: "https://x.com/haydenbleasel",
     },
@@ -134,6 +140,7 @@ export default defineConfig({
       { code: "en", label: "English" },
       { code: "de", label: "Deutsch", style: "Informal du-form" },
     ],
+    routeByBrowserLanguage: true,
   },
   lastModified: "git",
   logo: "/logo.svg",
@@ -167,6 +174,7 @@ export default defineConfig({
   reference: [
     openapi({
       expandSchemas: true,
+      overlays: ["./specs/public.overlay.yaml"],
       route: "/api",
       spec: "./specs/openapi.yaml",
     }),
@@ -174,11 +182,14 @@ export default defineConfig({
       sources: [{ label: "Commerce events", spec: "./specs/asyncapi.yaml" }],
     }),
     graphql({
+      auth: { method: "bearer" },
       endpoint: "https://petstore.example.com/graphql",
       spec: "./specs/schema.graphql",
     }),
   ],
   search: {
+    // Query text reaches only the `blume:track` listener above.
+    analytics: { queries: false },
     popular: [
       { href: "/docs", icon: "rocket", label: "Getting started" },
       { href: "/events", icon: "radio", label: "Event reference" },
@@ -186,6 +197,10 @@ export default defineConfig({
     ],
   },
   seo: {
+    metatags: {
+      "apple-mobile-web-app-title": "Blume Sandbox",
+      "theme-color": "#7c3aed",
+    },
     x: { creator: "@haydenbleasel", handle: "@haydenbleasel" },
   },
   theme: {

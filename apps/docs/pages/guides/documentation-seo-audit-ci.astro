@@ -1,0 +1,598 @@
+---
+// Add a technical SEO check to your documentation build: checked against the
+// audit and metadata docs (cli/audit, discoverability/metadata,
+// discoverability/sitemap-and-robots, deployment#redirects) and the audit
+// source on main (cli/commands/audit.ts, audit/run.ts, audit/report.ts,
+// audit/types.ts thresholds, audit/checks/*), plus the page layout's
+// description fallback and canonical emission, deploy/sitemap.ts and
+// deploy/artifacts.ts (a public/sitemap.xml wins), and Astro 7's redirect
+// manifest (exact redirects to unknown paths don't fail the build). Ran
+// `blume audit` from source (bun src/cli/index.ts) against this guide's
+// project with a hand-written dist/ modeled on a real Blume build's head tags,
+// the way test/audit-command.test.ts does: the report blocks below are that
+// run's output, and every exit code stated was observed. Em dashes in the
+// report output are written as \u2014 so the file itself carries none.
+// Google's snippet and canonicalization docs checked 2026-09-27. Did not run
+// `blume build` or the workflow. Not yet run end to end.
+// Review pass: canonical advice matches deploy/sitemap.ts (a page whose
+// seo.canonical points elsewhere is left out of the sitemap). The audit
+// counts, the network check count, and the sitemap fix text were updated by
+// hand to match audit/catalog.ts on main, not rerun.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("documentation-seo-audit-ci")}>
+  <p>
+    To catch broken canonicals and missing metadata before you deploy, build
+    your docs and run <code>blume audit</code> on the result. It reads the HTML
+    in <code>dist/</code> the way a crawler would and checks titles,
+    descriptions, canonicals, social cards, the sitemap, <code>robots.txt</code>,
+    and your redirects. Every finding names the source file and front matter
+    line that fixes it, and the command exits non-zero at the severity you
+    pick, so one CI step can stop a bad deploy.
+  </p>
+  <p>
+    In this guide you plant a stale canonical, a short description, a stale
+    sitemap, and two bad redirects in a small project, watch the audit fail,
+    fix each finding where it starts, and add the audit to GitHub Actions.
+  </p>
+  <p>
+    The audit only runs on a site Blume built, because it maps each page back
+    to its source through Blume's route manifest. For another generator, use a
+    general-purpose SEO crawler. It also isn't a model of how search engines
+    rank pages: it doesn't measure Core Web Vitals, and it checks that
+    structured data is well-formed, not that a page qualifies for rich
+    results. To check the links in your Markdown before a build,{" "}
+    <code>blume validate</code> is the lighter tool, and the{" "}
+    <a href="/guides/markdown-link-checking-ci">link checking guide</a> covers
+    it.
+  </p>
+
+  <h2>What the audit reports</h2>
+  <p>
+    Each check has a severity, and the severity decides whether it can fail
+    your build:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Severity</th>
+        <th scope="col">What it means</th>
+        <th scope="col">Examples</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Error</td>
+        <td>Something is broken. Fails the audit by default.</td>
+        <td>
+          A canonical that points at a missing or redirecting page, a redirect
+          that loops or lands nowhere, a sitemap URL the build doesn't serve
+        </td>
+      </tr>
+      <tr>
+        <td>Warning</td>
+        <td>Advisory. Fails only when you ask it to.</td>
+        <td>
+          A title or description outside its length range, duplicate titles, a
+          redirect chain, an indexable page missing from the sitemap
+        </td>
+      </tr>
+      <tr>
+        <td>Info (notes)</td>
+        <td>Worth a look, rarely worth failing a build.</td>
+        <td>
+          Fewer than 50 words of prose, heading levels that skip, a page marked{" "}
+          <code>noindex</code>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Treat the length warnings as editorial prompts, not search rules. The audit
+    wants titles between 10 and 60 display columns and descriptions between
+    110 and 160, ranges taken from SEO-crawler guidance. (A wide CJK character
+    counts as two columns.) Google publishes no limit on description length: it
+    truncates snippets to fit the device, and often builds the snippet from
+    the page's content instead of the description. A length warning tells you
+    to reread the text, nothing more. The{" "}
+    <a href="/docs/cli/audit#check-catalog">check catalog</a> lists every check
+    with its severity and suggested fix.
+  </p>
+
+  <h2>Plant failures in a test project</h2>
+  <p>
+    Before you trust a gate to pass, watch it fail. Scaffold a small project
+    for the fictional Acme docs at <code>docs.acme.example</code>:
+  </p>
+  <CodeBlock
+    code={`npx blume init acme-docs --template docs --package-manager npm --yes
+cd acme-docs`}
+    lang="bash"
+  />
+  <p>
+    Replace <code>blume.config.ts</code> with a config that sets the site URL
+    and three redirects. The site URL matters: without it Blume can't write
+    canonicals or a sitemap, so the audit has nothing to check there.
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme Docs",
+  description:
+    "Guides and API reference for sending transactional email and SMS with Acme.",
+  deployment: {
+    site: "https://docs.acme.example",
+  },
+  redirects: [
+    { from: "/setup", to: "/installation", status: 308 },
+    { from: "/getting-started", to: "/setup", status: 308 },
+    { from: "/plans", to: "/pricing", status: 308 },
+  ],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>Replace the starter home page, and add two more pages beside it:</p>
+  <CodeBlock
+    code={`---
+title: Introduction
+description: Acme sends transactional email and SMS from your app. Start here, then read the installation and billing pages to set up and plan.
+---
+
+Acme is an API for sending transactional email and SMS: password resets, receipts, sign-in codes, and shipping updates. You send a message with one request, and Acme handles delivery, retries, and bounces for you.
+
+New to Acme? The [installation](/installation) page sets up the SDK and your API key, and [billing](/billing) explains how messages are counted each month.`}
+    lang="mdx"
+    title="docs/index.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Installation
+description: Install the Acme SDK for Node.js or Python, set your API key as an environment variable, and confirm that your first request succeeds.
+seo:
+  canonical: https://docs.acme.example/setup
+---
+
+Acme publishes SDKs for Node.js and Python. Both wrap the same REST API, so pick the one that matches your backend.
+
+Install the package with your package manager, then set \`ACME_API_KEY\` in the environment your server runs in. The SDK reads the key from there, so it never appears in your source code. When the install is done, send a test message to your own address, then read [billing](/billing) to see how messages count toward your plan.`}
+    lang="mdx"
+    title="docs/installation.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Billing
+description: How billing works.
+---
+
+Acme bills by the message. Every email and every SMS segment you send counts toward your monthly total, whether or not the recipient opens it. Messages that fail validation before sending are never counted.
+
+When you go over the number of messages your plan includes, Acme keeps sending and bills the extra messages at the end of the month. You can download every past invoice from the dashboard.`}
+    lang="mdx"
+    title="docs/billing.mdx"
+  />
+  <p>Last, add a sitemap left over from the site's previous generator:</p>
+  <CodeBlock
+    code={`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://docs.acme.example/</loc></url>
+  <url><loc>https://docs.acme.example/setup</loc></url>
+  <url><loc>https://docs.acme.example/plans</loc></url>
+</urlset>`}
+    lang="xml"
+    title="public/sitemap.xml"
+  />
+  <p>Here's what's wrong, on purpose:</p>
+  <ul>
+    <li>
+      <strong>A stale canonical.</strong> The installation page used to live
+      at <code>/setup</code>, and its <code>seo.canonical</code> still says so.
+      Since <code>/setup</code> now redirects, the canonical sends search
+      engines through a redirect back to the page itself.
+    </li>
+    <li>
+      <strong>A thin description.</strong> The billing page's description is
+      18 characters long.
+    </li>
+    <li>
+      <strong>A redirect chain.</strong> <code>/getting-started</code>{" "}
+      redirects to <code>/setup</code>, which redirects again.
+    </li>
+    <li>
+      <strong>A broken redirect.</strong> <code>/plans</code> points at{" "}
+      <code>/pricing</code>, which doesn't exist. Billing lives at{" "}
+      <code>/billing</code>.
+    </li>
+    <li>
+      <strong>A stale sitemap.</strong> Blume never overwrites a file you ship
+      in <code>public/</code>, so this copy replaces the sitemap Blume would
+      generate, and it lists two URLs that now redirect.
+    </li>
+  </ul>
+
+  <h2>Build and run the audit</h2>
+  <p>
+    The audit reads an existing build and never builds on its own, so build
+    first:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+npx blume audit`}
+    lang="bash"
+  />
+  <p>
+    The build succeeds, because none of these mistakes break a page. The audit
+    catches them:
+  </p>
+  <CodeBlock
+    code={`  blume audit  4 pages · dist · offline
+  316 audits · 4 errors · 3 warnings · 0 notes
+
+  indexability
+
+  ✖ Canonical points to a broken or redirecting page  1 page
+      /installation                      docs/installation.mdx:5
+      fix: Point \`seo.canonical\` at a page that exists and doesn't redirect.
+
+  redirects
+
+  ✖ Broken redirect  1 page
+      /plans                             blume.config.ts
+      fix: Point the redirect at a page that exists.
+
+  ⚠ Redirect chain  1 page
+      /getting-started                   blume.config.ts
+      fix: Point every hop straight at the final destination.
+
+  sitemap
+
+  ✖ Sitemap names a page that does not exist or redirects  2 pages
+      https://docs.acme.example/setup    dist/sitemap.xml
+      https://docs.acme.example/plans    dist/sitemap.xml
+      fix: Remove the URL from the sitemap, or build the page it names.
+
+  ⚠ Indexable page not in sitemap  1 page
+      /billing                           docs/billing.mdx
+      fix: Remove \`draft\`/\`hidden\`/\`noindex\` from the page's frontmatter if it should be indexed. A \`public/sitemap.xml\` replaces the generated sitemap, so add the page there or delete that file.
+
+  content
+
+  ⚠ Meta description too long or too short  1 page
+      /billing                           docs/billing.mdx:3
+      fix: Rewrite \`description\` in the frontmatter to fit the length range.
+
+  ⊘ external     skipped \u2014 pass --external (2 checks)
+  ⊘ network      skipped \u2014 pass --url <origin> (12 checks)`}
+    lang="text"
+  />
+  <p>
+    The command exits with code 1, because there are errors. Four pages means
+    the three docs pages plus the 404 page, and 316 audits is every check that
+    ran times every page.
+  </p>
+
+  <h3>Read a finding</h3>
+  <p>
+    Findings are grouped by check, with the categories that hold errors
+    first. Each line pairs the URL with the file to edit:{" "}
+    <code>docs/installation.mdx:5</code> is the <code>canonical:</code> line
+    itself. Redirect findings point at <code>blume.config.ts</code>. Sitemap
+    findings point at <code>dist/sitemap.xml</code>, the built copy, so the
+    file to edit is <code>public/sitemap.xml</code>.
+  </p>
+  <p>
+    The report shows the first three pages per check. Add{" "}
+    <code>--verbose</code> to list every page with the specific problem:
+  </p>
+  <CodeBlock
+    code={`  ✖ Canonical points to a broken or redirecting page  1 page
+      /installation                      docs/installation.mdx:5
+        Canonical points at /setup, which is a redirect to /installation.
+      fix: Point \`seo.canonical\` at a page that exists and doesn't redirect.
+
+  redirects
+
+  ✖ Broken redirect  1 page
+      /plans                             blume.config.ts
+        Redirect from /plans lands on /pricing, which the build does not serve.
+      fix: Point the redirect at a page that exists.
+
+  ⚠ Redirect chain  1 page
+      /getting-started                   blume.config.ts
+        Redirect from /getting-started passes through 2 hops: /getting-started → /setup → /installation
+      fix: Point every hop straight at the final destination.`}
+    lang="text"
+  />
+  <p>
+    The "not in sitemap" warning is a side effect of the stale file. No{" "}
+    <code>draft</code>, <code>hidden</code>, or <code>noindex</code> flag kept
+    the page out; the hand-made sitemap never listed it, which is the case the
+    fix text's second sentence covers.
+  </p>
+
+  <h2>Choose a severity gate</h2>
+  <p>
+    <code>--fail-on</code> sets the lowest severity that fails the run:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Command</th>
+        <th scope="col">Exits non-zero on</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>blume audit</code></td>
+        <td>Errors (the default, same as <code>--fail-on error</code>)</td>
+      </tr>
+      <tr>
+        <td>
+          <code>blume audit --fail-on warning</code>, or <code>--strict</code>
+        </td>
+        <td>Errors and warnings</td>
+      </tr>
+      <tr>
+        <td><code>blume audit --fail-on info</code></td>
+        <td>Any finding at all</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Start CI on the default. Errors are the findings that are wrong on every
+    site: a canonical or sitemap entry that points through a redirect, a
+    redirect to nowhere. Once you've cleared the warnings, move to{" "}
+    <code>--fail-on warning</code> so new ones can't creep back in. If you fix
+    only the errors in this project, the default audit passes with two
+    warnings left, and <code>--fail-on warning</code> still fails.
+  </p>
+  <p>
+    Two flags help on a large site. <code>--only</code> narrows the report to
+    checks or categories so you can work through one at a time, and{" "}
+    <code>--skip</code> drops a check you've decided to accept:
+  </p>
+  <CodeBlock
+    code={`npx blume audit --only indexability,sitemap
+npx blume audit --fail-on warning --skip redirect_chain`}
+    lang="bash"
+  />
+  <p>
+    Both take check ids (with or without the <code>BLUME_AUDIT_</code> prefix)
+    or category keys, comma-separated. A skipped check disappears from the
+    report as well as the gate, so skip deliberately. A term that names no
+    check fails the run with a suggestion, so a typo can't empty the report
+    and pass. <code>npx blume audit --list-checks</code> prints every id.
+  </p>
+
+  <h2>Fix each finding at its source</h2>
+  <p>
+    Work down the report, editing the file each finding names.
+  </p>
+  <p>
+    <strong>The canonical.</strong> Delete the <code>seo</code> block from the
+    installation page's front matter. Without it, Blume emits a canonical that
+    points at the page's own URL, which is almost always what you want. The
+    front matter becomes:
+  </p>
+  <CodeBlock
+    code={`---
+title: Installation
+description: Install the Acme SDK for Node.js or Python, set your API key as an environment variable, and confirm that your first request succeeds.
+---`}
+    lang="mdx"
+  />
+  <p>
+    If a page really is a copy of another, redirect it to the page that stays.
+    Pointing its <code>seo.canonical</code> at that page also works, and Blume
+    then leaves the copy out of the generated sitemap, but the copy keeps
+    publishing at its own URL. A redirect leaves one URL to index.
+  </p>
+  <p>
+    <strong>The description.</strong> Write one that says what the page
+    covers. It fills the meta description and the Open Graph and X card
+    descriptions. A page with no description inherits the site's, so a site
+    with many undescribed pages sees duplicate and length warnings rather than
+    "missing" ones.
+  </p>
+  <CodeBlock
+    code={`---
+title: Billing
+description: See how Acme counts messages toward your monthly bill, what happens when you go over your plan, and where to download past invoices.
+---`}
+    lang="mdx"
+  />
+  <p>
+    <strong>The redirects.</strong> Point every old URL straight at the page
+    that exists now:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme Docs",
+  description:
+    "Guides and API reference for sending transactional email and SMS with Acme.",
+  deployment: {
+    site: "https://docs.acme.example",
+  },
+  redirects: [
+    { from: "/setup", to: "/installation", status: 308 },
+    { from: "/getting-started", to: "/installation", status: 308 },
+    { from: "/plans", to: "/billing", status: 308 },
+  ],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <strong>The sitemap.</strong> Delete the hand-made file, and Blume
+    generates one from your pages, leaving out drafts, hidden pages,{" "}
+    <code>noindex</code> pages, and pages whose canonical names another URL:
+  </p>
+  <CodeBlock code="rm public/sitemap.xml" lang="bash" />
+  <p>
+    If you do need your own sitemap, keep it in step with every URL move. The
+    audit checks it the same way. Then rebuild and audit at the stricter gate:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+npx blume audit --fail-on warning`}
+    lang="bash"
+  />
+  <CodeBlock
+    code={`  blume audit  4 pages · dist · offline
+  316 audits · 0 errors · 0 warnings · 0 notes
+
+  ✔ No issues found.
+
+  ⊘ external     skipped \u2014 pass --external (2 checks)
+  ⊘ network      skipped \u2014 pass --url <origin> (12 checks)`}
+    lang="text"
+  />
+  <p>
+    It exits with code 0. On a real site with dozens of findings,{" "}
+    <code>npx blume audit --claude</code> (or <code>--codex</code>) hands the
+    full report to a coding agent. It's told to edit the file each finding
+    names, then rebuild and audit until the report is clean, and you approve
+    each edit through the agent's own prompts.
+  </p>
+
+  <h2>Add the audit to CI</h2>
+  <p>
+    The exit code is the whole contract, so the CI job is a build and an
+    audit. Commit this workflow:
+  </p>
+  <CodeBlock
+    code={`name: Docs audit
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx blume build
+      - run: npx blume audit --fail-on warning`}
+    lang="yaml"
+    title=".github/workflows/docs-audit.yml"
+  />
+  <p>
+    Every pull request now builds the docs and fails if the audit finds an
+    error or a warning, with the grouped report in the job log. Use{" "}
+    <code>npx blume audit</code> without the flag if you're still working
+    through warnings. To feed the findings to another tool, add{" "}
+    <code>--json</code>: the report goes to stdout as JSON, complete even when
+    the run fails, with each finding's file, line, code, and a{" "}
+    <code>docsUrl</code> for its catalog entry.
+  </p>
+  <p>
+    Blume needs Node.js 22.19 or later, and <code>npm ci</code> needs the{" "}
+    <code>package-lock.json</code> that <code>blume init</code> wrote, so
+    commit both it and <code>package.json</code>.
+  </p>
+
+  <h3>Make sure CI knows the site URL</h3>
+  <p>
+    The canonical, sitemap, and social card checks need the absolute site URL
+    in the build. This project sets <code>deployment.site</code>, so CI audits
+    what production serves. If you leave it unset, Blume detects it on Vercel,
+    Netlify, and Cloudflare Pages at build time, but a GitHub Actions runner is
+    none of those. The build then has no canonicals or sitemap, and the audit
+    reports that once instead of checking them:{" "}
+    <code>BLUME_AUDIT_SITE_NOT_SET</code> (a warning) for a plain static
+    config, or <code>BLUME_AUDIT_SITE_INFERRED_AT_DEPLOY</code> (a note) when
+    you use a host adapter like <code>vercel()</code>. For the adapter case,
+    the audit suggests building with that platform's variables set, like{" "}
+    <code>VERCEL=1 VERCEL_PROJECT_PRODUCTION_URL=&lt;host&gt;</code>, rather
+    than hardcoding a URL the platform already supplies.
+  </p>
+
+  <h3>Check a deployment too</h3>
+  <p>
+    Some problems only exist on the server: a rewrite that 404s a built page,
+    a redirect the host never applies, responses without compression, or an{" "}
+    <code>X-Robots-Tag</code> header quietly deindexing a page whose HTML
+    looks fine. After a preview deploy, point the audit at it to add those
+    network checks:
+  </p>
+  <CodeBlock
+    code="npx blume audit --url https://preview.docs.acme.example"
+    lang="bash"
+  />
+  <p>
+    It requests each exact redirect's old URL too, and reports{" "}
+    <code>BLUME_AUDIT_REDIRECT_NOT_SERVED</code> when the live site doesn't
+    send it to the page you configured. It still reads the local build, so run
+    it in a job that has built the same commit. Add <code>--external</code> to
+    probe outbound links as well.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The audit says "No build found"</h3>
+  <p>
+    <code>blume audit</code> reads the output of the last build and never
+    builds itself. Run <code>npx blume build</code> first, in the same job and
+    working directory.
+  </p>
+  <h3>A fixed page still shows up in the report</h3>
+  <p>
+    The audit reads the built HTML, not your source files, so it reports the
+    state of the last build. Rebuild after every fix before you audit again.
+  </p>
+  <h3>--only or --skip fails with "name no check or category"</h3>
+  <p>
+    Use the category key or a check id, not a heading from the docs: it's{" "}
+    <code>--only i18n</code>, not <code>--only Internationalization</code>.
+    The error suggests the closest match, and{" "}
+    <code>npx blume audit --list-checks</code> prints them all.
+  </p>
+  <h3>No canonical or sitemap findings, ever</h3>
+  <p>
+    Look for <code>BLUME_AUDIT_SITE_NOT_SET</code> or{" "}
+    <code>BLUME_AUDIT_SITE_INFERRED_AT_DEPLOY</code> in the report. Without a
+    site URL the build writes no canonicals or sitemap, so there's nothing for
+    those checks to find. Set the URL as described in{" "}
+    <a href="#add-the-audit-to-ci">Add the audit to CI</a> above.
+  </p>
+  <h3>The build stops with BLUME_REDIRECT_MATCHES_PAGE</h3>
+  <p>
+    A pattern redirect covers a page you kept, and the build rejects it before
+    the audit ever runs, since hosts disagree on which one answers. Narrow the
+    pattern to the paths that actually moved. An exact redirect from a page's
+    own URL gets the same code as a warning: the redirect takes the URL over,
+    so the page never publishes. Delete the page if it moved, or drop the
+    redirect. The{" "}
+    <a href="/guides/documentation-url-migration-redirects">URL migration guide</a>{" "}
+    covers planning a move.
+  </p>
+  <h3>BLUME_FRONTMATTER_INVALID with "bad indentation of a mapping entry"</h3>
+  <p>
+    A front matter value contains a colon followed by a space, like{" "}
+    <code>description: Setup: install the SDK</code>, which YAML reads as a
+    nested key. Blume names the file and line and leaves that page out of the
+    site. Quote the value, or rephrase it without the colon.
+  </p>
+  <h3>The audit passes, but a page still isn't indexed</h3>
+  <p>
+    The offline audit only sees your HTML. A response header, a host rewrite,
+    or a search engine's own choice of canonical can still keep a page out.
+    Run the audit with <code>--url</code> against production, then work
+    through{" "}
+    <a href="/guides/documentation-not-indexed">
+      troubleshooting pages that are not indexed
+    </a>.
+  </p>
+</GuidePage>

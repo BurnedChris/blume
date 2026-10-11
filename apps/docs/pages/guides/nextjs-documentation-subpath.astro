@@ -1,0 +1,493 @@
+---
+// Serve a separate docs site under /docs in Next.js: checked against the
+// deployment, navigation, and Markdown docs, the generated Astro config
+// (astro/templates.ts: trailingSlash "never"), Astro's static output layout
+// (core/build/common.js: dist/ is not nested under base) and preview server,
+// the canonical, sitemap, llms.txt, and robots builders, the logo and header
+// link rendering, and the audit's outside-base link check, on main. Next.js
+// behavior checked against the rewrites, trailingSlash, multi-zones, and proxy
+// docs for 16.3.6. Ran a two-app fixture: Next.js 16.3.6 (next build + next
+// start, and next dev) with this page's next.config.ts, app/robots.ts, and a
+// proxy.ts matcher, in front of a mock static origin laid out like `dist/`
+// copied to `out/docs` and serving it with Vercel's default slash handling.
+// check-docs.sh passed against it; an origin that adds trailing slashes
+// looped as described. `blume build` itself was not run, and nothing was
+// deployed to Vercel. Not yet run end to end.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("nextjs-documentation-subpath")}>
+  <p>
+    Yes. Build your Blume docs as their own static site with{" "}
+    <code>deployment.base</code> set to <code>/docs</code>, deploy it to its
+    own origin, and add one rewrite to your Next.js app that proxies{" "}
+    <code>/docs</code> and everything under it to that origin. Readers stay on
+    your domain, your app keeps every other path, and the two deploy
+    separately.
+  </p>
+  <p>
+    By the end, <code>www.acme.example</code> serves your Next.js app and{" "}
+    <code>www.acme.example/docs</code> serves the docs, with canonical URLs,
+    the sitemap, and <code>llms.txt</code> naming the public domain, plus a
+    script that checks pages, assets, and machine-readable files through it.
+    Both apps deploy on Vercel here. The docs origin can be any static host
+    that serves <code>/docs/quickstart</code> without adding a trailing slash.
+  </p>
+  <p>
+    If a subdomain like <code>docs.acme.example</code> is fine, skip all of
+    this and deploy Blume on its own. If the docs must share your app's React
+    layout and client-side navigation, a separate app is the wrong shape:
+    every move between the two is a full page load. This guide also keeps the
+    docs static. The assistant and the MCP server need a server build, which
+    it doesn't cover (see{" "}
+    <a href="/guides/static-vs-server-documentation">static or server-rendered docs</a>).
+  </p>
+
+  <h2>Choose deployment.base, not basePath</h2>
+  <p>
+    Blume has two settings that put pages under <code>/docs</code>, and they
+    move different things:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Served at</th>
+        <th scope="col"><code>deployment.base: "/docs"</code></th>
+        <th scope="col"><code>basePath: "/docs"</code></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>A page</td>
+        <td><code>/docs/quickstart</code></td>
+        <td><code>/docs/quickstart</code></td>
+      </tr>
+      <tr>
+        <td>Built CSS and JavaScript</td>
+        <td><code>/docs/_astro/</code></td>
+        <td><code>/_astro/</code></td>
+      </tr>
+      <tr>
+        <td>A file in <code>public/</code></td>
+        <td><code>/docs/logo.svg</code></td>
+        <td><code>/logo.svg</code></td>
+      </tr>
+      <tr>
+        <td>The search index</td>
+        <td><code>/docs/blume-search.json</code></td>
+        <td><code>/blume-search.json</code></td>
+      </tr>
+      <tr>
+        <td><code>llms.txt</code>, <code>sitemap.xml</code>, <code>robots.txt</code></td>
+        <td>Under <code>/docs/</code></td>
+        <td>At the root</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    With <code>basePath</code>, the docs still need paths at the root, where
+    they collide with your app's own <code>/robots.txt</code>,{" "}
+    <code>/sitemap.xml</code>, and public files, and each one needs its own
+    rewrite. With <code>deployment.base</code>, everything the docs serve
+    starts with <code>/docs</code>, so one rewrite covers it. This guide uses{" "}
+    <code>deployment.base</code> alone.
+  </p>
+  <Callout type="warning">
+    Next.js has its own <code>basePath</code> setting, and it moves your
+    Next.js app, not the docs. Leave it unset in <code>next.config.ts</code>.
+  </Callout>
+
+  <h2>Configure the docs site</h2>
+  <p>
+    Create the docs project beside your app, in its own repository or a folder
+    of a monorepo (the{" "}
+    <a href="/guides/monorepo-documentation-site">monorepo guide</a> covers
+    that layout):
+  </p>
+  <CodeBlock code="npx blume init acme-docs" lang="bash" />
+  <p>
+    Add a page and a nested page, so there's something to test at two depths.
+    The first links with a root-relative path, which Blume rewrites to include
+    the base. The second links back to the app with a full URL:
+  </p>
+  <CodeBlock
+    code={`---
+title: Quickstart
+description: Send your first message with the Acme Messages API.
+---
+
+Create an API key, then set up [webhooks](/guides/webhooks).`}
+    lang="mdx"
+    title="docs/quickstart.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Webhooks
+description: Receive delivery events for the messages you send.
+---
+
+Webhooks are included on every [plan](https://www.acme.example/pricing).`}
+    lang="mdx"
+    title="docs/guides/webhooks.mdx"
+  />
+  <p>Then set the deployment and the links back to your app:</p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme Docs",
+  description: "Guides and reference for the Acme Messages API.",
+  deployment: {
+    // The public origin, with no path.
+    site: "https://www.acme.example",
+    // Every page, asset, and generated file moves under /docs.
+    base: "/docs",
+  },
+  // Optional: send the logo to your app's home instead of the docs home.
+  logo: { href: "https://www.acme.example" },
+  navigation: {
+    actions: [{ href: "https://www.acme.example/pricing", label: "Pricing" }],
+    cta: { href: "https://www.acme.example/signup", label: "Sign up" },
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Run <code>npx blume dev</code> and open{" "}
+    <code>http://localhost:4321/docs/quickstart</code>. Its webhooks link
+    points at <code>/docs/guides/webhooks</code>, though you wrote{" "}
+    <code>/guides/webhooks</code>.
+  </p>
+
+  <h2>Deploy the docs origin</h2>
+  <p>
+    <code>deployment.base</code> changes the URLs inside the build, not where
+    files sit. <code>blume build</code> still writes{" "}
+    <code>dist/quickstart/index.html</code>, and expects the host to serve{" "}
+    <code>dist/</code> at <code>/docs</code>. So the origin's build copies it
+    into a <code>docs</code> folder, plus Blume's not-found page at the top
+    level, where the host looks for it. Add a script to the docs project's{" "}
+    <code>package.json</code>:
+  </p>
+  <CodeBlock
+    code={`"scripts": {
+  "dev": "blume dev",
+  "build": "blume build",
+  "build:origin": "blume build && rm -rf out && mkdir out && cp -R dist out/docs && cp dist/404.html out/404.html"
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <p>
+    Add <code>out</code> to <code>.gitignore</code>, and tell Vercel to run
+    the script and serve that folder:
+  </p>
+  <CodeBlock
+    code={`{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run build:origin",
+  "outputDirectory": "out"
+}`}
+    lang="json"
+    title="vercel.json"
+  />
+  <p>
+    Import the docs repository in Vercel as its own project (in a monorepo,
+    set its root directory to <code>acme-docs</code>), with Node.js 22 or
+    later. Once it deploys, open <code>/docs</code> on the production domain
+    listed in the project's domain settings, like{" "}
+    <code>https://acme-docs.vercel.app/docs</code>. The docs should load with
+    their styles straight from the origin. Branch previews work the same way,
+    so you can review a docs change before it reaches your domain.
+  </p>
+
+  <h2>Add the rewrite in Next.js</h2>
+  <p>In your Next.js app, proxy <code>/docs</code> to the origin:</p>
+  <CodeBlock
+    code={`import type { NextConfig } from "next";
+
+// The docs project's production domain, with no trailing slash.
+const DOCS_ORIGIN = process.env.DOCS_ORIGIN ?? "https://acme-docs.vercel.app";
+
+const nextConfig: NextConfig = {
+  async rewrites() {
+    return [
+      // :path* matches zero or more segments, so /docs itself goes too.
+      { source: "/docs/:path*", destination: \`\${DOCS_ORIGIN}/docs/:path*\` },
+    ];
+  },
+};
+
+export default nextConfig;`}
+    lang="ts"
+    title="next.config.ts"
+  />
+  <p>
+    The path passes through unchanged, which is why the origin serves the
+    build under <code>/docs</code>. Because <code>rewrites()</code> returns
+    an array, Next.js checks its own pages and <code>public/</code> files
+    first, so remove any <code>app/docs</code> route or{" "}
+    <code>public/docs</code> folder. Set <code>DOCS_ORIGIN</code> in the
+    Next.js project's environment variables. Next.js writes rewrites into
+    the build output, so redeploy the app after changing it.
+  </p>
+
+  <h3>Redirects</h3>
+  <p>
+    For each exact redirect in <code>blume.config.ts</code>, Blume writes a
+    redirect page, and those work through the rewrite. For a real HTTP status,
+    repeat the redirect in <code>next.config.ts</code>, using the public path.
+    Next.js checks redirects before rewrites:
+  </p>
+  <CodeBlock
+    code={`async redirects() {
+  return [
+    { source: "/docs/getting-started", destination: "/docs/quickstart", permanent: true },
+  ];
+},`}
+    lang="ts"
+    title="next.config.ts"
+  />
+
+  <h3>Files that belong at the root</h3>
+  <p>
+    Crawlers only read <code>robots.txt</code> at the root of a host, so the
+    one Blume writes to <code>/docs/robots.txt</code> is ignored. Your app
+    answers <code>/robots.txt</code>, so point it at the docs sitemap (pass an
+    array if your app has a sitemap of its own):
+  </p>
+  <CodeBlock
+    code={`import type { MetadataRoute } from "next";
+
+export default function robots(): MetadataRoute.Robots {
+  return {
+    rules: { userAgent: "*", allow: "/" },
+    sitemap: "https://www.acme.example/docs/sitemap.xml",
+  };
+}`}
+    lang="ts"
+    title="app/robots.ts"
+  />
+  <p>
+    The same goes for anything that has to sit at the domain root: Blume's{" "}
+    <code>.well-known</code> files are under <code>/docs/.well-known/</code>.
+  </p>
+
+  <h2>Link between the two apps</h2>
+  <p>
+    From Next.js to the docs, use a plain <code>&lt;a&gt;</code>, not{" "}
+    <code>&lt;Link&gt;</code>. Next.js tries to prefetch and soft-navigate
+    any relative path in a <code>&lt;Link&gt;</code>, which doesn't work
+    across apps:
+  </p>
+  <CodeBlock
+    code={`import Link from "next/link";
+
+export function SiteNav() {
+  return (
+    <nav>
+      <Link href="/pricing">Pricing</Link>
+      {/* /docs is another app, so the browser should load it. */}
+      <a href="/docs">Docs</a>
+    </nav>
+  );
+}`}
+    lang="tsx"
+    title="app/site-nav.tsx"
+  />
+  <p>
+    From the docs to your app, write full URLs, as the config above does.
+    Blume adds the base to a root-relative link, so <code>/pricing</code>{" "}
+    becomes <code>/docs/pricing</code>, and a header link to a route Blume
+    doesn't serve draws a build warning. Full URLs in header actions, the call
+    to action, and footer links open in a new tab, because Blume treats every
+    full URL there as external. In Markdown and on the logo, they open in the
+    same tab. Blume's client-side router fetches a same-origin link before
+    swapping it in, and when the response isn't a Blume page, it falls back to
+    a normal page load, so these links land on your app.
+  </p>
+
+  <h2>Trailing slashes and canonical URLs</h2>
+  <p>
+    Every Blume page has one URL, without a trailing slash, and its canonical
+    tag, sitemap entry, and <code>llms.txt</code> link all use that form.
+    Next.js already agrees: by default it answers{" "}
+    <code>/docs/quickstart/</code> with a 308 to{" "}
+    <code>/docs/quickstart</code> before any rewrite runs, so the origin only
+    ever sees the slashless path. Leave <code>trailingSlash</code> unset in{" "}
+    <code>next.config.ts</code>. Set to <code>true</code>, it would redirect
+    every docs page to a URL its canonical tag doesn't name.
+  </p>
+  <p>
+    The origin must then serve <code>/docs/quickstart</code> from{" "}
+    <code>docs/quickstart/index.html</code> without redirecting. Vercel does
+    by default. A host that adds the slash loops with Next.js (see{" "}
+    <a href="#troubleshooting">Troubleshooting</a>).
+  </p>
+  <p>
+    Absolute URLs are <code>site</code>, then the base, then the route, so the
+    quickstart's canonical is{" "}
+    <code>https://www.acme.example/docs/quickstart</code>. The Open Graph
+    image, sitemap, and <code>llms.txt</code> follow the same rule. That's why{" "}
+    <code>site</code> is set by hand: on Vercel, Blume would otherwise detect
+    the docs project's own production domain, and every canonical would name
+    the origin. The copy readers can reach at the origin carries the same
+    canonical, pointing back to your domain.
+  </p>
+
+  <h2>Test through your domain</h2>
+  <p>
+    Run both apps locally first. <code>blume preview</code> serves the build
+    at <code>http://localhost:4321/docs</code>, the same paths the origin
+    serves:
+  </p>
+  <CodeBlock
+    code={`# In acme-docs
+npx blume build
+npx blume preview
+
+# In your Next.js app, in a second terminal
+DOCS_ORIGIN=http://localhost:4321 npm run dev`}
+    lang="bash"
+  />
+  <p>
+    Then save this script and run{" "}
+    <code>bash check-docs.sh http://localhost:3000</code> to check every kind
+    of path through the Next.js app:
+  </p>
+  <CodeBlock
+    code={`#!/usr/bin/env bash
+# Usage: ./check-docs.sh http://localhost:3000
+SITE="\${1:?Pass the origin to check, like https://www.acme.example}"
+
+check() {
+  code=$(curl -s -o /dev/null -w "%{http_code}" "$SITE$1")
+  if [ "$code" = "$2" ]; then echo "ok    $code $1"; else echo "FAIL  $code $1 (expected $2)"; fi
+}
+
+check /docs 200
+check /docs/ 308
+check /docs/quickstart 200
+check /docs/quickstart/ 308
+check /docs/guides/webhooks 200
+check /docs/quickstart.md 200
+check /docs/index.md 200
+check /docs/llms.txt 200
+check /docs/sitemap.xml 200
+check /docs/blume-search.json 200
+check /docs/no-such-page 404
+check /robots.txt 200
+
+# The first built asset the page loads.
+asset=$(curl -s "$SITE/docs/quickstart" | grep -o '/docs/_astro/[^"]*' | head -1)
+check "$asset" 200
+
+# Absolute URLs: each should start with https://www.acme.example/docs.
+curl -s "$SITE/docs/quickstart" | grep -o '<link[^>]*rel="canonical"[^>]*>'
+curl -s "$SITE/docs/sitemap.xml" | grep -o '<loc>[^<]*' | head -3
+curl -s "$SITE/robots.txt" | grep -i '^sitemap'`}
+    lang="bash"
+    title="check-docs.sh"
+  />
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Rows</th>
+        <th scope="col">What they prove</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>/docs</code>, a page, a nested page</td>
+        <td>The rewrite reaches the docs home and pages at any depth.</td>
+      </tr>
+      <tr>
+        <td>The two slashed paths</td>
+        <td>Next.js drops the trailing slash before proxying.</td>
+      </tr>
+      <tr>
+        <td>The <code>_astro</code> asset and search index</td>
+        <td>Styles, scripts, and search load under the base.</td>
+      </tr>
+      <tr>
+        <td><code>.md</code>, <code>llms.txt</code>, <code>sitemap.xml</code></td>
+        <td>The machine-readable files agents and crawlers fetch.</td>
+      </tr>
+      <tr>
+        <td><code>/docs/no-such-page</code></td>
+        <td>A miss is a real 404 with Blume's not-found page.</td>
+      </tr>
+      <tr>
+        <td><code>/robots.txt</code> and the last three lines</td>
+        <td>Your app owns the root, and every absolute URL names your domain.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Once both apps are deployed, run it again with{" "}
+    <code>https://www.acme.example</code>. On this static origin, agents fetch
+    the <code>.md</code> URLs directly: answering{" "}
+    <a href="/docs/discoverability/markdown#content-negotiation">Accept: text/markdown</a>{" "}
+    at the page's own URL needs a Vercel or Cloudflare server build.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>Every docs page fails with too many redirects</h3>
+  <p>
+    The docs host redirects <code>/docs/quickstart</code> to{" "}
+    <code>/docs/quickstart/</code>, and Next.js redirects it straight back.
+    Turn off the host's trailing-slash redirect, or use a host that serves a
+    folder's <code>index.html</code> at the slashless path, as Vercel does.
+  </p>
+  <h3>Docs pages 404 or load without styles</h3>
+  <p>
+    If every docs URL shows a not-found page, the origin is serving{" "}
+    <code>dist/</code> at its root instead of <code>out/</code>: check the
+    build command and output directory. If pages load but their CSS and
+    JavaScript 404, <code>deployment.base</code> isn't set, so the page asks
+    your app for <code>/_astro/</code> files it doesn't have. Either way, open{" "}
+    <code>/docs/quickstart</code> on the origin itself first: it should render
+    with styles before you debug the rewrite.
+  </p>
+  <h3>The docs show a Vercel login page</h3>
+  <p>
+    <code>DOCS_ORIGIN</code> names a deployment or branch URL. Vercel's
+    Standard Protection covers every URL except production domains, so the
+    rewrite gets the login page. Use the production domain from the docs
+    project's domain settings.
+  </p>
+  <h3>Docs requests redirect to your sign-in page</h3>
+  <p>
+    Your <code>proxy.ts</code> (formerly <code>middleware.ts</code>) runs
+    before rewrites, and its matcher covers <code>/docs</code>. Exclude it:
+  </p>
+  <CodeBlock
+    code={`export const config = {
+  matcher: [
+    "/((?!docs|api|_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt).*)",
+  ],
+};`}
+    lang="ts"
+    title="proxy.ts"
+  />
+  <h3>Canonical URLs name the wrong domain</h3>
+  <p>
+    If they name the origin, <code>site</code> isn't set and Blume detected
+    the docs project's domain. If they read <code>/docs/docs/</code>,{" "}
+    <code>site</code> includes the path. Set it to the bare origin,{" "}
+    <code>https://www.acme.example</code>, and rebuild.
+  </p>
+  <h3>blume audit passes a broken link to your app</h3>
+  <p>
+    <code>blume audit</code> reads only the docs build. A full URL on your
+    domain outside <code>/docs</code> names another app, so the audit leaves
+    it alone, and a typo in one passes. Check those links through your domain
+    instead. A root-relative link that ends up outside the base is still
+    reported as <code>BLUME_AUDIT_LINK_TO_BROKEN</code>, since nothing in the
+    build answers there, so write links to your app as full URLs.
+  </p>
+</GuidePage>

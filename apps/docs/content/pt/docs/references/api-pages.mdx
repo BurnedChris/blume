@@ -1,0 +1,75 @@
+---
+title: Páginas de API escritas à mão
+description: >-
+  Documente um endpoint em MDX, sem uma spec, e ainda tenha o método e o caminho, um painel Try it, amostras de requisição e exemplos fixados.
+---
+
+Nem toda API tem uma spec OpenAPI, e alguns endpoints ficam melhores quando escritos à mão. Uma página com frontmatter `api` documenta um endpoint: os [campos](/docs/content/components#api-fields) dela descrevem a requisição e a resposta, e o Blume usa esses campos para montar o resto de uma página de [referência OpenAPI](/docs/references/openapi). Isso inclui o método e o caminho no topo, um painel Try it e amostras de requisição numa coluna ao lado do conteúdo, e quaisquer [exemplos de requisição e resposta](/docs/content/components#request-and-response-examples) fixados logo abaixo.
+
+````mdx docs/users/create.mdx lineNumbers
+---
+title: Create a user
+api: POST /workspaces/{workspaceId}/users
+---
+
+Creates a user and sends them an invite.
+
+<ParamField path="workspaceId" type="string" required>
+  The workspace to add the user to.
+</ParamField>
+
+<ParamField body="email" type="string" required placeholder="ada@example.com">
+  The user's email address.
+</ParamField>
+
+<ParamField body="role" type="string" default="member">
+  One of `owner`, `admin`, or `member`.
+</ParamField>
+
+<ResponseField name="id" type="string" required>
+  The new user's ID.
+</ResponseField>
+
+<ResponseExample>
+
+```json 201
+{ "id": "usr_8f2k", "status": "invited" }
+```
+
+</ResponseExample>
+````
+
+`api` recebe um método HTTP e um caminho ou uma URL completa. Parâmetros de caminho são escritos entre chaves, como `{workspaceId}`, e preenchidos a partir do campo `path` correspondente. Uma URL completa, como `GET https://api.acme.com/v1/users`, é usada exatamente como está escrita. Um caminho é anexado ao [`api.server`](#site-defaults) do site.
+
+## O playground e as amostras [#the-playground-and-samples]
+
+Os `ParamField`s da página viram as entradas do painel Try it, do mesmo jeito que os parâmetros de uma operação numa spec. Campos `path`, `query` e `header` são parâmetros, e campos `body` formam um corpo JSON. Os campos aninhados de um campo (dentro do [`Expandable`](/docs/content/components#expandable) dele) viram as propriedades de um objeto. Um `type` `string[]` é um array, e um tipo que não seja JSON, como `enum<string>`, é enviado como string. O `default` de um campo preenche o corpo, e o `placeholder` dele é o valor de exemplo que aparece nas amostras. Um campo opcional do corpo que não tenha nenhum dos dois começa vazio e fica fora da requisição até o leitor preenchê-lo.
+
+Ao lado do painel, a página ganha amostras de requisição em cURL, JavaScript e Python. Se a página tiver seu próprio `RequestExample`, ele aparece no lugar delas.
+
+Mais duas chaves de frontmatter ajustam a página:
+
+- `authMethod` define como o endpoint faz a autenticação: `bearer`, `basic`, `key` (uma chave de API num header) ou `none`. Ela sobrescreve o [`api.auth`](#site-defaults) do site.
+- `playground` define o que a página mostra: `interactive` (o padrão) para o painel Try it e as amostras, `simple` só para as amostras ou `none` para nenhum dos dois. O método, o caminho e quaisquer exemplos continuam aparecendo.
+
+## Padrões do site [#site-defaults]
+
+`api` no `blume.config.ts` define o que todas as páginas de endpoint compartilham:
+
+```ts blume.config.ts lineNumbers
+export default defineConfig({
+  api: {
+    server: "https://api.acme.com/v1",
+    auth: { method: "key", name: "x-api-key" },
+    playground: { proxy: true },
+  },
+});
+```
+
+- `server` é a URL base à qual um caminho de `api` é anexado.
+- `auth` define como as requisições se autenticam, a menos que uma página defina `authMethod`. `method` pode ser `bearer`, `basic`, `key` ou `none`, e `name` é o header onde vai a chave de API (`x-api-key` por padrão). Sem `auth`, as páginas não enviam credenciais.
+- `playground` aceita os mesmos valores que a [opção playground](/docs/references/openapi#try-it-playground) de uma referência OpenAPI. `false` esconde o painel Try it em todas as páginas. `proxy` envia as requisições do painel por um proxy CORS, que pode ser uma URL sua ou `true` para usar o proxy embutido do Blume. O proxy embutido precisa de [saída de servidor](/docs/deployment#server-rendering) e só encaminha requisições para a origem do `server` e para as origens de URLs completas usadas no frontmatter `api`.
+
+O layout, os campos e os exemplos da página usam os mesmos componentes do resto da documentação. Por isso a [cópia em Markdown](/docs/discoverability/llms-txt) da página lista cada campo, e a busca indexa a página como qualquer outra.
+
+As chaves de frontmatter e as props dos componentes são as mesmas do Mintlify, então as páginas escritas para ele continuam funcionando sem nenhuma alteração.

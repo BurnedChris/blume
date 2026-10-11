@@ -34,6 +34,7 @@ export const ja: UIStringsOverride = {
     error: "申し訳ありません。問題が発生しました。",
     explainCode: "このコードを説明してください。",
     label: "質問する",
+    open: "アシスタントを開く",
     placeholder: "質問を入力…",
     rateLimited: "質問の回数が多すぎます。数分後にもう一度お試しください。",
     removeCode: "コードを削除",
@@ -49,6 +50,7 @@ export const ja: UIStringsOverride = {
   banner: { dismiss: "お知らせを閉じる" },
   changelog: {
     description: "製品のアップデートとリリースノート。",
+    empty: "変更履歴のエントリーはまだありません。",
     title: "変更履歴",
   },
   consent: {
@@ -70,6 +72,7 @@ export const ja: UIStringsOverride = {
     preview: "プレビュー",
     prop: "プロパティ",
     selectTab: "タブを選択",
+    selectView: "表示を選択",
     showLess: "表示を減らす",
     showMore: "もっと見る",
     stars: "スター",

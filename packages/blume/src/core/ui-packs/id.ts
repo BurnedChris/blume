@@ -34,6 +34,7 @@ export const id: UIStringsOverride = {
     error: "Maaf, terjadi kesalahan.",
     explainCode: "Jelaskan kode ini.",
     label: "Ajukan pertanyaan",
+    open: "Buka asisten",
     placeholder: "Ajukan pertanyaan…",
     rateLimited:
       "Anda sudah mengajukan banyak pertanyaan. Coba lagi dalam beberapa menit.",
@@ -49,6 +50,7 @@ export const id: UIStringsOverride = {
   banner: { dismiss: "Tutup pengumuman" },
   changelog: {
     description: "Pembaruan produk dan catatan rilis.",
+    empty: "Belum ada entri di log perubahan.",
     title: "Log perubahan",
   },
   consent: {
@@ -70,6 +72,7 @@ export const id: UIStringsOverride = {
     preview: "Pratinjau",
     prop: "Properti",
     selectTab: "Pilih tab",
+    selectView: "Pilih tampilan",
     showLess: "Tampilkan lebih sedikit",
     showMore: "Tampilkan lebih banyak",
     stars: "Bintang",

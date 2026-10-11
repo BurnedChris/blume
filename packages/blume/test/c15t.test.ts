@@ -6,6 +6,7 @@ import path from "node:path";
 import type { Script } from "@c15t/core";
 
 import { analyticsClientModule } from "../src/analytics/c15t.ts";
+import { CLICS_SCRIPT_SRC } from "../src/analytics/clics.ts";
 import * as analytics from "../src/analytics/index.ts";
 import {
   googleTagManager,
@@ -127,12 +128,87 @@ it("compiles selected SDK imports, custom script content and pageview ownership"
   ).toHaveLength(1);
 });
 
+/** The scripts a generated module exports, for adapters with no SDK import. */
+const compiledScripts = async (
+  adapters: Parameters<typeof analyticsClientModule>[0],
+  base?: string
+): Promise<Script[]> => {
+  const root = await mkdtemp(path.join(tmpdir(), "blume-sdk-"));
+  const modulePath = path.join(root, "scripts.mjs");
+  await writeFile(modulePath, analyticsClientModule(adapters, base));
+  // SAFETY: analyticsClientModule emits a `scripts` named export.
+  const { scripts } = (await import(modulePath)) as { scripts: Script[] };
+  await rm(root, { force: true, recursive: true });
+  return scripts;
+};
+
+it("compiles clics() to Clics' deferred tag with presence-only flags", async () => {
+  const [plain, flagged, unflagged] = await compiledScripts([
+    analytics.clics({ projectId: "project-id" }),
+    analytics.clics({
+      allowLocalhost: true,
+      disableOutboundLinks: true,
+      projectId: "project-id",
+    }),
+    analytics.clics({
+      allowLocalhost: false,
+      disableOutboundLinks: false,
+      projectId: "project-id",
+    }),
+  ]);
+  expect(plain).toEqual({
+    attributes: { "data-project-id": "project-id" },
+    category: "measurement",
+    defer: true,
+    id: "blume-clics-0",
+    src: CLICS_SCRIPT_SRC,
+  });
+  expect(flagged?.attributes).toEqual({
+    "data-allow-localhost": "",
+    "data-disable-outbound-links": "",
+    "data-project-id": "project-id",
+  });
+  expect(unflagged?.attributes).toEqual({ "data-project-id": "project-id" });
+});
+
+/** The `src` of each compiled `script()`, under the deployment `base`. */
+const scriptSrcs = async (base?: string): Promise<(string | undefined)[]> => {
+  const scripts = await compiledScripts(
+    [
+      script({ src: "/js/redirects.js" }),
+      // Written with the base already, as a site had to before.
+      script({ src: "/uv/js/written.js" }),
+      script({ src: "https://x.test/a.js" }),
+      script({ src: "//cdn.x.test/b.js" }),
+      script({ content: "window.inline = true" }),
+    ],
+    base
+  );
+  return scripts.map((entry) => entry.src);
+};
+
+it("serves a script() root-relative src under the deployment base", async () => {
+  expect(await scriptSrcs("/uv")).toEqual([
+    "/uv/js/redirects.js",
+    "/uv/js/written.js",
+    "https://x.test/a.js",
+    "//cdn.x.test/b.js",
+    undefined,
+  ]);
+  // Astro's `base` may carry a trailing slash; the root base adds nothing.
+  const [trailing] = await scriptSrcs("/uv/");
+  expect(trailing).toBe("/uv/js/redirects.js");
+  const [root] = await scriptSrcs();
+  expect(root).toBe("/js/redirects.js");
+});
+
 it("runs every legacy adapter through the actual c15t SDK and preserves loader options", async () => {
   const adapters = [
     analytics.adobe({ url: "https://cdn.example.com/launch.js" }),
     analytics.amplitude({ key: "amp" }),
     analytics.clarity({ id: "clarity" }),
     analytics.clearbit({ key: "clear" }),
+    analytics.clics({ projectId: "clics" }),
     analytics.cloudflare({ token: "cf" }),
     analytics.databuddy({ clientId: "buddy", track_hash: "true" }),
     analytics.fathom({ honor_dnt: "true", site: "site" }),
@@ -236,6 +312,7 @@ const setupConsent = async (consent: ReturnType<typeof c15t>) => {
       ?.hooks["astro:config:setup"]?.({
         addMiddleware: mock(),
         command: "build",
+        config: { base: "/" },
         injectRoute: mock(),
         injectScript,
         updateConfig,
@@ -356,10 +433,11 @@ it("wires the Astro client module, preserves callbacks, and suppresses legacy tr
       }).find((entry) => entry.name === "blume:consent");
       const updateConfig = mock();
       const injectScript = mock();
-      // SAFETY: this hook consumes only these three Astro setup fields.
+      // SAFETY: this hook consumes only these four Astro setup fields.
       // oxlint-disable-next-line no-await-in-loop -- Each hook is checked independently with its own captured config.
       await integration?.hooks["astro:config:setup"]?.({
         command,
+        config: { base: "/" },
         injectScript,
         updateConfig,
       } as never);
@@ -426,6 +504,7 @@ export default { scripts: [segment({ writeKey: "seg" })], pageviews: ["segment"]
       // SAFETY: these are the only Astro setup fields consumed by this hook.
       await integration?.hooks["astro:config:setup"]?.({
         command,
+        config: { base: "/" },
         injectScript,
         updateConfig,
       } as never);

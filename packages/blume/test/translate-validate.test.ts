@@ -65,6 +65,9 @@ describe("stripOuterFence", () => {
   });
 });
 
+const withSeo = (seo: string): string =>
+  SOURCE.replace("slug: install\n", `slug: install\nseo:\n${seo}`);
+
 describe("validateTranslation", () => {
   it("accepts a faithful translation and reassembles from the source data", () => {
     const agent = `---
@@ -124,6 +127,22 @@ npm install blume
     expect(parsed.data.title).toBe("Installation");
   });
 
+  it("leaves the source's seo.canonical out of the translation", () => {
+    const agent = (seo: string): string =>
+      withSeo(seo)
+        .replace("# Install\n", "# Installation\n")
+        .replace("Run the installer.", "Lancez l'installateur.");
+    // It names the source-language page, so the translation falls back to
+    // its own default canonical; the rest of `seo` stays.
+    const kept = "  canonical: https://acme.com/install\n  noindex: true\n";
+    expect(matter(okText(withSeo(kept), agent(kept))).data.seo).toStrictEqual({
+      noindex: true,
+    });
+    // An `seo` block holding only the canonical goes with it.
+    const only = "  canonical: https://acme.com/install\n";
+    expect(matter(okText(withSeo(only), agent(only))).data.seo).toBeUndefined();
+  });
+
   it("keeps the source value when the agent blanks a translatable field", () => {
     const agent = `---
 title: ""
@@ -171,6 +190,18 @@ npm install blume
     expect(
       failReason(SOURCE, '---\ntitle: "unclosed\n---\n# Installation\n')
     ).toContain("does not parse");
+  });
+
+  it("names the YAML error and its position when the frontmatter is unparseable", () => {
+    // A translated plain-scalar value that gained a `: ` (an em dash swapped
+    // for a colon) reads as a nested mapping and fails the whole parse.
+    const reason = failReason(
+      SOURCE,
+      "---\ntitle: Instalação\ndescription: Instale o Blume: depois execute.\n---\n# Installation\n\nOlá.\n"
+    );
+    expect(reason).toBe(
+      "frontmatter does not parse as YAML: bad indentation of a mapping entry (3:29)"
+    );
   });
 
   it("fails on an empty body", () => {
@@ -251,6 +282,7 @@ describe("prompts", () => {
     expect(prompt).toContain("sidebar.label");
     expect(prompt).toContain("seo.description");
     expect(prompt).toContain("Do not wrap it in a code fence");
+    expect(prompt).toContain("Keep the frontmatter valid YAML");
     expect(prompt).not.toContain("previous translation");
     expect(prompt.endsWith(SOURCE)).toBe(true);
   });

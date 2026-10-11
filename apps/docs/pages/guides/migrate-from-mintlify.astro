@@ -1,0 +1,403 @@
+---
+// Migrate from Mintlify: checked against the migration docs, the
+// blume-migrate skill (SKILL.md, references/mintlify.md), `blume migrate`
+// (cli/commands/migrate.ts, migrate/migrate.ts), and the deployment docs on
+// main. Not yet run end to end on a sample Mintlify repository.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("migrate-from-mintlify")}>
+  <p>
+    By the end of this guide, your Mintlify docs are a Blume project in your
+    own repository: the same MDX pages, navigation rebuilt as folders and tabs,
+    a redirect for every URL that moved, and a site deployed on a host you
+    choose. A coding agent does the conversion, and you review it.
+  </p>
+  <p>
+    This moves your content to Blume, an open-source docs framework. It doesn't
+    self-host Mintlify's own renderer, which Mintlify offers separately on its
+    Enterprise plan.
+  </p>
+
+  <h2>What carries over</h2>
+  <p>
+    Most of a Mintlify site maps straight across, because Blume reads the same
+    MDX and ships most of the same components. Cards, Steps, Columns, Frame,
+    Tooltip, Expandable, and the API field components render as they are. The
+    rest changes shape:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In Mintlify</th>
+        <th scope="col">In Blume</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>docs.json</code> (or <code>mint.json</code>)</td>
+        <td><code>blume.config.ts</code>, plus folders for navigation</td>
+      </tr>
+      <tr>
+        <td>Navigation groups</td>
+        <td>Folders, with a <code>meta.ts</code> where order or labels need it</td>
+      </tr>
+      <tr>
+        <td>Top-level tabs</td>
+        <td>Header tabs, one folder each</td>
+      </tr>
+      <tr>
+        <td>Anchors</td>
+        <td>Featured links, pinned above the sidebar</td>
+      </tr>
+      <tr>
+        <td>Navbar links and the primary button</td>
+        <td>
+          <code>navigation.actions</code> and <code>navigation.cta</code> in the
+          header
+        </td>
+      </tr>
+      <tr>
+        <td><code>&lt;Note&gt;</code>, <code>&lt;Tip&gt;</code>, <code>&lt;Warning&gt;</code></td>
+        <td><code>:::note</code>, <code>:::tip</code>, <code>:::warning</code></td>
+      </tr>
+      <tr>
+        <td><code>&lt;AccordionGroup&gt;</code> of <code>&lt;Accordion&gt;</code></td>
+        <td><code>&lt;Accordion&gt;</code> of <code>&lt;AccordionItem&gt;</code></td>
+      </tr>
+      <tr>
+        <td><code>&lt;Tabs&gt;</code></td>
+        <td><code>&lt;Tabs inline&gt;</code>, which keeps Mintlify's borderless look</td>
+      </tr>
+      <tr>
+        <td>Snippets in <code>/snippets</code></td>
+        <td><code>&lt;include&gt;</code> partials</td>
+      </tr>
+      <tr>
+        <td>Font Awesome icons</td>
+        <td>Lucide icons</td>
+      </tr>
+      <tr>
+        <td>Asset folders at the root, like <code>/images</code></td>
+        <td>The same folders under <code>public/</code>, at the same URLs</td>
+      </tr>
+      <tr>
+        <td>An OpenAPI spec in <code>docs.json</code></td>
+        <td>
+          <code>openapi()</code> in <code>reference</code>, with a page per operation
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Some things have no Blume equivalent, and the agent reports them rather than
+    faking them. The ones that matter most are Mintlify's web editor (in Blume,
+    pages are files in Git), reader authentication (use your host's password or
+    SSO protection instead), and Mintlify-hosted extras like its analytics
+    dashboard. The{" "}
+    <a href="/compare/mintlify">Blume vs Mintlify</a> page covers when staying
+    on Mintlify is the better call.
+  </p>
+
+  <h2>Before you start</h2>
+  <p>
+    The agent edits your repository in place, so start from a clean working
+    tree on a new branch. That way the whole migration is one diff you can
+    review, and throwing it away is one command.
+  </p>
+  <CodeBlock code="git switch -c migrate-to-blume" lang="bash" />
+  <p>
+    Next, save the URLs your site serves today. You'll check every one of them
+    against the new site later, so no link or bookmark breaks. Mintlify
+    publishes a sitemap, so pull the paths out of it and keep the list outside
+    the repository:
+  </p>
+  <CodeBlock
+    code={`curl -s https://docs.acme.example/sitemap.xml \\
+  | grep -o '<loc>[^<]*' \\
+  | sed -e 's#<loc>https://docs.acme.example##' -e 's#\\(.\\)/$#\\1#' \\
+  > ../old-urls.txt`}
+    lang="bash"
+  />
+  <p>
+    Replace <code>docs.acme.example</code> with your docs domain in both places.
+    The last expression drops any trailing slash, since Blume's URLs never end
+    in one. Finally, check that you have Node.js 22.19 or later, and that Claude
+    Code or Codex is installed and signed in.
+  </p>
+
+  <h2>Run the migration</h2>
+  <p>From the root of your Mintlify repository, run:</p>
+  <CodeBlock code="npx blume migrate mintlify --claude" lang="bash" />
+  <p>
+    To use Codex, swap <code>--claude</code> for <code>--codex</code>. On pnpm
+    12, run it with <code>pnpm dlx --allow-build=esbuild</code> instead of{" "}
+    <code>npx</code>, since pnpm 12 won't run esbuild's install script until you
+    approve it. Leave out <code>mintlify</code> and Blume detects the source
+    from your <code>docs.json</code> or <code>mint.json</code>. Run it with
+    neither flag and it only prints where the skill lives, for another agent
+    to use.
+  </p>
+  <p>
+    <code>blume migrate</code> converts nothing itself. It names the source,
+    then opens the agent in your terminal on the <code>blume-migrate</code>{" "}
+    skill that ships inside the package, pointed at the skill's Mintlify
+    reference. The agent runs interactively, so its edits go through its usual
+    permission prompts. Following the skill, it:
+  </p>
+  <ol>
+    <li>
+      Writes <code>blume.config.ts</code>, carrying over only what your{" "}
+      <code>docs.json</code> sets.
+    </li>
+    <li>Moves pages into folders and tabs that match your navigation.</li>
+    <li>
+      Runs a codemod over your frontmatter that maps Font Awesome icons to
+      Lucide and renames or drops keys Blume doesn't accept.
+    </li>
+    <li>
+      Rewrites components, turns snippets into includes, and moves assets into{" "}
+      <code>public/</code>.
+    </li>
+    <li>Adds a redirect for every URL that moves.</li>
+    <li>
+      Swaps Mintlify for Blume in <code>package.json</code>, or creates one if
+      the repository has none, then runs <code>blume build</code> and{" "}
+      <code>blume validate</code> until both pass.
+    </li>
+  </ol>
+  <p>
+    It finishes with a summary of what it migrated, dropped, and approximated.
+    Keep it: it's your checklist for the review.
+  </p>
+  <Callout type="info">
+    The codemod is deterministic, but the rest is an agent's judgment, so two
+    runs on the same repository can differ. That's why the next step is reading
+    the diff, not trusting it.
+  </Callout>
+
+  <h2>Review the diff</h2>
+  <p>
+    Start with <code>git diff --stat</code> for the shape of the change, run{" "}
+    <code>npx blume dev</code>, and work through it in this order.
+  </p>
+  <ul>
+    <li>
+      <strong>Config.</strong> <code>blume.config.ts</code> should hold only
+      what your <code>docs.json</code> set: the title, logo, colors as{" "}
+      <code>theme.accent</code>, redirects, and analytics. Anything left out
+      falls back to a Blume default on purpose.
+    </li>
+    <li>
+      <strong>Navigation.</strong> Click through every tab. Each Mintlify tab should be a header tab over its own
+      folder, anchors should sit at the top of the sidebar, and header links
+      should be in the header.
+    </li>
+    <li>
+      <strong>Pages.</strong> Spot-check a page from each group, especially any
+      that used snippets, accordions, or tabs.
+    </li>
+    <li>
+      <strong>Assets.</strong> Images should load from <code>public/</code> at
+      the same paths as before.
+    </li>
+    <li>
+      <strong>Dependencies.</strong> <code>package.json</code> should run{" "}
+      <code>blume dev</code> and <code>blume build</code>, with Mintlify gone and
+      Blume added.
+    </li>
+  </ul>
+
+  <h3>When a nested group flattens</h3>
+  <p>
+    The conversion most worth checking by hand is a group nested inside another
+    group. In Mintlify, that nesting often lives only in <code>docs.json</code>,
+    while the pages sit side by side in one folder:
+  </p>
+  <CodeBlock
+    code={`{
+  "group": "Webhooks",
+  "pages": [
+    "webhooks/overview",
+    {
+      "group": "Reference",
+      "pages": ["webhooks/events", "webhooks/signatures"]
+    }
+  ]
+}`}
+    lang="json"
+    title="docs.json"
+  />
+  <p>
+    Blume builds the sidebar from folders, so if those files stay where they
+    are, the Reference group disappears and its pages join Webhooks. The agent
+    should have either moved them into a subfolder or told you it didn't. To
+    keep the group, move the pages into a folder named after it and add a
+    redirect for each moved URL:
+  </p>
+  <CodeBlock
+    code={`mkdir -p webhooks/reference
+git mv webhooks/events.mdx webhooks/reference/events.mdx
+git mv webhooks/signatures.mdx webhooks/reference/signatures.mdx`}
+    lang="bash"
+  />
+  <CodeBlock
+    code={`redirects: [
+  { from: "/webhooks/events", to: "/webhooks/reference/events", status: 308 },
+  { from: "/webhooks/signatures", to: "/webhooks/reference/signatures", status: 308 },
+],`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    If you'd rather not move any URLs, an explicit{" "}
+    <a href="/docs/content/navigation">navigation.sidebar</a> can nest the pages
+    where they are. It replaces the whole generated sidebar, though, so moving
+    the files is usually the smaller change.
+  </p>
+
+  <h2>Check every old URL</h2>
+  <p>
+    With <code>npx blume dev</code> running, walk the list you saved and print
+    every old URL that no longer lands on a page:
+  </p>
+  <CodeBlock
+    code={`while read -r route; do
+  code=$(curl -sL -o /dev/null -w "%{http_code}" "http://localhost:4321$route")
+  [ "$code" = "200" ] || echo "$code $route"
+done < ../old-urls.txt`}
+    lang="bash"
+  />
+  <p>
+    Redirects count as passing, since <code>-L</code> follows them to the page.
+    For each path it prints, add a redirect to <code>blume.config.ts</code>.
+    Mintlify's permanent redirects map to <code>status: 308</code>, and a
+    pattern like <code>/beta/:slug*</code> covers a whole section in one entry.
+    Run the loop again until it prints nothing. For status codes, patterns, and
+    what each host does with them, see{" "}
+    <a href="/guides/documentation-url-migration-redirects">Move documentation URLs while preserving old links</a>.
+  </p>
+
+  <h2>Build and validate</h2>
+  <p>Stop the dev server, then build the site and check every link in it:</p>
+  <CodeBlock
+    code={`npx blume build
+npx blume validate --strict`}
+    lang="bash"
+  />
+  <p>
+    <code>blume build</code> fails on any page, route, or config error. Then{" "}
+    <code>blume validate --strict</code> checks every internal link, heading
+    anchor, and asset, and treats warnings as failures too. Add{" "}
+    <code>--external</code> to check outbound links as well. Fix what they
+    report rather than reaching for <code>--no-strict</code>, which builds
+    anyway and silently drops the pages that fail.
+  </p>
+
+  <h2>Deploy</h2>
+  <p>
+    Blume deploys to any host. This guide uses Vercel, because Blume detects the
+    site URL there and the <code>vercel()</code> adapter answers your redirects
+    with real HTTP status codes. Add it to your config:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { vercel } from "blume/deploy";
+
+export default defineConfig({
+  // ...everything the migration wrote
+  deployment: vercel(),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Commit, push the branch, and import the repository in Vercel. Set the
+    project's Node.js version to 22 or later. Every branch gets a preview
+    deployment, so the migration branch is live at a preview URL before
+    anything touches your domain.
+  </p>
+  <p>
+    Run the URL check from the last section against the preview URL. If your
+    previews are protected by Vercel Authentication, <code>curl</code> gets a
+    login page instead, so check a sample of old URLs in the browser now and
+    run the full loop against production after the switch.
+  </p>
+  <p>
+    For another host, see <a href="/docs/deployment">Deployment</a>. On a static
+    host, redirects are served as redirect pages plus the file your host reads,
+    so check which one yours uses.
+  </p>
+
+  <h2>Switch over</h2>
+  <p>
+    Merge the branch, add your docs domain to the Vercel project, and update the
+    DNS record that points it at Mintlify so it points at Vercel instead. Leave
+    the Mintlify project running until the new site has served traffic for a
+    while and the URL check passes on production. Rolling back is then a matter
+    of changing the DNS record back.
+  </p>
+  <p>
+    Your redirects carry old links and bookmarks to the new pages. Search
+    engines follow permanent redirects too, but they recrawl on their own
+    schedule, so submit the new <code>sitemap.xml</code> in Google Search
+    Console and give results time to catch up.
+  </p>
+
+  <h2>What you run now</h2>
+  <p>
+    Moving off a hosted platform means a few things become yours. Builds and
+    hosting run on your own account. If you turn on the{" "}
+    <a href="/docs/configuration/assistant">assistant</a>, it runs on a model
+    provider you choose and bills to your key. Analytics come from an adapter
+    you pick. Private docs rely on your host's protection. The{" "}
+    <a href="/pricing">pricing page</a> covers what that costs in practice, and{" "}
+    <a href="/customers/specific">Specific's story</a> shows one team's move
+    from Mintlify.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The build fails on a page's frontmatter</h3>
+  <p>
+    Blume's frontmatter schema is strict, so a key Mintlify accepted but Blume
+    doesn't is a build error. <code>BLUME_FRONTMATTER_INVALID</code> names the
+    page and key: map it to a Blume key or remove it. The codemod handles the
+    common ones, so these are usually custom keys.
+  </p>
+  <h3>An icon is missing</h3>
+  <p>
+    An icon name Lucide doesn't have renders nothing. Navigation icons warn with{" "}
+    <code>BLUME_UNKNOWN_ICON</code>, but an icon on a component like a card
+    fails silently. Look each name up on{" "}
+    <a href="https://lucide.dev/icons">lucide.dev</a>.
+  </p>
+  <h3>The API reference is missing, or the build can't load the spec</h3>
+  <p>
+    The reference doesn't add a header tab on its own: add a tab to{" "}
+    <code>navigation.tabs</code> that points at its route. If the spec is a URL
+    that can't be fetched, <code>blume build</code> fails with{" "}
+    <code>BLUME_OPENAPI_UNAVAILABLE</code>, and <code>blume dev</code> warns
+    and leaves the reference out. Download the spec into the repository and
+    point <code>spec</code> at the file, so a build never depends on the
+    network.
+  </p>
+  <h3>Links to API endpoints 404</h3>
+  <p>
+    Blume builds operation URLs from the tag and operation ID, like{" "}
+    <code>/api-reference/messages/get-message</code>, which rarely match
+    Mintlify's. <code>blume validate</code> catches internal links to fix;
+    add redirects for the old endpoint URLs other sites link to.
+  </p>
+  <h3>A redirect fails the build</h3>
+  <p>
+    <code>BLUME_REDIRECT_MATCHES_PAGE</code> means a redirect pattern also
+    covers a page you kept. Narrow the pattern so it only matches the URLs that
+    moved. As a warning, which fails <code>blume validate --strict</code>, it
+    means an exact redirect starts at a page you kept: the redirect takes the
+    URL over, so the page never publishes. Delete the page if it moved, or
+    remove the redirect.
+  </p>
+</GuidePage>

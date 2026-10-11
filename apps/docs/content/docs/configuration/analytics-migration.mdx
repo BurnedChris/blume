@@ -101,6 +101,7 @@ All subpaths below begin with `blume/integrations/`. These mappings preserve the
 | --- | --- | --- |
 | `adobe()` | `adobe-analytics`: `adobeAnalytics()` | `url` → `scriptUrl`. |
 | `amplitude()` | `amplitude`: `amplitude()` | `key` → `apiKey`; remaining options → `initOptions`. Preserve `autocapture: true` and `fetchRemoteConfig: true` unless you overrode them. |
+| `clics()` | Custom script object | No helper yet. Use `src: "https://clics.dev/tracker.js"`, `defer: true`, `category: "measurement"`, a unique `id`, and `attributes: { "data-project-id": projectId }`; add `"data-allow-localhost": ""` or `"data-disable-outbound-links": ""` for the matching options. |
 | `clarity()` | `microsoft-clarity`: `clarity()` | Keep `id`. |
 | `clearbit()` | `clearbit`: `clearbit()` | `key` → `publishableKey`. |
 | `cloudflare()` | `cloudflare-web-analytics`: `cloudflareWebAnalytics()` | Keep `token` and supported beacon options such as `spa`. |
@@ -119,7 +120,7 @@ All subpaths below begin with `blume/integrations/`. These mappings preserve the
 | `posthog()` | `posthog`: `posthog()` | `key` → `id`, `host` → `apiHost`; remaining options → `initOptions`. Preserve host, defaults, and pageview ownership as above. |
 | `segment()` | `segment`: `segment()` | `key` → `writeKey`; remaining load options → `loadOptions`. A custom `cdn` becomes `scriptUrl` as below. Add `segment` to `pageviews`. |
 | `vercel()` | `vercel-analytics`: `vercelAnalytics()` | `scriptSrc` → `scriptUrl`; retain supported options such as `mode`, `debug`, `endpoint`, `dsn`, and `disableAutoTrack`. For the legacy production loader, set `scriptUrl: "/_vercel/insights/script.js"`. Omit it for the SDK's hosted/debug loader. Register once. |
-| `script()` | Custom script object | `content` → `textContent`; keep `src` or inline content, `attributes`, and `strategy`. Add a unique `id` and `category: "measurement"`. |
+| `script()` | Custom script object | `content` → `textContent`; keep `src` or inline content, `attributes`, and `strategy`. Add a unique `id` and `category: "measurement"`. A root-relative `src` for a file in `public/` needs the `deployment.base` prefix that `script()` added for you. |
 
 For Mixpanel, put `api_host` inside `initOptions`: US uses `https://api-js.mixpanel.com`, EU uses `https://api-eu.mixpanel.com`, and India uses `https://api-in.mixpanel.com`. Preserve the legacy `track_pageview: "url-with-path-and-query-string"` unless you already override it. Your explicitly supplied initialization options take precedence over those defaults.
 

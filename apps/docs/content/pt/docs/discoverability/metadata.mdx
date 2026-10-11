@@ -35,6 +35,23 @@ seo:
 ---
 ```
 
+## Suas próprias tags [#your-own-tags]
+
+Para qualquer coisa para a qual o Blume não tem uma opção, adicione tags sob `seo.metatags` e todas as páginas vão carregá-las, incluindo páginas personalizadas e referências de API. Isso serve para tokens de verificação de site do Google, Bing ou Facebook, um `theme-color` ou um banner de app:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  metatags: {
+    "google-site-verification": "abc123",
+    "msvalidate.01": "def456",
+    "theme-color": "#0b5fff",
+    "apple-itunes-app": "app-id=123456789",
+  },
+}
+```
+
+Cada chave é o nome da tag e cada valor, o seu conteúdo. As famílias do Open Graph (`og:`, `fb:`, `article:` e as demais) são renderizadas com `property`, como o protocolo as nomeia, e todo o resto com `name`. As tags que o próprio Blume escreve, listadas no topo desta página, não podem ser definidas aqui, então uma página nunca carrega dois valores para a mesma tag. O build informa qual opção controla cada uma: `og:image` vem de [`seo.og`](/docs/discoverability/open-graph) ou do `seo.image` de uma página, e `robots` vem do `seo.noindex` de uma página.
+
 ## Sobrescritas por página [#per-page-overrides]
 
 Sobrescreva qualquer uma das outras tags por página com o frontmatter `seo`:

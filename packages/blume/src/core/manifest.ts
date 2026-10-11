@@ -1,4 +1,5 @@
 import { mountBasePath } from "./base-path.ts";
+import { isHiddenPage } from "./hidden-pages.ts";
 import { localizeRoute, resolveFallbackLocale } from "./i18n.ts";
 import type { ResolvedConfig } from "./schema.ts";
 import type {
@@ -52,10 +53,11 @@ export const MANIFEST_VERSION = 1;
  */
 export const contentIndexable = (
   page: PageRecord,
-  config: ResolvedConfig
+  config: ResolvedConfig,
+  graph: ContentGraph
 ): boolean =>
   !page.meta.search.exclude &&
-  (!page.meta.sidebar.hidden || config.search.indexing.includeHiddenPages);
+  (!isHiddenPage(page, graph) || config.search.indexing.includeHiddenPages);
 
 /**
  * Fallback materialization: render the fallback locale's content at the
@@ -66,9 +68,10 @@ export const contentIndexable = (
 /**
  * The description a page's `<head>` emits — `seo.description` over the front
  * matter `description` — mirrored onto its route so the OG card's subtitle
- * matches the page's `og:description`.
+ * matches the page's `og:description`, and the summary page indexes like
+ * `llms.txt` give it.
  */
-const routeDescription = (page: PageRecord): string | undefined =>
+export const metaDescription = (page: PageRecord): string | undefined =>
   page.meta.seo.description ?? page.description;
 
 const buildFallbackRoutes = (
@@ -121,18 +124,19 @@ const buildFallbackRoutes = (
         alternates: alternatesByKey.get(key) ?? [],
         collection: source.collection ?? "docs",
         contentType: source.contentType,
-        description: routeDescription(source),
+        description: metaDescription(source),
         draft: source.meta.draft,
         editUrl: source.editUrl,
         entryId: source.entryId ?? source.source.ref,
         fallback: true,
-        hidden: source.meta.sidebar.hidden,
+        hidden: isHiddenPage(source, graph),
         id: source.id,
         indexable: false,
         lastModified: source.lastModified,
         locale: code,
         monolingual: source.monolingual,
         path,
+        published: source.published,
         source: source.source,
         sourcePath: source.sourcePath,
         title: source.title,
@@ -187,17 +191,18 @@ export const buildManifest = (options: {
     alternates: alternatesByKey.get(page.translationKey) ?? [],
     collection: page.collection ?? "docs",
     contentType: page.contentType,
-    description: routeDescription(page),
+    description: metaDescription(page),
     draft: page.meta.draft,
     editUrl: page.editUrl,
     entryId: page.entryId ?? page.source.ref,
-    hidden: page.meta.sidebar.hidden,
+    hidden: isHiddenPage(page, graph),
     id: page.id,
-    indexable: searchEnabled && contentIndexable(page, config),
+    indexable: searchEnabled && contentIndexable(page, config, graph),
     lastModified: page.lastModified,
     locale: page.locale,
     monolingual: page.monolingual,
     path: page.route,
+    published: page.published,
     source: page.source,
     sourcePath: page.sourcePath,
     title: page.title,

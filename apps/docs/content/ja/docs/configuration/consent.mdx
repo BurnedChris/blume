@@ -1,0 +1,101 @@
+---
+title: Cookie の同意
+description: >-
+  アナリティクスを実行する前に読者の同意を得ます。Blume 独自のバナー、または Osano や Ethyca などのホスト型同意管理ツールを、blume.config.ts のアダプターとして設定します。
+---
+
+`blume.config.ts` で `consent` を設定すると、[アナリティクス](/docs/configuration/analytics)を実行する前に読者の同意を求めることができます。`blume/consent` のアダプターを 1 つ指定します。Blume 独自のバナーか、すでに利用しているホスト型の同意管理ツールのどちらかです。
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { googleAnalytics, posthog } from "blume/analytics";
+import { native } from "blume/consent";
+
+export default defineConfig({
+  analytics: [
+    googleAnalytics({ id: "G-XXXXXXXXXX" }),
+    posthog({ key: "phc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }),
+  ],
+  consent: native({ policy: "/privacy" }),
+});
+```
+
+`consent` を設定すると、すべてのアナリティクスアダプターが待機状態になります。タグはページに含まれますが、読者がアナリティクスを許可するまでは実行されず、許可されると指定した順に実行されます。拒否した読者はタグを一切読み込みません。また、回答の送信先がなくなるため、[ページ評価](/docs/configuration#page-feedback)とそのコメント欄も表示されません。Vercel Web Analytics は、そのコンポーネントが Blume で保留できるタグではないため、どちらの場合も読み込まれます。ただし、読者がアナリティクスを許可するまでは何も送信しません。
+
+:::note
+同意の確認はオプトインです。`consent` を設定しない場合、アナリティクスはこれまでどおりページの読み込み時に実行されます。
+:::
+
+## アダプター [#adapters]
+
+| アダプター | 同意管理ツール                       | 必須                     |
+| ---------- | ------------------------------------ | ------------------------ |
+| `native()` | [Blume 独自のバナー](#blumes-banner) | —                        |
+| `osano()`  | [Osano](#osano)                      | `customerId`, `configId` |
+| `ethyca()` | [Ethyca](#ethyca)                    | `privacyCenter`          |
+
+## Blume のバナー [#blumes-banner]
+
+`native()` は、読者が回答するまでページ下部に小さなカードを表示します。**同意する** と **拒否する** が横に並んでいるため、拒否も同意と同じくらい簡単に行えます。回答は読者のブラウザーに保存され、一度回答するとバナーは再び表示されません。
+
+```ts blume.config.ts lineNumbers
+consent: native({
+  policy: "/privacy", // optional: links the banner to your privacy policy
+}),
+```
+
+`policy` にはページのルートまたは完全な URL を指定します。バナーのテキストはすべての組み込み言語に翻訳されています。文言を変更するには、`i18n.ui` で `consent` の [UI 文字列](/docs/content/i18n#translated-ui)（`message`、`accept`、`decline`、`policy`、`settings`）を上書きしてください。
+
+バナーは `blume dev` でも動作するため、執筆中に表示を確認できます。アナリティクス自体は本番ビルドでのみ読み込まれます。
+
+## Osano
+
+`osano()` は [Osano Cookie Consent](https://www.osano.com) を読み込み、Osano のダッシュボードで設定したバナーとドロワーを表示します。Blume は、Osano から読者のアナリティクスへの同意が通知されるとアナリティクスを実行し、読者が選択を変更するたびにもそれに従います。どちらの ID も、Osano から提供されるスクリプトタグ `https://cmp.osano.com/<customerId>/<configId>/osano.js` から取得できます。
+
+```ts blume.config.ts lineNumbers
+import { osano } from "blume/consent";
+
+consent: osano({ customerId: "AzZdRbSIoEzZU2", configId: "7b9e2f4a-…" }),
+```
+
+地域ごとに何を同意とみなすかは、Osano のダッシュボードで選択したコンプライアンスモードに従って Osano が判断します。
+
+## Ethyca
+
+`ethyca()` は、プライバシーセンターから [Ethyca の Fides](https://www.ethyca.com) 同意管理ツールを読み込み、Fides で設定したバナーとモーダルを表示します。Blume は、読者のアナリティクスの通知が有効になった時点でアナリティクスを実行します。有効とは、オプトインしている場合、オプトアウトしていない場合、または確認のみを求める通知である場合のことです。
+
+```ts blume.config.ts lineNumbers
+import { ethyca } from "blume/consent";
+
+consent: ethyca({
+  privacyCenter: "https://privacy.example.com",
+  propertyId: "FDS-XXXXXX", // optional: which Fides property to load
+  notice: "analytics", // optional: the notice key that covers analytics
+}),
+```
+
+`notice` のデフォルトは `analytics` です。アナリティクス用の Fides の通知に別のキーを使用している場合に設定してください。
+
+アナリティクスと同様に、Osano と Fides は本番ビルドでのみ読み込まれるため、`blume dev` でテストしても同意記録は作成されません。`blume build` と `blume preview` でプレビューしてください。
+
+## 回答の変更 [#changing-an-answer]
+
+`consent` を設定すると、サイトのフッターに **Cookie 設定** リンクが表示されます。このリンクをクリックすると、Blume のバナー、またはホスト型同意管理ツールの設定画面が再び開きます。フッターを独自の [`Footer`](/docs/configuration/customization#layout-slots) に置き換える場合は、任意の要素に `data-blume-consent-open` 属性を付けると、その要素がリンクとして機能します。
+
+```html
+<button data-blume-consent-open type="button">Cookie settings</button>
+```
+
+アナリティクスを許可した後で取り消した読者に対しては、ページが再読み込みされます。すでに開始されたスクリプトを停止するには、これが唯一の方法です。それ以降、アナリティクスは無効のままになります。
+
+## 独自のスクリプト [#your-own-scripts]
+
+独自のスクリプトも同じ方法で保留できます。`type="text/plain"` と `data-blume-consent="analytics"` を指定すると、読者がアナリティクスを許可したときに実行されます。回答に応じて独自の処理を行うには、`window` で `blume:consent` イベントをリッスンします。このイベントの `detail.analytics` が読者の選択です。`window.blumeConsent.analytics` には現在の選択が格納されます。同意管理ツールが回答するまでは `null` で、その後は `true` または `false` になります。
+
+```js
+window.addEventListener("blume:consent", (event) => {
+  if (event.detail.analytics) {
+    // start something that needs consent
+  }
+});
+```

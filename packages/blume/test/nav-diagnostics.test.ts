@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  validateMcpClientIcons,
   validateNavIcons,
   validateNavStructure,
   validateNavTargets,
@@ -14,6 +15,51 @@ const nav = (over: Partial<Navigation> = {}): Navigation => ({
   sidebar: [],
   tabs: [],
   ...over,
+});
+
+describe("validateMcpClientIcons", () => {
+  const command = "copilot mcp add --transport http {name} {url}";
+
+  it("warns about a custom client's unknown icon, naming its label in the default locale", () => {
+    const result = validateMcpClientIcons(
+      [
+        "claude-code",
+        {
+          command,
+          icon: "not-a-real-icon",
+          label: { de: "Copilot-CLI-Befehl kopieren", en: "Copy Copilot CLI" },
+        },
+      ],
+      "en"
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]?.code).toBe("BLUME_UNKNOWN_ICON");
+    expect(result[0]?.message).toContain("not-a-real-icon");
+    expect(result[0]?.message).toContain('MCP client "Copy Copilot CLI"');
+  });
+
+  it("names a plain label as written, and a map's first entry without a default locale", () => {
+    expect(
+      validateMcpClientIcons([
+        { command, icon: "nope-one", label: "Copy Copilot CLI" },
+        { command, icon: "nope-two", label: { de: "Kopieren", en: "Copy" } },
+      ]).map(({ message }) => message)
+    ).toStrictEqual([
+      expect.stringContaining('MCP client "Copy Copilot CLI"'),
+      expect.stringContaining('MCP client "Kopieren"'),
+    ]);
+  });
+
+  it("accepts built-in clients, known and asset icons, and no icon", () => {
+    expect(
+      validateMcpClientIcons([
+        "codex",
+        { command, icon: "terminal", label: "Known" },
+        { command, icon: "./copilot.svg", label: "Image" },
+        { command, label: "Default" },
+      ])
+    ).toEqual([]);
+  });
 });
 
 describe("validateSearchPopularIcons", () => {
@@ -203,6 +249,24 @@ describe("validateNavTargets", () => {
     expect(result).toEqual([]);
   });
 
+  it("checks a tab's href, not its path, when it has one", () => {
+    // A root tab with no root index links to its href (declared, or the
+    // section's first page navigation resolved), so `/` itself needn't exist.
+    expect(
+      validateNavTargets(
+        nav({ tabs: [{ href: "/welcome", label: "Docs", path: "/" }] }),
+        new Set(["/welcome", "/guides/setup"])
+      )
+    ).toEqual([]);
+    const result = validateNavTargets(
+      nav({ tabs: [{ href: "/gone", label: "Docs", path: "/docs" }] }),
+      new Set(["/docs/intro"])
+    );
+    expect(result.map((d) => d.message)).toEqual([
+      expect.stringContaining("points to /gone"),
+    ]);
+  });
+
   it("warns when a selector item points at a route with no pages", () => {
     const result = validateNavTargets(
       nav({
@@ -239,6 +303,24 @@ describe("validateNavTargets", () => {
     );
     expect(result).toHaveLength(1);
     expect(result[0]?.message).toContain("/missing");
+  });
+
+  it("accepts a featured link to a file the site serves beside its pages", () => {
+    const served = new Set(["/spec.pdf", "/llms.txt"]);
+    const result = validateNavTargets(
+      nav({
+        featured: [
+          { href: "/spec.pdf", label: "Spec" },
+          { href: "/llms.txt#top", label: "llms.txt" },
+          { href: "/gone.pdf", label: "Gone" },
+        ],
+      }),
+      new Set(["/docs"]),
+      (path) => served.has(path)
+    );
+    expect(result.map((d) => d.message)).toStrictEqual([
+      'Navigation entry "Gone" points to /gone.pdf, but no page matches it.',
+    ]);
   });
 
   it("checks header actions and the cta like featured links", () => {

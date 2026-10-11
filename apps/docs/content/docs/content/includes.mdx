@@ -23,7 +23,7 @@ Here it is live — this next callout is spliced from a shared snippet:
 
 ## Partials
 
-Any file whose name (or folder) starts with an underscore is excluded from routing, navigation, search, and sitemaps by default — that convention is the natural home for shared snippets:
+Any file whose name (or folder) starts with an underscore is excluded from routing, navigation, search, and sitemaps — that convention is the natural home for shared snippets. Patterns you add to [`content.exclude`](/docs/configuration#content) add to this rule rather than replacing it; to publish underscore files after all, add `"!**/_*"` to `exclude`:
 
 ```text
 docs/
@@ -37,7 +37,9 @@ docs/
 
 A partial is a normal Markdown or MDX file. Its front matter is stripped when spliced (the including page's front matter wins), and everything else — callouts, code fences, components, math — renders exactly as it would inline. Partials can include other partials; a circular include is reported as an error.
 
-Relative image references inside a partial keep working: they're rebased onto the including page, so a colocated `![diagram](./diagram.png)` next to the partial resolves wherever the partial is spliced.
+Link reference definitions (`[pep 508]: https://peps.python.org/pep-0508/`) cross includes too, so a partial can hold a site's shared link definitions: the page and its other partials can cite a partial's (`[PEP 508]`), and a partial can cite the page's. When the page and a partial both define a label, each uses its own.
+
+Relative image references inside a partial keep working: they're rebased onto the including page, so a colocated `![diagram](./diagram.png)` or `<Card img="./cover.png">` next to the partial resolves wherever the partial is spliced. An image's path is rebased in whatever form it's written: in angle brackets (`![diagram](<./my diagram.png>)`), with escaped parentheses, or followed by a title in any of its quotes. A link to another file next to the partial (`[spec](./spec.pdf)`, or an `<img src>` or `<a href>` naming one) moves with it too. A link to a page resolves from the including page, as if it were written there.
 
 Editing a partial while `blume dev` is running reloads every page that includes it.
 
@@ -55,7 +57,7 @@ Upgrade to the **{{plan}}** plan to use {{feature}}.
 </include>
 ```
 
-A prop applies to the included file and to anything it includes in turn, and takes precedence over a site-wide variable with the same name. Every attribute except `lang` and `meta` is a prop; attribute values are plain text.
+A prop applies to the included file and to anything it includes in turn, and takes precedence over a site-wide variable with the same name. Every attribute except `lang` and `meta` is a prop; attribute names are lowercase, and values are quoted plain text. Props reach Markdown and MDX partials only: a `{{name}}` in an included [code file](#including-code-files) isn't replaced by a prop.
 
 ## Including code files
 
@@ -76,6 +78,8 @@ Include statements must occupy their own line — they're block-level, not inlin
 Targets must live inside your content root: a file outside it would be silently missing from version snapshots and ejected projects, so `blume` reports `BLUME_INCLUDE_OUTSIDE_ROOT` instead of splicing it. A target that doesn't exist is `BLUME_INCLUDE_NOT_FOUND`, and a loop of includes is `BLUME_INCLUDE_CYCLE` — all three fail `blume build` (pass `--no-strict` to build anyway) and appear in `blume validate`.
 
 Broken links inside a partial are reported against the partial file, not the pages that splice it, so you fix them where they live.
+
+A partial is read in the including page's format, so a `.md` partial that an `.mdx` page includes is read as MDX. MDX has no HTML comments, so the partial's `<!-- … -->` comments are spliced as MDX comments (`{/* … */}`) and stay hidden. Other HTML there has to be valid JSX: an `<img …>` or `<br>` without a closing slash takes in everything after it in the partial, with no error. Blume warns about it as `BLUME_MDX_UNCLOSED_ELEMENT` at the partial's line; close it as `<br />`. Anything else in the partial that MDX can't parse once it's spliced in, like a stray `{`, is a [`BLUME_MDX_SYNTAX`](/docs/content#markdown-and-mdx) warning at the partial's line, and when it fails the build, the build reports it there too, not at the page that includes it.
 
 :::note
 Partials are shared across locales and are not translated by `blume translate` — keep partials language-neutral (code, tables, diagrams), or create per-locale partials and include them from each locale's pages.

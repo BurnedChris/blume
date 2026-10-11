@@ -1,12 +1,15 @@
+import { Server } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 
-import type { AstroIntegration } from "astro";
+import type { AstroConfig, AstroIntegration } from "astro";
 import { join, relative, resolve } from "pathe";
 
 import { loadEnvFiles } from "../cli/env.ts";
+import { normalizeBasePath } from "../core/base-path.ts";
 import type { CustomPageRoute } from "../core/custom-pages.ts";
 import { enrichDiagnostic } from "../core/diagnostics.ts";
+import { POWERED_BY_HEADERS } from "../core/powered-by.ts";
 import { scanProject } from "../core/project-graph.ts";
 import type { BlumeProject } from "../core/project-graph.ts";
 import {
@@ -14,6 +17,11 @@ import {
   requestPath,
 } from "../core/redirect-patterns.ts";
 import type { CompiledRedirect } from "../core/redirect-patterns.ts";
+import {
+  answerRequestsFirst,
+  publicFolder,
+  trailingSlashAnswer,
+} from "../core/static-host.ts";
 import type { Diagnostic } from "../core/types.ts";
 import { publishBuildArtifacts } from "../deploy/artifacts.ts";
 import type { ArtifactLogger } from "../deploy/artifacts.ts";
@@ -146,23 +154,33 @@ export const publishBuildProject = (project: BlumeProject | null): void => {
  * the Astro root recorded on `astro:config:done`. Scan diagnostics surface as
  * warnings — there is no `--strict` to honor here, and the build itself has
  * already succeeded. `null` when nothing asked for a scan.
+ *
+ * The app's runtime settings were baked in at eject, `poweredBy` among them
+ * (the integration option that registers the runtime middleware), so the
+ * artifacts follow that option rather than the config file: one switch puts
+ * `X-Powered-By` on the server-rendered responses and in `_headers` alike.
  */
 const scanForArtifacts = async (
   astroRoot: URL | null,
-  artifactsRoot: string | undefined,
+  options: Pick<BlumeIntegrationOptions, "buildArtifactsRoot" | "poweredBy">,
   logger: ArtifactLogger
 ): Promise<BlumeProject | null> => {
-  if (!(astroRoot && artifactsRoot)) {
+  if (!(astroRoot && options.buildArtifactsRoot)) {
     return null;
   }
-  const root = resolve(fileURLToPath(astroRoot), artifactsRoot);
+  const root = resolve(fileURLToPath(astroRoot), options.buildArtifactsRoot);
   // Remote sources read their tokens from the environment during the scan.
   loadEnvFiles(root);
   const project = await scanProject(root, { mode: "build" });
   for (const diagnostic of project.diagnostics) {
     logger.warn(`[${diagnostic.code}] ${diagnostic.message}`);
   }
-  return project;
+  return options.poweredBy === undefined
+    ? project
+    : {
+        ...project,
+        config: { ...project.config, poweredBy: options.poweredBy },
+      };
 };
 
 /**
@@ -318,6 +336,12 @@ export type BlumePageRoute = CustomPageRoute;
 export interface BlumeIntegrationOptions {
   pages: BlumePageRoute[];
   /**
+   * Whether responses name Blume in `X-Powered-By` (see
+   * `core/powered-by.ts`): the dev server's, and the server-rendered ones of
+   * a build, through the runtime middleware. Defaults to `true`.
+   */
+  poweredBy?: boolean;
+  /**
    * Page routes that have a raw-Markdown variant (the content manifest). The
    * hidden runtime leaves this out: the CLI publishes the live set through
    * `publishDevNegotiation` on every regeneration, so a route change never
@@ -342,10 +366,11 @@ export interface BlumeIntegrationOptions {
    */
   buildArtifactsRoot?: string;
   /**
-   * The pattern redirects (`/beta/:slug*`), compiled against base-less
-   * request paths (see `core/redirect-patterns.ts`). Astro's own `redirects`
-   * carry only the exact ones, since it can't prerender a pattern's pages, so
-   * the dev server answers these itself.
+   * Every configured redirect, compiled against base-less request paths
+   * (see `compileEveryRedirect`), for the dev server to answer itself.
+   * Astro's own `redirects` carry only the exact ones, since it can't
+   * prerender a pattern's pages, and its dev handler answers one whose
+   * destination `[...slug]` serves with a `301` whatever its status.
    */
   redirects?: CompiledRedirect[];
 }
@@ -398,10 +423,12 @@ const negotiateMarkdown =
       if (homeLinkHeader && isHomeUrl(req.url)) {
         res.setHeader("Link", homeLinkHeader);
       }
-      if (prefersMarkdown(req.headers.accept)) {
-        const variant = markdownVariantUrl(req.url, contentRoutes);
-        if (variant) {
-          res.setHeader("Vary", "Accept");
+      const variant = markdownVariantUrl(req.url, contentRoutes);
+      if (variant) {
+        // Both answers at a negotiated URL depend on `Accept`, the HTML one
+        // too, so a cache never hands one client's variant to the other.
+        res.setHeader("Vary", "Accept");
+        if (prefersMarkdown(req.headers.accept)) {
           req.url = variant;
         }
       }
@@ -410,11 +437,11 @@ const negotiateMarkdown =
   };
 
 /**
- * Answer a pattern redirect in dev with its configured status, the way the
- * server wrappers do in a build. Request URLs arrive base-less (see
- * {@link negotiateMarkdown}), and the patterns were based to match.
+ * Answer a configured redirect in dev with its status, the way the server
+ * wrappers do in a build. Request URLs arrive base-less (see
+ * {@link negotiateMarkdown}), and the redirects were based to match.
  */
-const answerPatternRedirects =
+const answerRedirects =
   (redirects: readonly CompiledRedirect[]) =>
   (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     const answer = matchCompiledRedirect(redirects, requestPath(req.url ?? ""));
@@ -425,6 +452,24 @@ const answerPatternRedirects =
     res.writeHead(answer[1], { Location: answer[0] });
     res.end();
   };
+
+/**
+ * Name Blume in `X-Powered-By` on every dev response, as the deployed site
+ * does. It goes on the Node response before anything answers, so the
+ * redirects, the `public/` files Vite serves, and the rendered pages all
+ * carry it, and a page or project middleware that sets its own value
+ * replaces it.
+ */
+const identifyBlume = (
+  _req: IncomingMessage,
+  res: ServerResponse,
+  next: () => void
+): void => {
+  for (const [name, value] of Object.entries(POWERED_BY_HEADERS)) {
+    res.setHeader(name, value);
+  }
+  next();
+};
 
 /** The `.d.ts` the integration injects for the `blume:*` virtual modules. */
 const MODULE_TYPES_FILE = "modules.d.ts";
@@ -454,16 +499,15 @@ export const blumeIntegration = (
   // The Astro root, kept for the build-artifacts scan: `astro:build:done`
   // receives no config.
   let astroRoot: URL | null = null;
+  // What the dev server's trailing-slash handling needs from the config
+  // (see `core/static-host.ts`): the base the URLs carry, and `public/`.
+  let staticHost: Pick<AstroConfig, "base" | "publicDir"> | null = null;
   return {
     hooks: {
       "astro:build:done": async ({ dir, logger }) => {
         const project =
           registry().buildProject ??
-          (await scanForArtifacts(
-            astroRoot,
-            options.buildArtifactsRoot,
-            logger
-          ));
+          (await scanForArtifacts(astroRoot, options, logger));
         if (!project) {
           return;
         }
@@ -477,6 +521,7 @@ export const blumeIntegration = (
       },
       "astro:config:done": ({ config, injectTypes }) => {
         astroRoot = config.root;
+        staticHost = config;
         const from = fileURLToPath(
           codegenDir ?? defaultCodegenDir(config.root)
         );
@@ -502,6 +547,15 @@ export const blumeIntegration = (
           entrypoint: "blume/components/icon-sprite-middleware.ts",
           order: "post",
         });
+        // Names Blume on the responses Astro renders (see
+        // components/powered-by-middleware.ts). Innermost too, so a header
+        // the project's own middleware sets wins.
+        if (options.poweredBy !== false) {
+          addMiddleware({
+            entrypoint: "blume/components/powered-by-middleware.ts",
+            order: "post",
+          });
+        }
         for (const page of options.pages) {
           injectRoute({
             entrypoint: page.entrypoint,
@@ -533,9 +587,31 @@ export const blumeIntegration = (
         });
         if (options.redirects) {
           server.middlewares.stack.unshift({
-            handle: answerPatternRedirects(options.redirects),
+            handle: answerRedirects(options.redirects),
             route: "",
           });
+        }
+        // Ahead of the redirects, so their answers carry it too.
+        if (options.poweredBy !== false) {
+          server.middlewares.stack.unshift({
+            handle: identifyBlume,
+            route: "",
+          });
+        }
+        // A trailing slash is answered the way a static host answers it,
+        // ahead of Astro's own middleware, which would 404 it (see
+        // `core/static-host.ts`). They're unshifted after this hook runs,
+        // so this goes on the HTTP server instead.
+        if (staticHost && server.httpServer instanceof Server) {
+          const base = normalizeBasePath(staticHost.base);
+          const isPublicFolder = publicFolder(
+            fileURLToPath(staticHost.publicDir)
+          );
+          answerRequestsFirst(
+            server.httpServer,
+            (request) => trailingSlashAnswer(request, base, isPublicFolder),
+            options.poweredBy === false ? {} : POWERED_BY_HEADERS
+          );
         }
       },
     },

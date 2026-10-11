@@ -32,9 +32,13 @@ theme: {
 }
 ```
 
-Named presets: `blue` (default), `green`, `orange`, `pink`, `purple`, `red`, and `teal`.
+Named presets: `blue` (default), `green`, `orange`, `pink`, `purple`, `red`, and `teal`. Each preset has a darker light-mode shade and a lighter dark-mode shade, so accent text and button labels meet WCAG AA contrast (4.5:1) in both modes.
 
 A string applies to both color modes; pass an object for [a different accent per mode](#dark-mode-colors).
+
+A value that's neither a preset nor a CSS color, like `"deep purple"` or a hex value without its `#`, warns `BLUME_THEME_COLOR_INVALID` at the line in `blume.config.ts` that sets it, since browsers ignore the styles that use it. The same check covers `action`, `background`, and the [Open Graph card's](/docs/discoverability/open-graph) `seo.og.palette`. Custom properties (`var(--brand)`), `color-mix()`, and the other color functions pass as written.
+
+Text on an accent or action fill, like a button label or a step number, is white while white meets AA on that color, and dark otherwise. A light accent gets dark labels without any extra config. [`blume audit`](/docs/cli/audit#theme-contrast-low) checks a custom accent, action, or background against the same bar.
 
 ### Radius
 
@@ -229,6 +233,8 @@ Set a token under `:root` for light mode and under `:root[data-theme="dark"]` fo
 | `--blume-code-highlight`, `--blume-code-highlight-border` | Background and left rule of a highlighted code line (`// [!code highlight]` or a `{1,4-5}` range) |
 | `--blume-code-add`, `--blume-code-add-border` | Background and left rule of an added line (`// [!code ++]`) |
 | `--blume-code-remove`, `--blume-code-remove-border` | Background and left rule of a removed line (`// [!code --]`) |
+| `--blume-code-error`, `--blume-code-error-border` | Background and left rule of an error line (`// [!code error]`) |
+| `--blume-code-warning`, `--blume-code-warning-border` | Background and left rule of a warning line (`// [!code warning]`) |
 | `--blume-code-word`, `--blume-code-word-border` | Background and outline of a highlighted word (`// [!code word:…]`) |
 | `--blume-content-width` | Max width of the prose column — article, breadcrumb, table of contents, feedback, and pagination (default `42rem`) |
 | `--blume-radius` | Corner radius |
@@ -246,7 +252,7 @@ Set a `--blume-font-*` token to any font stack to use a font outside the curated
 
 ## Tailwind utilities
 
-Blume's theme is built with Tailwind v4 internally, and your project's `.astro`, `.tsx`, and `.jsx` files are scanned too — so you can style custom components and pages with utility classes, no Tailwind setup required. Every token is exposed as a utility, so your components track the theme automatically:
+Blume's theme is built with Tailwind v4 internally, and your project's `.astro`, `.jsx`, `.mdx`, `.ts`, and `.tsx` files are scanned too — so you can style custom components and pages with utility classes, no Tailwind setup required. Every token is exposed as a utility, so your components track the theme automatically:
 
 | Token                       | Utilities                  |
 | --------------------------- | -------------------------- |

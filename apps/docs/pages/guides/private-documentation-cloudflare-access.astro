@@ -1,0 +1,640 @@
+---
+// Protect private docs with Cloudflare Access: checked against the deployment
+// docs (private docs, server rendering, Cloudflare), the MCP, JSON API,
+// Markdown, llms.txt, search, Open Graph, and agent discovery docs, and on
+// main against deploy/platforms/cloudflare.ts, deploy/cloudflare-negotiation.ts
+// (run_worker_first claims /*), ai/mcp/server.ts (stateless, JSON responses,
+// GET answers 405), PageActions.astro (Connect to MCP copies the URL only),
+// the openInChat and OG schema, and apps/docs/wrangler.jsonc, the config
+// useblume.dev runs on Workers. The Cloudflare Vite plugin's output config
+// spreads the input, so routes, workers_dev, and preview_urls reach
+// dist/server/wrangler.json (read in its source, not seen in a build).
+// Cloudflare facts from its docs on 2026-09-27: Worker-level Access and its
+// hierarchy and WebSocket limit, self-hosted public apps, policies, service
+// tokens, managed OAuth, one-time PIN, workers.dev, Version URLs, Previews,
+// custom domains, and static asset html_handling; the .mcp.json headers and
+// ${VAR} expansion against Claude Code's MCP docs. Ran: Blume's MCP handler
+// with a bare tools/call get_page (200 without initialize), and
+// check-access.sh under macOS bash 3.2 against a mock Access server. Review:
+// the wrangler.jsonc assets block and the plain `wrangler deploy` (through the
+// .wrangler/deploy pointer) match cloudflare-workers-documentation and
+// /docs/deployment; html_handling only matters when the static layer serves
+// pages itself (checked with `wrangler dev`), so its troubleshooting entry
+// lives in that guide. Not yet run end to end: no Worker deployed, no Access
+// application created, no managed OAuth client tried.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("private-documentation-cloudflare-access")}>
+  <p>
+    Blume has no sign-in of its own, so a private documentation website relies
+    on the access control in front of it. On Cloudflare, that means deploying
+    the Blume site to a Worker and turning on Cloudflare Access for the whole
+    Worker. Access checks every request at Cloudflare's edge before the Worker
+    or its static files answer, and sends anyone without a session to your
+    company's sign-in. You write no login code, and Blume needs no changes.
+  </p>
+  <p>
+    By the end you have a test handbook at <code>handbook.acme.example</code>,
+    a policy that admits only your company's accounts, a service token for
+    scripts and MCP clients, and a script that requests every URL the site
+    serves on every hostname the Worker answers on. Replace{" "}
+    <code>acme.example</code> with a domain on your Cloudflare account.
+  </p>
+  <p>
+    If your docs already deploy to Vercel or Netlify, their built-in protection
+    is less work: see <a href="/docs/deployment#private-docs">Private docs</a>.
+    Either way, protection covers the whole site. Blume has no per-page
+    permissions, so pages that must stay public belong in a separate site.
+  </p>
+
+  <h2>Build a test handbook</h2>
+  <p>
+    Start with a test handbook that holds nothing sensitive, since it's public
+    until you turn on Access. One page carries a canary, a made-up string: if
+    it ever shows up in a response you got without signing in, something isn't
+    covered.
+  </p>
+  <p>Create a folder with this <code>package.json</code>:</p>
+  <CodeBlock
+    code={`{
+  "name": "acme-handbook",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "blume dev",
+    "build": "blume build",
+    "deploy": "wrangler deploy"
+  }
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <p>
+    Install Blume, then the Cloudflare adapter and Wrangler, which a Cloudflare
+    build needs in the project:
+  </p>
+  <CodeBlock
+    code={`npm install blume
+npm install --save-dev @astrojs/cloudflare@^14.3.3 wrangler@^4.142.0`}
+    lang="bash"
+  />
+  <p>Add two pages:</p>
+  <CodeBlock
+    code={`---
+title: Acme Handbook
+description: How we work at Acme.
+---
+
+This is a test handbook. Nothing here is confidential.
+
+- [Onboarding](./onboarding.md)`}
+    lang="md"
+    title="docs/index.md"
+  />
+  <CodeBlock
+    code={`---
+title: Onboarding
+description: Your first week at Acme. HANDBOOK-CANARY-4417
+---
+
+HANDBOOK-CANARY-4417. If you can read this without signing in, the
+handbook isn't private.
+
+## Your first day
+
+Pick up your laptop, then find your onboarding buddy.`}
+    lang="md"
+    title="docs/onboarding.md"
+  />
+  <p>
+    Then the config. Naming the <code>cloudflare()</code> adapter switches the
+    build to{" "}
+    <a href="/docs/deployment#server-rendering">server output</a>, which the MCP
+    server and the search endpoint need. The pages are still prerendered files.
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { cloudflare } from "blume/deploy";
+
+export default defineConfig({
+  title: "Acme Handbook",
+  deployment: cloudflare({ site: "https://handbook.acme.example" }),
+  agents: {
+    mcp: { enabled: true },
+  },
+  ai: {
+    // Chat apps can't open a page behind Access.
+    openInChat: false,
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>site</code> is the one hostname people will use, which a Worker build
+    doesn't learn from the platform.{" "}
+    <code>openInChat: false</code> hides the page actions that hand a page's
+    URL to ChatGPT or Claude, which can't get past the sign-in.
+  </p>
+  <p>
+    Last, the Wrangler config. Blume reads a <code>wrangler.jsonc</code> at the
+    project root and carries it into the Worker it builds:
+  </p>
+  <CodeBlock
+    code={`{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "acme-handbook",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // The one hostname the handbook answers on.
+  "routes": [{ "pattern": "handbook.acme.example", "custom_domain": true }],
+  // No workers.dev hostname and no preview URLs.
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "binding": "ASSETS",
+    "html_handling": "drop-trailing-slash",
+    "not_found_handling": "404-page",
+    // Blume adds its own rules to this list at build time.
+    "run_worker_first": ["/mcp"]
+  }
+}`}
+    lang="jsonc"
+    title="wrangler.jsonc"
+  />
+  <p>
+    The <code>routes</code> entry attaches the Worker to{" "}
+    <code>handbook.acme.example</code> as a custom domain, with its DNS record
+    and certificate. <code>workers_dev</code> and <code>preview_urls</code>{" "}
+    switch off the Worker's other addresses: its <code>workers.dev</code>{" "}
+    hostname and per-version preview URLs. The <code>assets</code> block is
+    the one useblume.dev runs on;{" "}
+    <a href="/guides/cloudflare-workers-documentation#add-a-wrangler-config"
+      >Deploy documentation and an MCP endpoint to Cloudflare Workers</a
+    >{" "}
+    explains each line, and covers the build and Wrangler in more depth.
+  </p>
+
+  <h2>Deploy the Worker</h2>
+  <p>Build, sign Wrangler in to your Cloudflare account, and deploy:</p>
+  <CodeBlock
+    code={`npm run build
+npx wrangler login
+npm run deploy`}
+    lang="bash"
+  />
+  <p>
+    The build writes the Worker to <code>dist/server</code> and leaves
+    Wrangler a pointer to it in <code>.wrangler/deploy/</code>, so{" "}
+    <code>wrangler deploy</code> from the project root ships that build. Open{" "}
+    <code>https://handbook.acme.example/onboarding</code>: anyone can read it
+    for now.
+  </p>
+
+  <h2>Put the whole Worker behind Access</h2>
+  <p>
+    Access can protect a hostname or a whole Worker. Protect the Worker:
+    Cloudflare then applies Access to every domain associated with it,
+    including its routes, custom domains, <code>workers.dev</code> hostname,
+    and previews. That covers the origin as well as the public hostname,
+    including any address someone switches on later.
+  </p>
+  <p>Access needs Zero Trust set up on your account. Then:</p>
+  <ol>
+    <li>
+      In the Cloudflare dashboard, go to <strong>Workers &amp; Pages</strong>{" "}
+      and select <code>acme-handbook</code>.
+    </li>
+    <li>
+      Open the <strong>Access</strong> tab and select{" "}
+      <strong>Protect this Worker behind Access</strong>.
+    </li>
+    <li>
+      Choose <strong>All traffic</strong>. <strong>Previews only</strong>{" "}
+      leaves the custom domain public.
+    </li>
+    <li>
+      Under <strong>Authentication policy</strong>, choose{" "}
+      <strong>Email domain</strong> and enter <code>acme.example</code>.
+    </li>
+    <li>Select <strong>Apply Access</strong>.</li>
+  </ol>
+  <p>
+    Reload the onboarding page, and you land on a Cloudflare sign-in page. If
+    every Worker in the account is internal, the{" "}
+    <strong>Protect all Workers</strong> card on the{" "}
+    <strong>Workers &amp; Pages</strong> overview protects all of them,
+    including future ones, so a new site is never public before this step.
+  </p>
+
+  <h2>Choose who can sign in</h2>
+  <p>
+    The Email domain option admits anyone with a verified address at your
+    domain. Refine it in Zero Trust under <strong>Access controls</strong>{" "}
+    &gt; <strong>Applications</strong>, where the Worker's application now
+    lives.
+  </p>
+  <h3>Sign-in methods</h3>
+  <p>
+    People sign in with the methods under <strong>Zero Trust</strong> &gt;{" "}
+    <strong>Integrations</strong> &gt; <strong>Identity providers</strong>. Add
+    your company's identity provider there, such as Google Workspace, Okta, or
+    Microsoft Entra ID. To test without one, add <strong>One-time PIN</strong>,
+    which emails a sign-in code instead. Then edit the application, select the
+    methods it offers, and turn on <strong>Apply instant authentication</strong>{" "}
+    if there's only one, so people go straight to your company's sign-in.
+  </p>
+  <h3>The policy</h3>
+  <p>
+    Access denies by default: only people who match an Allow policy get in. The
+    Email domain option created an <strong>Emails ending in</strong> rule for{" "}
+    <code>@acme.example</code>. With Okta, Microsoft Entra ID, Google, or
+    GitHub connected, an <strong>Identity provider group</strong> rule narrows
+    it to one team, and
+    an <strong>Exclude</strong> rule shuts out named accounts. Identity rules
+    are checked at sign-in, so a change reaches signed-in people when their
+    session expires, as set by the application's{" "}
+    <strong>Session Duration</strong>.
+  </p>
+  <h3>A service token for scripts and agents</h3>
+  <p>
+    Scripts and MCP clients can't complete a browser sign-in, so give them a
+    service token:
+  </p>
+  <ol>
+    <li>
+      Go to <strong>Zero Trust</strong> &gt; <strong>Access controls</strong>{" "}
+      &gt; <strong>Service credentials</strong> &gt;{" "}
+      <strong>Service Tokens</strong> and select{" "}
+      <strong>Create Service Token</strong>. Name it after who or what uses it,
+      choose a duration, and select <strong>Generate token</strong>.
+    </li>
+    <li>
+      Copy the Client ID and Client Secret. Cloudflare shows the secret only
+      once.
+    </li>
+    <li>
+      Under <strong>Access controls</strong> &gt; <strong>Policies</strong>,
+      select <strong>Add a policy</strong>. Set the action to{" "}
+      <strong>Service Auth</strong> and add an Include rule with the{" "}
+      <strong>Service Token</strong> selector and your token.
+    </li>
+    <li>Add the policy to the handbook application.</li>
+  </ol>
+  <p>Keep both values in your shell for the checks below:</p>
+  <CodeBlock
+    code={`export CF_ACCESS_CLIENT_ID="your-client-id.access"
+export CF_ACCESS_CLIENT_SECRET="your-client-secret"`}
+    lang="bash"
+  />
+
+  <h2>Test allowed and denied people</h2>
+  <p>
+    Use a new private browser window for each check, so no earlier session
+    carries over.
+  </p>
+  <ul>
+    <li>
+      <strong>Allowed.</strong> Open{" "}
+      <code>https://handbook.acme.example/onboarding</code> and sign in with an
+      account the policy allows. The page loads. Search for "first day" from the
+      header: results come from the site's search index, fetched with your
+      session. Then open <code>/onboarding.md</code>, and the raw Markdown loads
+      too.
+    </li>
+    <li>
+      <strong>Denied.</strong> Sign in with an account outside the policy, like
+      a personal address. Access shows "That account does not have access."
+      With One-time PIN, a blocked address gets no email at all, although the
+      page still says a code was sent.
+    </li>
+  </ul>
+
+  <h2>Test every representation and hostname</h2>
+  <p>
+    A Blume site serves each page in several forms, and some files hold text
+    from every page. The only way to know Access covers them all is to request
+    each one. This is the access matrix for the test handbook:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Surface</th>
+        <th scope="col">What to request</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Pages</td>
+        <td>
+          <code>/</code>, <code>/onboarding</code>, and the build's files under{" "}
+          <code>/_astro/</code>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/docs/discoverability/markdown">Markdown copies</a>
+        </td>
+        <td>
+          <code>/onboarding.md</code>, <code>/onboarding.mdx</code>, and{" "}
+          <code>/onboarding</code> with <code>Accept: text/markdown</code>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/docs/discoverability/llms-txt">llms.txt</a>
+        </td>
+        <td>
+          <code>/llms.txt</code>, <code>/llms-full.txt</code> (every page's full
+          text)
+        </td>
+      </tr>
+      <tr>
+        <td>Search index</td>
+        <td><code>/blume-search.json</code></td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/docs/discoverability/json-api">JSON API</a>
+        </td>
+        <td>
+          <code>/api/docs/pages.json</code>,{" "}
+          <code>/api/docs/pages/onboarding.json</code>,{" "}
+          <code>/api/docs/navigation.json</code>, <code>/api/docs/search</code>
+        </td>
+      </tr>
+      <tr>
+        <td>Discovery files</td>
+        <td>
+          <code>/openapi.json</code>, <code>/agent-readability.json</code>,{" "}
+          <code>/.well-known/ai-catalog.json</code>,{" "}
+          <code>/.well-known/mcp.json</code>, <code>/sitemap.xml</code>,{" "}
+          <code>/robots.txt</code>
+        </td>
+      </tr>
+      <tr>
+        <td>Social cards</td>
+        <td><code>/og/onboarding.png</code></td>
+      </tr>
+      <tr>
+        <td>Missing pages</td>
+        <td><code>/404.md</code></td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/docs/discoverability/mcp">MCP server</a>
+        </td>
+        <td><code>POST /mcp</code></td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/docs/configuration/assistant">Assistant</a>, when on
+        </td>
+        <td><code>POST /api/ask</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Save this script as <code>check-access.sh</code>. It requests each surface
+    on the custom domain and the <code>workers.dev</code> hostname without
+    following redirects, and prints the status, whether content came back, and
+    whether the canary was in it.
+  </p>
+  <CodeBlock
+    code={`#!/usr/bin/env bash
+# Request every surface of the handbook on every hostname it could answer on.
+#   ./check-access.sh         signed out: both columns must show "-"
+#   ./check-access.sh token   with the service token from the environment
+
+CANARY="HANDBOOK-CANARY-4417"
+HOSTS=(
+  "https://handbook.acme.example"
+  "https://acme-handbook.acme.workers.dev"
+)
+PATHS=(
+  "/"
+  "/onboarding"
+  "/onboarding.md"
+  "/onboarding.mdx"
+  "/llms.txt"
+  "/llms-full.txt"
+  "/blume-search.json"
+  "/api/docs/pages.json"
+  "/api/docs/pages/onboarding.json"
+  "/api/docs/navigation.json"
+  "/api/docs/search?q=onboarding"
+  "/openapi.json"
+  "/agent-readability.json"
+  "/.well-known/ai-catalog.json"
+  "/.well-known/mcp.json"
+  "/og/onboarding.png"
+  "/sitemap.xml"
+  "/robots.txt"
+  "/404.md"
+)
+MCP_CALL='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page","arguments":{"route":"/onboarding"}}}'
+
+auth=()
+if [ "$1" = "token" ]; then
+  auth=(-H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID"
+    -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET")
+fi
+body=$(mktemp)
+
+# Never follow redirects: a followed 302 would report the login page as a 200.
+report() {
+  label=$1
+  shift
+  code=$(curl -s -o "$body" -w "%{http_code}" "\${auth[@]}" "$@")
+  served="-"
+  case $code in 2??) served="served" ;; esac
+  canary="-"
+  if grep -q "$CANARY" "$body"; then canary="canary"; fi
+  printf "%s  %-7s %-7s %s\\n" "$code" "$served" "$canary" "$label"
+}
+
+for host in "\${HOSTS[@]}"; do
+  for path in "\${PATHS[@]}"; do
+    report "$host$path" "$host$path"
+  done
+  report "$host/onboarding (Accept: text/markdown)" \\
+    -H "Accept: text/markdown" "$host/onboarding"
+  report "$host/mcp (get_page)" -X POST "$host/mcp" \\
+    -H "Content-Type: application/json" \\
+    -H "Accept: application/json, text/event-stream" \\
+    --data "$MCP_CALL"
+done
+rm -f "$body"`}
+    lang="bash"
+    title="check-access.sh"
+  />
+  <p>
+    Replace <code>acme</code> in the <code>workers.dev</code> hostname with your
+    account's <code>workers.dev</code> subdomain. If you turn preview URLs on
+    later to review changes, add one to <code>HOSTS</code>. Then run it signed
+    out, and again with the token:
+  </p>
+  <CodeBlock
+    code={`chmod +x check-access.sh
+./check-access.sh
+./check-access.sh token`}
+    lang="bash"
+  />
+  <p>
+    Signed out, every line must show <code>-</code> in both columns, usually
+    with a <code>302</code> to your team's sign-in page. The{" "}
+    <code>workers.dev</code> lines may show a Cloudflare error instead, since
+    that hostname is off. Any{" "}
+    <code>served</code> or <code>canary</code> is a leak. With the token, the
+    custom domain lines should read <code>200 served</code>, with{" "}
+    <code>canary</code> on the ones that carry the onboarding page's text,
+    which proves the script reaches real content. Only then add your real
+    pages. Run the signed-out check again whenever the Worker's domains or its
+    Access policies change.
+  </p>
+
+  <h2>Connect MCP clients through Access</h2>
+  <p>
+    Blume's MCP server has no authentication of its own, so a client has to
+    get past Access the way the script does. Worker-level Access doesn't
+    support WebSocket connections, but Blume's endpoint answers plain{" "}
+    <code>POST</code> requests with JSON, so that limit doesn't apply.
+  </p>
+  <p>
+    <strong>Clients that can send custom headers</strong> can use a service
+    token. In Claude Code, a project's <code>.mcp.json</code> reads the values
+    from the environment, so the secret stays out of the file:
+  </p>
+  <CodeBlock
+    code={`{
+  "mcpServers": {
+    "acme-handbook": {
+      "type": "http",
+      "url": "https://handbook.acme.example/mcp",
+      "headers": {
+        "CF-Access-Client-Id": "\${CF_ACCESS_CLIENT_ID}",
+        "CF-Access-Client-Secret": "\${CF_ACCESS_CLIENT_SECRET}"
+      }
+    }
+  }
+}`}
+    lang="json"
+    title=".mcp.json"
+  />
+  <p>
+    The <strong>Connect to MCP</strong> menu on each page copies install
+    commands and links with the URL alone, so add the headers yourself. A service token stands for
+    whoever holds it: Access logs name the token, not a person, and it works
+    until you revoke it. Issue one per person or machine, with a duration, and
+    revoke it at offboarding.
+  </p>
+  <p>
+    <strong>Clients that sign in with OAuth</strong> can use Access itself as
+    the OAuth server. Edit the application and turn on{" "}
+    <strong>Managed OAuth</strong> on its <strong>Advanced settings</strong>{" "}
+    tab. Access then answers a request without a session with a{" "}
+    <code>401</code> that points the client at its sign-in, and the client
+    opens a browser for the person to sign in against the same policy. The
+    client must support RFC 8707. A client that listens on your machine needs{" "}
+    <strong>Allow localhost clients</strong> or{" "}
+    <strong>Allow loopback clients</strong> turned on, and a web-based client
+    needs its redirect URI under <strong>Allowed redirect URIs</strong>. Try it
+    with your team's clients before relying on it. Once it's on, signed-out
+    rows in the matrix show <code>401</code> instead of <code>302</code>.
+  </p>
+  <p>
+    <strong>Clients that support neither</strong> can't connect. A bypass rule
+    that opened <code>/mcp</code> to them would publish the whole handbook
+    through <code>get_page</code>.
+  </p>
+
+  <h2>What Access can't cover</h2>
+  <p>
+    Access protects what the Worker serves. A few features send your content
+    somewhere else, or need to reach it from outside:
+  </p>
+  <ul>
+    <li>
+      A hosted{" "}
+      <a href="/docs/configuration/search">search provider</a> (Algolia, Orama
+      Cloud, Typesense, or Mixedbread) keeps its own copy of your pages. The
+      default Orama index, FlexSearch, and Pagefind are files the Worker
+      serves, so they stay behind Access.
+    </li>
+    <li>
+      The assistant, when you turn it on, sends readers' questions and the page
+      text it retrieves to the model provider you choose.
+    </li>
+    <li>
+      Link previews in Slack or X can't fetch your Open Graph cards, and agents
+      outside your company can't read <code>llms.txt</code>.
+    </li>
+    <li>
+      The Markdown lives in your Git repository, so the repository's
+      visibility decides who can read the source.
+    </li>
+  </ul>
+
+  <h2>If the site doesn't run on a Worker</h2>
+  <p>
+    Access protects hostnames in your Cloudflare zone. When another server
+    holds the files, that server is the origin, and anything that reaches it
+    directly skips Access.
+  </p>
+  <ul>
+    <li>
+      <strong>Vercel and Netlify</strong> give every deploy its own URL on their
+      own domains, which never pass through your zone. Use their protection
+      instead, as <a href="/docs/deployment#private-docs">Private docs</a>{" "}
+      describes.
+    </li>
+    <li>
+      <strong>Your own server</strong>, like a <code>node()</code> build in a
+      container, should publish through a Cloudflare Tunnel so it needs no open
+      inbound port. Protect its hostname with a self-hosted application:{" "}
+      <strong>Access controls</strong> &gt; <strong>Applications</strong> &gt;{" "}
+      <strong>Create new application</strong> &gt;{" "}
+      <strong>Self-hosted and private</strong> &gt;{" "}
+      <strong>Add public hostname</strong>. Then turn on{" "}
+      <strong>Protect with Access</strong> in the tunnel's origin settings, so{" "}
+      <code>cloudflared</code> rejects requests without a valid Access token.
+      Run the matrix against the hostname, and try the server's own address
+      from outside your network. The{" "}
+      <a href="/guides/self-host-documentation-docker">self-hosting guide</a>{" "}
+      covers the container.
+    </li>
+  </ul>
+
+  <h2>Troubleshooting</h2>
+  <h3>The workers.dev hostname still serves the handbook</h3>
+  <p>
+    Check that <code>wrangler.jsonc</code> sets{" "}
+    <code>"workers_dev": false</code>. Switching it off in the dashboard alone
+    doesn't last: the next <code>wrangler deploy</code> turns it back on unless
+    the config says otherwise. Worker-level Access with{" "}
+    <strong>All traffic</strong> covers that hostname either way.
+  </p>
+  <h3>Previews ask for sign-in but the custom domain doesn't</h3>
+  <p>
+    The Worker's Access rule is set to <strong>Previews only</strong>. Change it
+    to <strong>All traffic</strong> on the Worker's <strong>Access</strong> tab.
+  </p>
+  <h3>Requests with the service token still get a 302</h3>
+  <p>
+    The token's policy needs the <strong>Service Auth</strong> action and must
+    be attached to the handbook application. Under any other action, Access
+    sends the request to the sign-in page. Check the header names too,{" "}
+    <code>CF-Access-Client-Id</code> and <code>CF-Access-Client-Secret</code>,
+    and that the token hasn't expired.
+  </p>
+  <h3>The deploy can't add the custom domain</h3>
+  <p>
+    Cloudflare won't create a custom domain on a hostname that already has a
+    CNAME record, or in a zone your account doesn't own. Delete the old record
+    for <code>handbook.acme.example</code> in the zone's DNS settings and
+    deploy again.
+  </p>
+</GuidePage>

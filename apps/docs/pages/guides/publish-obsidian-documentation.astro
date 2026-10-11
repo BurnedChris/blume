@@ -1,0 +1,427 @@
+---
+// Publish Obsidian notes: checked against the Obsidian source docs, the
+// obsidian() adapter and vault loader (core/sources/obsidian.ts), init's
+// source scaffold, folder-meta discovery (project-graph.ts), and Obsidian's
+// help on links and properties. Review (September 2026): rechecked against
+// core/sources/obsidian.ts, sources/watch.ts, and validate.ts; confirmed with
+// an fs.watch probe that trashing a note reports its original path (so it
+// does rebuild). Not yet run end to end on a sample vault.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("publish-obsidian-documentation")}>
+  <p>
+    To publish Obsidian notes as a docs site, point Blume's{" "}
+    <code>obsidian()</code> source at the vault folder. The notes become a
+    section of the site, with a sidebar, search, and a stable URL for every
+    note. Blume reads the vault in place, so there's no export step: you keep
+    writing in Obsidian, and wikilinks, heading links, and images resolve when
+    the site builds.
+  </p>
+
+  <h2>When a vault fits</h2>
+  <p>
+    This works best for notes that are already written to be read by other
+    people: an engineering handbook, runbooks, onboarding notes, or the design
+    docs for an open-source project. Blume turns Obsidian's link syntax into
+    site links and publishes everything else as Markdown, beside any regular
+    docs pages you have.
+  </p>
+  <p>
+    It doesn't recreate Obsidian on the web. There's no graph view or backlinks
+    panel, and Obsidian's callouts and embeds aren't converted. If what you
+    want is a digital garden that looks and behaves like your vault,{" "}
+    <a href="https://quartz.jzhao.xyz/">Quartz</a> is a static site generator
+    built for that, with backlinks and a graph view, and{" "}
+    <a href="https://obsidian.md/publish">Obsidian Publish</a> is Obsidian's
+    own hosted publishing service.
+  </p>
+
+  <h2>Create the project</h2>
+  <p>Scaffold a Blume project:</p>
+  <CodeBlock code="npx blume init handbook-site" lang="bash" />
+  <p>
+    Pick the docs template. When it asks where your content lives, select both{" "}
+    <code>filesystem</code> and <code>obsidian</code>. That writes a config with
+    both sources, a <code>docs/</code> folder for regular pages, and a{" "}
+    <code>vault/</code> folder with a first note in it. Open{" "}
+    <code>vault/</code> in Obsidian with <strong>Open folder as vault</strong>.
+  </p>
+  <p>
+    Now point the Obsidian source at your section. Here the notes publish under{" "}
+    <code>/handbook</code>, and a folder of note templates stays out:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { filesystem, obsidian } from "blume/sources";
+
+export default defineConfig({
+  title: "Acme Handbook",
+  description: "How the Acme platform team builds and runs its services.",
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      obsidian({
+        vault: "vault",
+        prefix: "handbook",
+        exclude: ["Templates"],
+      }),
+    ],
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <ul>
+    <li>
+      <code>vault</code> is the vault's directory, relative to the project root.
+      Keep it inside the project, and inside the repository you deploy from, so
+      your host can build it.
+    </li>
+    <li>
+      <code>prefix</code> puts every note under <code>/handbook</code> and gives
+      the section its own group in the sidebar. Leave it out to publish the
+      notes at the site root.
+    </li>
+    <li>
+      <code>exclude</code> takes folder names, not globs, and skips them at any
+      depth. Dot-folders are always skipped, including Obsidian's own{" "}
+      <code>.obsidian</code> settings and <code>.trash</code>.
+    </li>
+  </ul>
+
+  <h2>Build a vault that's safe to publish</h2>
+  <p>
+    Blume publishes every note in the vault except the folders it skips. It
+    doesn't read Obsidian Publish's <code>publish</code> property: that
+    property is dropped when a note loads, so <code>publish: false</code> hides
+    nothing. Don't point a build at your personal vault. Give the site a vault
+    of its own that holds only notes you'd put on the web.
+  </p>
+  <p>This guide uses a small engineering handbook:</p>
+  <CodeBlock
+    code={`vault/
+├── .obsidian/
+├── index.md
+├── On call.md
+├── Onboarding/
+│   ├── Setup.md
+│   └── First week.md
+├── Services/
+│   ├── Deploys.md
+│   └── deploy-flow.png
+└── Templates/
+    └── Runbook.md`}
+    lang="txt"
+  />
+  <p>
+    Delete the <code>Welcome.md</code> note that <code>init</code> seeded, then
+    add these. The vault's <code>index.md</code> is the section's landing page:
+  </p>
+  <CodeBlock
+    code={`---
+title: Acme handbook
+description: How the platform team builds, ships, and runs its services.
+---
+
+New to the team? Start with [[Setup]], then read [[First week]].
+
+When something breaks, [[On call]] has the rotation and who to page.`}
+    lang="md"
+    title="vault/index.md"
+  />
+  <p>
+    <code>Deploys.md</code> has a Markdown image, a heading other notes link to,
+    and a link to a note nobody has written yet:
+  </p>
+  <CodeBlock
+    code={`---
+description: How a change gets from a merged pull request to production.
+---
+
+Every merge to main deploys to staging, then to production once checks pass.
+
+![A change moving from staging to production](deploy-flow.png)
+
+## Rolling back
+
+Revert the merge commit on main. The revert deploys like any other change.
+
+Afterward, write it up using [[Incident review]].`}
+    lang="md"
+    title="vault/Services/Deploys.md"
+  />
+  <CodeBlock
+    code={`By Friday, you should have shipped one change to production.
+
+1. Pick a starter issue from the team board.
+2. Ship it through the flow in [[Deploys]].
+3. Practice [[Deploys#Rolling back|rolling it back]] on staging.`}
+    lang="md"
+    title="vault/Onboarding/First week.md"
+  />
+  <p>
+    Fill <code>Setup.md</code> and <code>On call.md</code> with whatever you
+    like. Each note publishes at a route built from its path, lowercased with
+    spaces turned into hyphens:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Note</th>
+        <th scope="col">Route</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><code>index.md</code></td><td><code>/handbook</code></td></tr>
+      <tr>
+        <td><code>On call.md</code></td>
+        <td><code>/handbook/on-call</code></td>
+      </tr>
+      <tr>
+        <td><code>Onboarding/First week.md</code></td>
+        <td><code>/handbook/onboarding/first-week</code></td>
+      </tr>
+      <tr>
+        <td><code>Services/Deploys.md</code></td>
+        <td><code>/handbook/services/deploys</code></td>
+      </tr>
+      <tr>
+        <td><code>Templates/Runbook.md</code></td>
+        <td>Not published</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    A note with no <code>title</code> property is titled by its filename, the
+    same rule Obsidian uses, so <code>First week.md</code> is "First week" in
+    the sidebar.
+  </p>
+
+  <h2>Check links and images</h2>
+  <p>Start the dev server:</p>
+  <CodeBlock code="npx blume dev" lang="bash" />
+  <p>
+    Open <code>http://localhost:4321/handbook</code> and follow the links.
+    Wikilinks resolve by note name across the whole vault, the way Obsidian
+    resolves them, so <code>[[Setup]]</code> finds{" "}
+    <code>Onboarding/Setup.md</code> without a path. Here's how the rest of
+    Obsidian's syntax comes through:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In the vault</th>
+        <th scope="col">On the site</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>[[Note]]</code>, <code>[[Note|text]]</code></td>
+        <td>A link to the note's page</td>
+      </tr>
+      <tr>
+        <td><code>[[Note#Heading]]</code>, <code>[[#Heading]]</code></td>
+        <td>A link to that heading</td>
+      </tr>
+      <tr>
+        <td><code>[[folder/Note]]</code></td>
+        <td>A link by path, for names more than one note shares</td>
+      </tr>
+      <tr>
+        <td><code>![alt](image.png)</code></td>
+        <td>The image, served from the vault</td>
+      </tr>
+      <tr>
+        <td><code>%%comment%%</code> on one line</td>
+        <td>Removed</td>
+      </tr>
+      <tr>
+        <td>Properties Blume knows, like <code>title</code> and{" "}
+          <code>draft</code></td>
+        <td>Kept</td>
+      </tr>
+      <tr>
+        <td>Other properties, like <code>tags</code>, <code>aliases</code>, and{" "}
+          <code>publish</code></td>
+        <td>Dropped</td>
+      </tr>
+      <tr>
+        <td><code>![[image.png]]</code> embeds</td>
+        <td>Not converted</td>
+      </tr>
+      <tr>
+        <td><code>&gt; [!note]</code> callouts</td>
+        <td>A plain blockquote</td>
+      </tr>
+      <tr>
+        <td><code>%%comments%%</code> across several lines</td>
+        <td>Left in place</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Images need the most care. Obsidian inserts a pasted image as an{" "}
+    <code>![[...]]</code> embed, which Blume doesn't convert, so rewrite
+    each one as a Markdown image. Obsidian renders those too. Blume resolves
+    the path relative to the note, so keep the image beside the note, as{" "}
+    <code>deploy-flow.png</code> is here, or write the path from the note to the
+    file.
+  </p>
+  <Callout type="warning">
+    A <code>%%comment%%</code> that spans more than one line isn't removed, so
+    it publishes as text. Don't keep private notes in comments in a published
+    vault.
+  </Callout>
+  <p>
+    Vault notes are Markdown, not MDX, so Blume's components and{" "}
+    <code>:::</code> callouts aren't available in them. Pages in{" "}
+    <code>docs/</code> can use both, and can link into the handbook by route,
+    like <code>/handbook/services/deploys</code>.
+  </p>
+
+  <h2>Order the sidebar</h2>
+  <p>
+    The vault's folders become sidebar groups under Handbook, named after the
+    folders. Within a folder, the <code>index</code> note comes first, then
+    notes sort by name, so Setup would land after First week. To set the order
+    yourself, give each note a <code>sidebar.order</code>:
+  </p>
+  <CodeBlock
+    code={`---
+sidebar:
+  order: 1
+---`}
+    lang="yaml"
+    title="vault/Onboarding/Setup.md"
+  />
+  <p>
+    Give <code>First week.md</code> an order of 2. Obsidian's Properties panel
+    doesn't support nested properties like <code>sidebar</code>, so add them
+    in source mode. The same block takes a <code>label</code> for a shorter
+    sidebar name, and <code>hidden: true</code> to keep a note published but
+    out of the sidebar.
+  </p>
+  <p>
+    You can order by name instead. A note named <code>01 Setup.md</code> sorts
+    first and still publishes at <code>/handbook/onboarding/setup</code>, and
+    the same prefix orders folders. Its title keeps the number, though, so give
+    numbered notes a <code>title</code> property.
+  </p>
+  <p>
+    Blume doesn't read <code>meta.ts</code> files inside a vault, so folder
+    labels come from folder names and order comes from notes' properties and
+    names.
+  </p>
+
+  <h2>Fix the warnings</h2>
+  <p>
+    The dev server's terminal shows a warning for the link to{" "}
+    <code>[[Incident review]]</code>:
+  </p>
+  <ul>
+    <li>
+      <strong><code>BLUME_WIKILINK_UNRESOLVED</code></strong> means a link points
+      at a note that doesn't exist, so it renders as plain text. The same code
+      covers a link to a heading that doesn't exist, which keeps the page link
+      and drops the anchor.
+    </li>
+    <li>
+      <strong><code>BLUME_WIKILINK_AMBIGUOUS</code></strong> means more than one
+      note has the name a link uses. The link goes to the first one in vault
+      order; write a longer path, like <code>[[Services/Deploys]]</code>, to
+      pick one.
+    </li>
+  </ul>
+  <p>
+    Neither fails the build, so a vault in the middle of a rewrite still
+    publishes. Fix this one by writing the note, or by removing the link. To
+    make CI fail on these, and on any other warning, run:
+  </p>
+  <CodeBlock code="npx blume validate --strict" lang="bash" />
+  <p>
+    Then build the site. It writes static files to <code>dist/</code>:
+  </p>
+  <CodeBlock code="npx blume build" lang="bash" />
+
+  <h2>Keep drafts and private notes out</h2>
+  <p>
+    Blume's own <code>draft</code> property works on vault notes. A note with{" "}
+    <code>draft: true</code> shows in <code>blume dev</code>, so you can preview
+    it, and <code>blume build</code> leaves it out. For whole folders, add their
+    names to <code>exclude</code>, as with Templates.
+  </p>
+  <p>
+    Check the result before you deploy. Serve the build and click through the
+    Handbook section, and search for a phrase that only appears in a draft or
+    an excluded note. Nothing should come back.
+  </p>
+  <CodeBlock code="npx blume preview" lang="bash" />
+
+  <h2>Deploy</h2>
+  <p>
+    The build is a folder of static files, so it deploys anywhere.{" "}
+    <a href="/guides/markdown-docs-github-pages">Deploy Markdown docs to GitHub Pages</a>{" "}
+    walks through one host from start to finish, including a workflow that
+    rebuilds on every push. On a host Blume doesn't detect a site URL for, set{" "}
+    <code>deployment.site</code> so the sitemap and social cards get absolute
+    URLs. See <a href="/docs/deployment">Deployment</a> for the rest.
+  </p>
+  <p>
+    Because the vault lives in your repository, setting{" "}
+    <a href="/docs/configuration#last-modified">lastModified</a> to{" "}
+    <code>"git"</code> gives its pages "Last updated" dates from their commit
+    history, like any other page.
+  </p>
+
+  <h2>Edit a note and rebuild</h2>
+  <p>
+    With <code>blume dev</code> running, edit a note in Obsidian and the page
+    updates. Blume ignores changes inside <code>.obsidian</code> and{" "}
+    <code>.trash</code>, so rearranging panes doesn't trigger a rebuild.
+  </p>
+  <p>
+    The live site updates when it rebuilds. Commit the vault and push, and a
+    host that builds on every push publishes the change. Blume resolves
+    wikilinks by note name, so moving a note to another folder doesn't break
+    the links to it, but it does change the note's URL. Add a{" "}
+    <a href="/docs/deployment#redirects">redirect</a> from the old route when
+    other sites link to it.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>A note is missing from the site</h3>
+  <p>
+    Check that it isn't in a dot-folder or a folder named in{" "}
+    <code>exclude</code>, and that it doesn't have <code>draft: true</code>. A
+    note whose filename contains <code>#</code> or <code>?</code> can't be
+    loaded: the dev server leaves it out, and <code>blume build</code> stops,
+    both with a <code>BLUME_UNLOADABLE_FILE_NAME</code> error. Rename it.
+  </p>
+  <h3>An image doesn't show</h3>
+  <p>
+    It's probably an <code>![[...]]</code> embed, which stays as written.
+    Rewrite it as <code>![alt](file.png)</code>, with the path relative to the
+    note.
+  </p>
+  <h3>A link shows as plain text</h3>
+  <p>
+    The target note doesn't exist under that name. Links to an alias count as
+    missing too: Blume drops <code>aliases</code> rather than resolving them, so
+    link to the note's real name.
+  </p>
+  <h3>A link goes to the wrong note</h3>
+  <p>
+    Two notes share the name. Link with a longer path, like{" "}
+    <code>[[Onboarding/Setup]]</code>, or rename one of them.
+  </p>
+  <h3>A callout shows as a quote</h3>
+  <p>
+    Obsidian callouts render as plain blockquotes. Write the note so it
+    still reads well as a quote, or move that page into <code>docs/</code> as
+    MDX and use a <code>:::note</code> callout.
+  </p>
+</GuidePage>

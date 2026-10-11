@@ -26,7 +26,8 @@ blume <command> [options]
 | [`blume eval`](/docs/cli/evals) | Die Doku testen: Ein Agent beantwortet deine Fragen ausschließlich anhand der Dokumentation. |
 | [`blume translate`](/docs/cli/translate) | Die Doku mit einer lokalen Agent-CLI in die konfigurierten Sprachen übersetzen. |
 | [`blume version [id]`](/docs/cli/version) | Die aktuelle Doku als archivierte Version einfrieren (ohne ID werden die konfigurierten Versionen aufgelistet). |
-| [`blume migrate [source]`](/docs/migrating) | Eine Mintlify-, Fumadocs-, Docusaurus-, Starlight- oder Nextra-Site mit Codex oder Claude Code zu Blume umziehen. |
+| [`blume skill`](/docs/discoverability/agent-discovery#your-sites-skill) | Den Agent-Skill deiner Doku mit Codex oder Claude Code schreiben, anstelle des generierten Skills. |
+| [`blume migrate [source]`](/docs/migrating) | Eine Mintlify-, Docusaurus-, GitBook-, MkDocs-, ReadMe- oder andere Doku-Site mit Codex oder Claude Code zu Blume umziehen. |
 | [`blume upgrade`](/docs/upgrading) | Auf eine neue Major-Version wechseln: `blume` aktualisieren, dann die noch offenen Konfigurationsänderungen auflisten oder an Codex oder Claude Code übergeben. |
 
 ## Gängige Flags [#common-flags]
@@ -42,7 +43,7 @@ blume <command> [options]
 - `blume dev --content-dir <dir>` – scannt einen anderen Content-Ordner, ohne dass du `blume.config.ts` bearbeiten musst.
 - `blume dev --debug` – ausführliches Astro-/Vite-Logging zur Fehlersuche.
 - `blume dev --preview` / `blume build --preview` – bezieht Entwürfe und unveröffentlichte CMS-Inhalte mit ein.
-- `blume build --no-strict` – baut trotz Diagnosefehlern. Standardmäßig schlägt `blume build` bei jeder Fehlerdiagnose fehl (Exit 1), weil Seiten, deren Frontmatter-Validierung fehlschlägt, aus der Ausgabe entfernt werden; mit `--no-strict` ist der Build erfolgreich und meldet, wie viele Seiten fehlen. Mit `blume dev --strict` aktivierst du dasselbe Fail-Fast-Verhalten auch für dev.
+- `blume build --no-strict` – baut trotz Diagnosefehlern. Standardmäßig schlägt `blume build` bei jeder Fehlerdiagnose fehl (Exit 1), weil Seiten, deren Frontmatter-Validierung fehlschlägt, und `.mdx`-Seiten, die sich nicht [parsen](/docs/content#markdown-and-mdx) lassen, aus der Ausgabe entfernt werden; mit `--no-strict` ist der Build erfolgreich und meldet, wie viele Seiten fehlen. Ein Fehler, den erst der Build selbst findet, etwa eine Seite, die beim Rendern einen Fehler wirft, lässt ihn trotzdem fehlschlagen. Mit `blume dev --strict` aktivierst du dasselbe Fail-Fast-Verhalten auch für dev.
 - `blume build --analyze` – gibt nach dem Build die Größen der Client-JavaScript-Bundles aus (die größten zuerst).
 - `blume build --budget-js <kb> --budget-css <kb>` – lässt den Build fehlschlagen, wenn das gesamte Client-JavaScript/-CSS das Budget überschreitet, und macht so aus einem Performance-Ziel ein CI-Gate.
 - `blume build --isolated` – baut in eine temporäre `.blume-verify/`-Runtime (mit eigenem `dist/`) statt in `.blume/`, sodass ein laufender `blume dev`-Server und dein echtes `dist/` unberührt bleiben. Siehe [Überprüfen, während der Dev-Server läuft](#verifying-while-the-dev-server-runs).
@@ -107,3 +108,5 @@ Lege im Root deines Projekts eine `tsconfig.json` an, die die Astro-Konfiguratio
 ```
 
 Ohne eine `tsconfig.json` im Projekt wird nur die generierte Runtime geprüft.
+
+Auch der Build liest diese Datei, um Importe aufzulösen. Ein Eintrag in `extends` oder `references`, der sich nicht auflösen lässt (ein nicht installiertes Paket, eine verschobene Datei, eine vom Framework generierte tsconfig, die noch nicht existiert), bricht `blume build`, `blume dev` und `blume check` deshalb mit `BLUME_TSCONFIG_EXTENDS` ab und verweist dabei auf die Zeile, in der er eingetragen ist. Installiere das Paket, stelle die Datei wieder her oder generiere sie, oder entferne den Eintrag.

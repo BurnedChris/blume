@@ -1,0 +1,714 @@
+---
+// Combine multiple OpenAPI specs in one docs site: checked against the
+// OpenAPI, navigation, folder meta, deployment, doctor, and audit docs, and
+// on main against the reference resolver (openapi/references.ts), operation
+// routing (openapi/model.ts), the spec loader (openapi/source.ts), overlays
+// (openapi/overlay.ts), tab scoping (components/layout/nav-utils.ts), search
+// sections (search/documents.ts), and the duplicate-title audit. Ran
+// scanProject in process over the two-spec fixture below (specs, config,
+// overlays, and meta.ts files as shown) to confirm every route, the sidebar
+// trees per tab, the search sections, and the diagnostics, plus `blume
+// doctor` on the fixture and on the collision cases in Troubleshooting. Not
+// yet run end to end: no build, preview, audit, or deploy.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("multiple-openapi-specs-documentation")}>
+  <p>
+    To publish several OpenAPI specs in one docs site, list each spec as a
+    source of Blume's <code>openapi()</code> reference and give each one its
+    own route, such as <code>/api/messages</code> and{" "}
+    <code>/api/contacts</code>. An operation's URL is built from its spec's
+    route, its tag, and its operation ID, so two services can both define{" "}
+    <code>listEvents</code> without their pages colliding. Then point
+    navigation at those routes.
+  </p>
+  <p>
+    By the end, you have an API documentation portal for two services: a
+    reference per spec, a header menu and landing page that lead to each one,
+    page titles that say which API they belong to, and a check that tells you
+    when two specs claim the same URL. The example is two fictional Acme
+    services that both expose <code>GET /events</code> with the same operation
+    ID, summary, and tag.
+  </p>
+  <p>
+    This guide is about the specs. With one spec,{" "}
+    <a href="/guides/openapi-documentation-website">Generate API docs from an OpenAPI spec</a>{" "}
+    covers everything. If you're organizing whole products, each with its own
+    guides and SDKs as well as an API, start with{" "}
+    <a href="/guides/multi-product-developer-portal">Build a developer portal for multiple products</a>{" "}
+    and come back here for the reference setup. And if your services already
+    publish one merged spec through a gateway, mount that single file instead.
+  </p>
+
+  <h2>Add the specs</h2>
+  <p>
+    Start from a Blume project (<code>npx blume init</code>, docs template)
+    and keep each service's spec as its own file. Blume reads every spec at
+    build time. A spec can also be an <code>http(s)</code> URL, but a local copy
+    means a build never depends on another service being reachable.
+  </p>
+  <CodeBlock
+    code={`openapi: 3.1.0
+info:
+  title: Acme Messages API
+  version: 1.0.0
+  description: Send transactional email and SMS, and track their delivery.
+servers:
+  - url: https://api.acme.example/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: Messages
+    description: Send a message and check whether it arrived.
+  - name: Events
+    description: Delivery events for the messages you send.
+paths:
+  /messages:
+    post:
+      operationId: sendMessage
+      tags: [Messages]
+      summary: Send a message
+      description: Queues an email or SMS for delivery and returns its ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel, to, template]
+              properties:
+                channel:
+                  type: string
+                  enum: [email, sms]
+                to:
+                  type: string
+                template:
+                  type: string
+      responses:
+        "202":
+          description: The message is queued.
+  /messages/{id}:
+    get:
+      operationId: getMessage
+      tags: [Messages]
+      summary: Get a message
+      description: Returns a message and its delivery status.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The message.
+  /events:
+    get:
+      operationId: listEvents
+      tags: [Events]
+      summary: List events
+      description: Returns delivery events for your messages, newest first.
+      responses:
+        "200":
+          description: A page of delivery events.
+  /events/{id}:
+    get:
+      operationId: getEvent
+      tags: [Events]
+      summary: Get an event
+      description: Returns one delivery event.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The delivery event.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer`}
+    lang="yaml"
+    title="specs/messages.yaml"
+  />
+  <CodeBlock
+    code={`openapi: 3.1.0
+info:
+  title: Acme Contacts API
+  version: 1.0.0
+  description: Manage the people you message, and who has opted out.
+servers:
+  - url: https://contacts.acme.example/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: Contacts
+    description: Create and look up contacts.
+  - name: Events
+    description: Changes to contacts, such as unsubscribes.
+paths:
+  /contacts:
+    post:
+      operationId: createContact
+      tags: [Contacts]
+      summary: Create a contact
+      description: Adds a contact with an email address, a phone number, or both.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                phone:
+                  type: string
+      responses:
+        "201":
+          description: The contact was created.
+  /contacts/{id}:
+    get:
+      operationId: getContact
+      tags: [Contacts]
+      summary: Get a contact
+      description: Returns a contact and its subscription status.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The contact.
+  /events:
+    get:
+      operationId: listEvents
+      tags: [Events]
+      summary: List events
+      description: Returns contact events, such as unsubscribes, newest first.
+      responses:
+        "200":
+          description: A page of contact events.
+  /events/{id}:
+    get:
+      operationId: getEvent
+      tags: [Events]
+      summary: Get an event
+      description: Returns one contact event.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The contact event.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer`}
+    lang="yaml"
+    title="specs/contacts.yaml"
+  />
+  <p>
+    Both specs define <code>GET /events</code> and{" "}
+    <code>GET /events/&#123;id&#125;</code> with the same operation IDs,
+    summaries, and tag. That's common when services start from one template,
+    and it's the case the rest of this guide handles. Neither server exists,
+    so point <code>servers</code> at your real APIs when you use your own
+    specs.
+  </p>
+
+  <h2>Mount each spec at its own route</h2>
+  <p>
+    List both specs under <code>sources</code> in one <code>openapi()</code>{" "}
+    adapter, each with a <code>route</code>:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  reference: [
+    openapi({
+      sources: [
+        {
+          label: "Messages API",
+          route: "/api/messages",
+          spec: "./specs/messages.yaml",
+        },
+        {
+          label: "Contacts API",
+          route: "/api/contacts",
+          spec: "./specs/contacts.yaml",
+        },
+      ],
+    }),
+  ],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Each source gets an overview page at its route, titled with the spec's{" "}
+    <code>info.title</code>, and a page per operation below it. The sources
+    share the adapter's display options, like <code>codeSamples</code> and{" "}
+    <code>playground</code>.
+  </p>
+  <p>
+    Set <code>route</code> on every source. Without it, several sources mount
+    below the adapter's route (<code>/reference</code> by default) at a slug of
+    each label, like <code>/reference/messages-api</code>, or at{" "}
+    <code>/reference/1</code> and <code>/reference/2</code> when there's no
+    label. An explicit route means renaming a label never moves a page. Two
+    more rules keep routes apart:
+  </p>
+  <ul>
+    <li>
+      <strong>Make the routes siblings.</strong> Mount at{" "}
+      <code>/api/messages</code> and <code>/api/contacts</code>, not{" "}
+      <code>/api</code> and <code>/api/contacts</code>. A spec at{" "}
+      <code>/api</code> puts its tag folders directly under <code>/api</code>,
+      so if the Messages API had a Contacts tag, its pages would land inside
+      the Contacts API's section without any warning.
+    </li>
+    <li>
+      <strong>Leave each spec's own routes to it.</strong> A hand-written page
+      can join a spec's section: <code>docs/api/messages/authentication.mdx</code>{" "}
+      appears at <code>/api/messages/authentication</code>, in that spec's
+      sidebar. But <code>docs/api/messages/index.mdx</code> claims the
+      overview's route, and the build stops with{" "}
+      <code>BLUME_DUPLICATE_ROUTE</code>.
+    </li>
+  </ul>
+  <p>
+    If two specs need different display options, such as other code sample
+    languages or the Try it proxy on only one of them, list two{" "}
+    <code>openapi()</code> adapters instead, each with its own{" "}
+    <code>route</code>. Both default to <code>/reference</code>, and when two
+    references resolve to the same route, Blume keeps the first and drops the
+    other's pages.
+  </p>
+
+  <h2>Check every operation's route</h2>
+  <p>
+    An operation's page lives at its spec's route, then its first tag as a
+    slug, then its operation ID split into words, so <code>sendMessage</code>{" "}
+    becomes <code>send-message</code>. These are all the pages the two specs
+    produce:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Spec</th>
+        <th scope="col">Operation</th>
+        <th scope="col">Page</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Messages</td>
+        <td>Overview</td>
+        <td><code>/api/messages</code></td>
+      </tr>
+      <tr>
+        <td>Messages</td>
+        <td><code>POST /messages</code></td>
+        <td><code>/api/messages/messages/send-message</code></td>
+      </tr>
+      <tr>
+        <td>Messages</td>
+        <td><code>GET /messages/&#123;id&#125;</code></td>
+        <td><code>/api/messages/messages/get-message</code></td>
+      </tr>
+      <tr>
+        <td>Messages</td>
+        <td><code>GET /events</code></td>
+        <td><code>/api/messages/events/list-events</code></td>
+      </tr>
+      <tr>
+        <td>Messages</td>
+        <td><code>GET /events/&#123;id&#125;</code></td>
+        <td><code>/api/messages/events/get-event</code></td>
+      </tr>
+      <tr>
+        <td>Contacts</td>
+        <td>Overview</td>
+        <td><code>/api/contacts</code></td>
+      </tr>
+      <tr>
+        <td>Contacts</td>
+        <td><code>POST /contacts</code></td>
+        <td><code>/api/contacts/contacts/create-contact</code></td>
+      </tr>
+      <tr>
+        <td>Contacts</td>
+        <td><code>GET /contacts/&#123;id&#125;</code></td>
+        <td><code>/api/contacts/contacts/get-contact</code></td>
+      </tr>
+      <tr>
+        <td>Contacts</td>
+        <td><code>GET /events</code></td>
+        <td><code>/api/contacts/events/list-events</code></td>
+      </tr>
+      <tr>
+        <td>Contacts</td>
+        <td><code>GET /events/&#123;id&#125;</code></td>
+        <td><code>/api/contacts/events/get-event</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The two <code>listEvents</code> pages don't collide because each sits under
+    its own spec's route. The word <code>messages</code> appears twice in some
+    URLs because the tag shares the service's name; that's expected.
+  </p>
+  <p>
+    Compare that with merging both specs into one file first. Operation IDs
+    are unique within a spec, so Blume gives the second <code>listEvents</code>{" "}
+    a method suffix, <code>/api/events/list-events-get</code>, and warns{" "}
+    <code>BLUME_OPENAPI_DUPLICATE_OPERATION_ID</code> about the shared ID and{" "}
+    <code>BLUME_NAV_DUPLICATE_LABEL</code> about the two List events entries.
+    Separate specs keep both URLs predictable.
+  </p>
+  <p>
+    To confirm, run doctor. It scans the project the way a build does, without
+    building anything, and prints every route collision. A clean run ends with
+    "No problems found."
+  </p>
+  <CodeBlock code="npx blume doctor" lang="bash" />
+  <p>
+    Then run <code>npm run dev</code> and open both overview pages. Each lists
+    its operations by tag, linked to their pages.
+  </p>
+
+  <h2>Add navigation</h2>
+  <p>
+    A reference never adds a header tab on its own. How you add one decides
+    whether readers see one spec at a time or all of them together.
+  </p>
+
+  <h3>One tab per API</h3>
+  <p>For two or three APIs, give each spec its own tab:</p>
+  <CodeBlock
+    code={`navigation: {
+  tabs: [
+    { label: "Guides", path: "/" },
+    { label: "Messages API", path: "/api/messages" },
+    { label: "Contacts API", path: "/api/contacts" },
+  ],
+},`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    A tab scopes the sidebar to the pages under its <code>path</code>. On{" "}
+    <code>/api/contacts/events/list-events</code>, the sidebar lists only the
+    Contacts API, so the two List events entries never appear side by side.
+    The Guides tab at <code>/</code> leaves both specs out of its sidebar.
+  </p>
+
+  <h3>One APIs tab for a portal</h3>
+  <p>
+    With more services, a tab per API crowds the header. Make one APIs tab a
+    dropdown with an item per spec, and give <code>/api</code> a landing page:
+  </p>
+  <CodeBlock
+    code={`navigation: {
+  tabs: [
+    { label: "Guides", path: "/" },
+    {
+      label: "APIs",
+      path: "/api",
+      items: [
+        {
+          label: "Messages API",
+          path: "/api/messages",
+          description: "Send email and SMS",
+        },
+        {
+          label: "Contacts API",
+          path: "/api/contacts",
+          description: "Manage the people you message",
+        },
+      ],
+    },
+  ],
+},`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <CodeBlock
+    code={`---
+title: Acme APIs
+description: Reference documentation for every Acme API.
+---
+
+Each Acme API has its own base URL and its own reference.
+
+<CardGroup cols={2}>
+  <Card title="Messages API" href="/api/messages">
+    Send email and SMS, and track their delivery.
+  </Card>
+  <Card title="Contacts API" href="/api/contacts">
+    Manage the people you message, and who has opted out.
+  </Card>
+</CardGroup>`}
+    lang="mdx"
+    title="docs/api/index.mdx"
+  />
+  <p>
+    The dropdown's <code>path</code> scopes the sidebar to everything under{" "}
+    <code>/api</code>, so both specs share it. Out of the box, each group is
+    named after its source's <code>label</code> (Messages API, Contacts API),
+    and the tag groups inside it follow the spec's <code>tags</code> list, the
+    same order as its overview page. The two groups themselves sort
+    alphabetically, which puts the Contacts API first. A <code>meta.ts</code>{" "}
+    in each spec's folder sets their order and how they open, even though the
+    folder holds no pages of its own:
+  </p>
+  <CodeBlock
+    code={`import { defineMeta } from "blume";
+
+export default defineMeta({
+  title: "Messages API",
+  display: "page",
+  order: 1,
+});`}
+    lang="ts"
+    title="docs/api/messages/meta.ts"
+  />
+  <CodeBlock
+    code={`import { defineMeta } from "blume";
+
+export default defineMeta({
+  title: "Contacts API",
+  display: "page",
+  order: 2,
+});`}
+    lang="ts"
+    title="docs/api/contacts/meta.ts"
+  />
+  <p>
+    <code>order</code> puts the Messages API first.{" "}
+    <code>display: "page"</code> turns each spec into one sidebar row that
+    opens into a panel of its own, so readers still see one API at a time. A{" "}
+    <code>meta.ts</code> you write replaces the one Blume derives from the
+    source, so it repeats the <code>title</code>; leave it out and the group
+    falls back to a name from the route, like Messages.
+  </p>
+
+  <h2>Handle names that overlap</h2>
+  <p>
+    A lot already stays apart. URLs and sidebar groups are separate, as shown
+    above. Each spec's schemas resolve within its own pages, so two schemas
+    named <code>Event</code> never meet. And each operation's meta description
+    ends with a sentence naming its spec's <code>info.title</code>, such as
+    "Reference for the GET /events endpoint in the Acme Messages API."
+  </p>
+  <p>
+    The page title doesn't. Both pages are titled List events, so both browser
+    tabs read "List events - Acme Docs", the search dialog lists two results
+    with the same title, and <code>blume audit</code> reports{" "}
+    <code>BLUME_AUDIT_DUPLICATE_TITLE</code> after a build.
+  </p>
+  <p>
+    If you own the specs, make the summaries specific. If another team owns
+    them, rename the operations for the docs with an overlay per spec, and
+    leave the spec files untouched:
+  </p>
+  <CodeBlock
+    code={`overlay: 1.0.0
+info:
+  title: Messages API docs names
+  version: 1.0.0
+actions:
+  - target: $.paths.*[?@.operationId == 'listEvents']
+    update:
+      summary: List message events
+  - target: $.paths.*[?@.operationId == 'getEvent']
+    update:
+      summary: Get a message event`}
+    lang="yaml"
+    title="overlays/messages.yaml"
+  />
+  <CodeBlock
+    code={`overlay: 1.0.0
+info:
+  title: Contacts API docs names
+  version: 1.0.0
+actions:
+  - target: $.paths.*[?@.operationId == 'listEvents']
+    update:
+      summary: List contact events
+  - target: $.paths.*[?@.operationId == 'getEvent']
+    update:
+      summary: Get a contact event`}
+    lang="yaml"
+    title="overlays/contacts.yaml"
+  />
+  <p>List each overlay on its own source:</p>
+  <CodeBlock
+    code={`sources: [
+  {
+    label: "Messages API",
+    overlays: ["./overlays/messages.yaml"],
+    route: "/api/messages",
+    spec: "./specs/messages.yaml",
+  },
+  {
+    label: "Contacts API",
+    overlays: ["./overlays/contacts.yaml"],
+    route: "/api/contacts",
+    spec: "./specs/contacts.yaml",
+  },
+],`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Each target selects the operation by its ID rather than its path, so the
+    rename survives a path change. The URLs stay the same, since they come
+    from the operation ID, not the summary. The same kind of overlay fixes
+    two specs with the same <code>info.title</code>, which happens when both
+    keep a framework's default: add an action that targets <code>$.info</code>{" "}
+    and updates <code>title</code>.
+  </p>
+
+  <h2>Tune search across specs</h2>
+  <p>
+    Search indexes each operation by its summary, description, tag, and
+    endpoint. A search for "events" finds all four event pages, and with the
+    overlays in place, each result's title says which API it belongs to.
+  </p>
+  <p>
+    The filter pills above the results come from the sidebar group each page
+    sits in, and for an operation that's its tag group. Both APIs' event
+    pages share one Events pill. To split it, name one of the groups in a{" "}
+    <code>meta.ts</code> inside the tag's folder:
+  </p>
+  <CodeBlock
+    code={`import { defineMeta } from "blume";
+
+export default defineMeta({ title: "Contact events" });`}
+    lang="ts"
+    title="docs/api/contacts/events/meta.ts"
+  />
+  <p>
+    The sidebar group and the pill now read Contact events, and the URLs don't
+    change.
+  </p>
+  <p>
+    Some specs belong in the portal without competing in search, such as a
+    partner API or a legacy version. Set <code>includeInSearch: false</code>{" "}
+    on that source to keep its pages out of site search,{" "}
+    <code>includeInLlms: false</code> to keep them out of{" "}
+    <code>llms.txt</code>, and <code>noindex: true</code> to add noindex
+    metadata and drop them from the sitemap. The pages still build and stay
+    in the sidebar.
+  </p>
+
+  <h2>Publish the combined site</h2>
+  <p>Build the site, then check its links and titles:</p>
+  <CodeBlock
+    code={`npm run build
+npx blume validate
+npx blume audit --only duplicates`}
+    lang="bash"
+  />
+  <p>
+    The build stops on errors, like a spec it can't read or a duplicate route.
+    A route collision between two references is only a warning, so a build
+    can succeed with one spec missing; that's why doctor belongs in the same
+    routine. <code>validate</code> checks internal links, including links
+    from your guides to operation pages in either spec, and{" "}
+    <code>audit --only duplicates</code> lists pages that still share a title
+    or description.
+  </p>
+  <p>
+    Each operation's Try it panel sends requests to its own spec's{" "}
+    <code>servers</code>: Messages pages to <code>api.acme.example</code>,
+    Contacts pages to <code>contacts.acme.example</code>. Every one of those
+    APIs has to allow your docs origin under CORS, or you can route requests
+    through a proxy. See{" "}
+    <a href="/guides/api-documentation-cors-errors">Fix CORS errors in an API documentation playground</a>.
+  </p>
+  <p>
+    If the site used to serve one spec at <code>/reference</code>, redirect the
+    old URLs. Tag and operation slugs don't change when a spec moves, so one
+    pattern covers every page:
+  </p>
+  <CodeBlock
+    code={`redirects: [{ from: "/reference/:slug*", to: "/api/messages/:slug*" }],`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Without the proxy, the output in <code>dist/</code> is static files that
+    any host can serve. The <a href="/docs/deployment">deployment docs</a>{" "}
+    cover each host.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>One API's pages are missing</h3>
+  <p>
+    Two references resolved to the same route, and Blume kept the first. The
+    warning is <code>BLUME_OPENAPI_ROUTE_COLLISION</code>: "Two API reference
+    sources resolve to /reference; keeping the first." It usually means two{" "}
+    <code>openapi()</code> adapters without a <code>route</code>, or two
+    sources with the same <code>label</code> and no <code>route</code>. Give
+    every source an explicit, distinct route.
+  </p>
+  <h3>The build fails with BLUME_DUPLICATE_ROUTE</h3>
+  <p>
+    A hand-written page sits at a route the reference generates, most often an{" "}
+    <code>index.mdx</code> in a spec's folder, which collides with its
+    overview. Move the page, or put the landing page one level up, like{" "}
+    <code>docs/api/index.mdx</code>.
+  </p>
+  <h3>One broken spec fails the whole build</h3>
+  <p>
+    <code>BLUME_OPENAPI_UNAVAILABLE</code> names the spec Blume couldn't read
+    or parse. In a build it's an error, so it stops the build even when the
+    other specs are fine. In <code>blume dev</code> it's a warning, and only
+    that spec's pages are skipped. Fix the path, the URL, or the file itself.
+  </p>
+  <h3>The sidebar says Messages, not Messages API</h3>
+  <p>
+    A spec's sidebar group takes its source's <code>label</code>. It falls
+    back to a name from the route when the source has no <code>label</code>,
+    or when a <code>meta.ts</code> in that spec's folder leaves out{" "}
+    <code>title</code>, since your <code>meta.ts</code> replaces the one Blume
+    derives. Set the <code>label</code>, or add the <code>title</code> as
+    shown in <a href="#add-navigation">Add navigation</a>.
+  </p>
+  <h3>An overlay rename stopped working</h3>
+  <p>
+    An overlay action whose target matches nothing changes nothing, and
+    there's no warning. If the spec's owners renamed an operation ID, update
+    the target in your overlay.
+  </p>
+  <h3>A URL ends in -get or -post</h3>
+  <p>
+    Two operations in the same spec share an operation ID, so Blume added the
+    method to the second one's URL. Give each operation a unique ID, or keep
+    the services in separate specs as this guide does.
+  </p>
+
+  <Callout type="tip">
+    To keep each service's spec current without copying files by hand, see{" "}
+    <a href="/guides/openapi-documentation-ci">Keep API documentation in sync with backend changes in CI</a>.
+  </Callout>
+</GuidePage>

@@ -2,12 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 
 import { blumeConfigSchema } from "../src/core/schema.ts";
 import { cloudflare as cloudflareDeploy } from "../src/deploy/adapters/index.ts";
-import { cloudflare, memory, upstash } from "../src/ratelimit/index.ts";
+import { cloudflare, memory, unkey, upstash } from "../src/ratelimit/index.ts";
 import {
   bindingLimiter,
   createLimiter,
   memoryLimiter,
   rateLimited,
+  UNKEY_TIMEOUT,
+  unkeyLimiter,
+  UPSTASH_COUNT_SCRIPT,
   upstashLimiter,
 } from "../src/ratelimit/runtime.ts";
 import type { RateLimitContext } from "../src/ratelimit/runtime.ts";
@@ -48,7 +51,7 @@ const clock = () => {
   };
 };
 
-/** An Upstash REST stub answering with `count` and `ttl`. */
+/** An Upstash REST stub whose script answers with `count` and `ttl`. */
 const upstashStub = (count: number | null, ttl: number, ok = true) => {
   const calls: { body: string; headers: HeadersInit; url: string }[] = [];
   const stub = (url: string | URL | Request, init?: RequestInit) => {
@@ -58,17 +61,36 @@ const upstashStub = (count: number | null, ttl: number, ok = true) => {
       url: String(url),
     });
     return Promise.resolve(
-      Response.json([{ result: "OK" }, { result: count }, { result: ttl }], {
-        status: ok ? 200 : 500,
-      })
+      Response.json(
+        { result: count === null ? null : [count, ttl] },
+        { status: ok ? 200 : 500 }
+      )
     );
   };
   // SAFETY: the limiter only calls `fetch(url, init)`, which the stub serves.
   return { calls, fetch: stub as typeof fetch };
 };
 
+/** An Unkey REST stub that answers every count with `answer()`. */
+const unkeyStub = (answer: () => Response) => {
+  const calls: { init?: RequestInit; url: string }[] = [];
+  const stub = (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ init, url: String(url) });
+    return Promise.resolve(answer());
+  };
+  // SAFETY: the limiter only calls `fetch(url, init)`, which the stub serves.
+  return { calls, fetch: stub as typeof fetch };
+};
+
+/** Unkey's reply to one count, the way its v2 API sends it. */
+const unkeyReply = (success: boolean, reset: number) => () =>
+  Response.json({
+    data: { limit: 30, remaining: success ? 1 : 0, reset, success },
+    meta: { requestId: "req_1" },
+  });
+
 describe("rate limit adapters", () => {
-  it("return plain descriptors, and only Upstash names secrets", () => {
+  it("return plain descriptors, and the shared stores name their secrets", () => {
     expect(memory()).toStrictEqual({
       kind: "memory",
       options: {},
@@ -79,7 +101,21 @@ describe("rate limit adapters", () => {
       "UPSTASH_REDIS_REST_URL",
       "UPSTASH_REDIS_REST_TOKEN",
     ]);
+    // Vercel's Marketplace names them its own way.
+    expect(
+      upstash({ tokenEnv: "KV_REST_API_TOKEN", urlEnv: "KV_REST_API_URL" })
+        .requiredSecrets
+    ).toStrictEqual(["KV_REST_API_URL", "KV_REST_API_TOKEN"]);
     expect(cloudflare({ window: 10 }).options).toStrictEqual({ window: 10 });
+    expect(unkey()).toStrictEqual({
+      kind: "unkey",
+      options: {},
+      requiredSecrets: ["UNKEY_ROOT_KEY"],
+      runtimeDeps: [],
+    });
+    expect(unkey({ rootKeyEnv: "DOCS_KEY" }).requiredSecrets).toStrictEqual([
+      "DOCS_KEY",
+    ]);
   });
 
   it("is on by default with memory(), and off with false", () => {
@@ -88,6 +124,37 @@ describe("rate limit adapters", () => {
     expect(
       blumeConfigSchema.parse({ rateLimit: upstash() }).rateLimit
     ).toStrictEqual(upstash());
+    const marketplace = upstash({ urlEnv: "KV_REST_API_URL" });
+    expect(
+      blumeConfigSchema.parse({ rateLimit: marketplace }).rateLimit
+    ).toStrictEqual(marketplace);
+    expect(
+      blumeConfigSchema.safeParse({ rateLimit: upstash({ tokenEnv: "" }) })
+        .error?.issues[0]?.path
+    ).toStrictEqual(["rateLimit", "options", "tokenEnv"]);
+    const named = unkey({ namespace: "acme-docs", rootKeyEnv: "DOCS_KEY" });
+    expect(
+      blumeConfigSchema.parse({ rateLimit: named }).rateLimit
+    ).toStrictEqual(named);
+  });
+
+  it("keeps unkey() within what Unkey's API takes", () => {
+    const widest = unkey({ namespace: "n".repeat(512), window: 2_592_000 });
+    expect(blumeConfigSchema.safeParse({ rateLimit: widest }).success).toBe(
+      true
+    );
+    for (const [options, field] of [
+      [{ namespace: "" }, "namespace"],
+      [{ namespace: "n".repeat(513) }, "namespace"],
+      [{ rootKeyEnv: "" }, "rootKeyEnv"],
+      // Unkey's longest window is 30 days.
+      [{ window: 2_592_001 }, "window"],
+    ] as const) {
+      expect(
+        blumeConfigSchema.safeParse({ rateLimit: unkey(options) }).error
+          ?.issues[0]?.path
+      ).toStrictEqual(["rateLimit", "options", field]);
+    }
   });
 
   it("points anything else at blume/ratelimit, and keeps option errors", () => {
@@ -158,7 +225,7 @@ describe(memoryLimiter, () => {
 });
 
 describe(upstashLimiter, () => {
-  it("counts in one pipeline and reads the window's remaining seconds", async () => {
+  it("counts in one script and reads the window's remaining seconds", async () => {
     const stub = upstashStub(4, 42);
     const limit = upstashLimiter(
       3,
@@ -168,24 +235,33 @@ describe(upstashLimiter, () => {
       stub.fetch
     );
     expect(await limit("k")).toStrictEqual({ allowed: false, retryAfter: 42 });
-    expect(stub.calls[0]?.url).toBe("https://eu.upstash.io/pipeline");
+    expect(stub.calls[0]?.url).toBe("https://eu.upstash.io");
+    // One command, which Redis runs as one step: the key can't expire
+    // between counting and reading it, and come back with no expiry.
     expect(JSON.parse(stub.calls[0]?.body ?? "")).toStrictEqual([
-      ["SET", "k", "0", "EX", "600", "NX"],
-      ["INCR", "k"],
-      ["TTL", "k"],
+      "EVAL",
+      UPSTASH_COUNT_SCRIPT,
+      "1",
+      "k",
+      "600",
     ]);
+    // A key without an expiry, new or left behind, gets the window.
+    expect(UPSTASH_COUNT_SCRIPT).toContain("if ttl < 0 then");
+    expect(UPSTASH_COUNT_SCRIPT).toContain(
+      'redis.call("EXPIRE", KEYS[1], ARGV[1])'
+    );
     expect(stub.calls[0]?.headers).toMatchObject({
       authorization: "Bearer t0k",
     });
   });
 
-  it("falls back to the window when the key has no expiry yet", async () => {
+  it("falls back to the window when no whole second is left", async () => {
     const limit = upstashLimiter(
       3,
       600,
       "https://x",
       "t",
-      upstashStub(1, -1).fetch
+      upstashStub(1, 0).fetch
     );
     expect(await limit("k")).toStrictEqual({ allowed: true, retryAfter: 600 });
   });
@@ -207,6 +283,110 @@ describe(upstashLimiter, () => {
       upstashStub(null, 1).fetch
     );
     await expect(empty("k")).rejects.toThrow("Upstash sent no count.");
+  });
+});
+
+describe(unkeyLimiter, () => {
+  it("counts in the namespace and reads what's left of the window", async () => {
+    const time = clock();
+    const stub = unkeyStub(unkeyReply(false, time.now() + 12_501));
+    const timeout = spyOn(AbortSignal, "timeout");
+    try {
+      const limit = unkeyLimiter(7, 43, "acme-docs", "unkey_root", {
+        fetch: stub.fetch,
+        now: time.now,
+      });
+      expect(await limit("blume:docs.example.com:ask:192.0.2.1")).toStrictEqual(
+        { allowed: false, retryAfter: 13 }
+      );
+      // A hung request gives up, so the route lets the reader through.
+      expect(timeout).toHaveBeenCalledWith(UNKEY_TIMEOUT);
+    } finally {
+      timeout.mockRestore();
+    }
+    const [call] = stub.calls;
+    expect(call?.url).toBe("https://api.unkey.com/v2/ratelimit.limit");
+    expect(call?.init?.method).toBe("POST");
+    expect(call?.init?.signal).toBeInstanceOf(AbortSignal);
+    expect(call?.init?.headers).toMatchObject({
+      authorization: "Bearer unkey_root",
+    });
+    expect(JSON.parse(String(call?.init?.body))).toStrictEqual({
+      duration: 43_000,
+      identifier: "blume:docs.example.com:ask:192.0.2.1",
+      limit: 7,
+      namespace: "acme-docs",
+    });
+  });
+
+  it("keeps retryAfter between one second and the window", async () => {
+    const time = clock();
+    const past = unkeyLimiter(5, 60, "docs", "k", {
+      fetch: unkeyStub(unkeyReply(true, time.now() - 5000)).fetch,
+      now: time.now,
+    });
+    expect(await past("a")).toStrictEqual({ allowed: true, retryAfter: 1 });
+    // A server clock behind Unkey's reads a far-off reset.
+    const skewed = unkeyLimiter(5, 60, "docs", "k", {
+      fetch: unkeyStub(unkeyReply(false, time.now() + 600_000)).fetch,
+      now: time.now,
+    });
+    expect(await skewed("a")).toStrictEqual({ allowed: false, retryAfter: 60 });
+    // An override set in Unkey replaces the window, so its reset stands.
+    const overridden = unkeyLimiter(5, 60, "docs", "k", {
+      fetch: unkeyStub(() =>
+        Response.json({
+          data: {
+            limit: 1,
+            overrideId: "rlor_1",
+            remaining: 0,
+            reset: time.now() + 3_600_000,
+            success: false,
+          },
+          meta: { requestId: "req_1" },
+        })
+      ).fetch,
+      now: time.now,
+    });
+    expect(await overridden("a")).toStrictEqual({
+      allowed: false,
+      retryAfter: 3600,
+    });
+  });
+
+  it("swaps characters Unkey's identifiers don't take for _", async () => {
+    const stub = unkeyStub(unkeyReply(true, Date.now()));
+    const limit = unkeyLimiter(5, 60, "docs", "k", { fetch: stub.fetch });
+    await limit("blume:[::1]:4321:ask:fe80::1%eth0");
+    expect(JSON.parse(String(stub.calls[0]?.init?.body))).toMatchObject({
+      identifier: "blume:_::1_:4321:ask:fe80::1_eth0",
+    });
+  });
+
+  it("throws on a refused reply, and lets go of its body", async () => {
+    let cancelled = false;
+    const body = new ReadableStream({
+      cancel: () => {
+        cancelled = true;
+      },
+    });
+    const refused = unkeyLimiter(5, 60, "docs", "k", {
+      fetch: unkeyStub(() => new Response(body, { status: 403 })).fetch,
+    });
+    await expect(refused("a")).rejects.toThrow("Unkey answered 403.");
+    expect(cancelled).toBe(true);
+  });
+
+  it.each([
+    { data: { reset: 1, success: "false" } },
+    { data: { reset: "1", success: false } },
+    { data: { success: false } },
+    { error: { title: "Unauthorized" } },
+  ])("throws on a reply without a count: %j", async (reply) => {
+    const limit = unkeyLimiter(5, 60, "docs", "k", {
+      fetch: unkeyStub(() => Response.json(reply)).fetch,
+    });
+    await expect(limit("a")).rejects.toThrow();
   });
 });
 
@@ -255,6 +435,61 @@ describe(createLimiter, () => {
       binding: { limit: () => Promise.resolve({ success: true }) },
     });
     expect(await bound?.("a")).toStrictEqual({ allowed: true, retryAfter: 60 });
+    const stub = unkeyStub(unkeyReply(true, time.now() + 30_000));
+    const sharedUnkey = createLimiter(unkey(), {
+      fetch: stub.fetch,
+      now: time.now,
+      secret: (name) => `${name}-value`,
+    });
+    expect(await sharedUnkey?.("a")).toStrictEqual({
+      allowed: true,
+      retryAfter: 30,
+    });
+    expect(JSON.parse(String(stub.calls[0]?.init?.body))).toMatchObject({
+      duration: 600_000,
+      limit: 30,
+      namespace: "docs",
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("reads Unkey's root key from the env var the adapter names", async () => {
+    const stub = unkeyStub(unkeyReply(true, Date.now()));
+    const read: string[] = [];
+    const named = createLimiter(unkey({ rootKeyEnv: "DOCS_KEY" }), {
+      fetch: stub.fetch,
+      secret: (name) => {
+        read.push(name);
+        return name === "DOCS_KEY" ? "unkey_root" : undefined;
+      },
+    });
+    expect(await named?.("a")).toMatchObject({ allowed: true });
+    expect(read).toStrictEqual(["DOCS_KEY"]);
+    expect(stub.calls[0]?.init?.headers).toMatchObject({
+      authorization: "Bearer unkey_root",
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("reads Upstash's secrets from the env vars the adapter names", async () => {
+    const stub = upstashStub(1, 100);
+    const read: string[] = [];
+    const marketplace = createLimiter(
+      upstash({ tokenEnv: "KV_REST_API_TOKEN", urlEnv: "KV_REST_API_URL" }),
+      {
+        fetch: stub.fetch,
+        secret: (name) => {
+          read.push(name);
+          return name.startsWith("KV_") ? `${name}-value` : undefined;
+        },
+      }
+    );
+    expect(await marketplace?.("a")).toMatchObject({ allowed: true });
+    expect(read).toStrictEqual(["KV_REST_API_URL", "KV_REST_API_TOKEN"]);
+    expect(stub.calls[0]?.url).toBe("KV_REST_API_URL-value");
+    expect(stub.calls[0]?.headers).toMatchObject({
+      authorization: "Bearer KV_REST_API_TOKEN-value",
+    });
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -268,9 +503,18 @@ describe(createLimiter, () => {
     expect(await noSecrets?.("a")).toMatchObject({ allowed: false });
     const noBinding = createLimiter(cloudflare({ requests: 1, window: 10 }));
     expect(await noBinding?.("a")).toMatchObject({ retryAfter: 10 });
+    createLimiter(upstash({ urlEnv: "KV_REST_API_URL" }), { secret: () => {} });
+    const noKey = createLimiter(unkey({ requests: 1, window: 9 }), {
+      now: time.now,
+      secret: () => {},
+    });
+    expect(await noKey?.("a")).toStrictEqual({ allowed: true, retryAfter: 9 });
+    expect(await noKey?.("a")).toStrictEqual({ allowed: false, retryAfter: 9 });
     expect(warn.mock.calls.map(([message]) => String(message))).toStrictEqual([
       "Rate limiting counts in memory: set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN to share the count through Upstash.",
       "Rate limiting counts in memory: the Worker has no BLUME_RATE_LIMIT binding.",
+      "Rate limiting counts in memory: set KV_REST_API_URL and UPSTASH_REDIS_REST_TOKEN to share the count through Upstash.",
+      "Rate limiting counts in memory: set UNKEY_ROOT_KEY to share the count through Unkey.",
     ]);
   });
 });
@@ -318,6 +562,13 @@ describe(rateLimited, () => {
   it("lets the request through, and logs, when the store fails", async () => {
     expect(await rateLimited(storeDown, from("1.2.3.4"), "search")).toBeNull();
     expect(error).toHaveBeenCalledTimes(1);
+    // A root key Unkey refuses fails every count the same way.
+    const refused = createLimiter(unkey(), {
+      fetch: unkeyStub(() => new Response("", { status: 403 })).fetch,
+      secret: () => "unkey_root",
+    });
+    expect(await rateLimited(refused, from("1.2.3.4"), "ask")).toBeNull();
+    expect(error).toHaveBeenCalledTimes(2);
   });
 });
 

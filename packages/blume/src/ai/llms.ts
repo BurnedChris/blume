@@ -1,8 +1,11 @@
 import { mountBasePath, normalizeBasePath } from "../core/base-path.ts";
-import { rewriteRelativeImages } from "../core/content-assets.ts";
+import { rewriteRelativeAssets } from "../core/content-assets.ts";
 import matter from "../core/frontmatter.ts";
+import { isHiddenPage } from "../core/hidden-pages.ts";
+import { metaDescription } from "../core/manifest.ts";
 import type { BlumeProject } from "../core/project-graph.ts";
 import { absoluteUrl } from "../core/site-url.ts";
+import { extractHeadings } from "../core/sources/normalize.ts";
 import { readExpandedEntryText } from "../core/sources/read.ts";
 import type { NavNode, Navigation, PageRecord } from "../core/types.ts";
 import { buildRssFeeds } from "../deploy/rss.ts";
@@ -10,9 +13,14 @@ import { AI_CATALOG_PATH, hasAiCatalog } from "./ai-catalog.ts";
 import { API_CATALOG_PATH, hasApiCatalog } from "./api-catalog.ts";
 import { API_PAGES_PATH, OPENAPI_PATH } from "./api/paths.ts";
 import { downlevelComponents } from "./component-markdown.ts";
+import { linkText } from "./link-text.ts";
 import { relativeLinkRewriter } from "./relative-links.ts";
 import { projectComponentSerializers } from "./serializers.ts";
-import { AGENT_SKILLS_DIR, AGENT_SKILLS_INDEX_PATH } from "./skills.ts";
+import {
+  AGENT_SKILLS_DIR,
+  AGENT_SKILLS_INDEX_PATH,
+  servesSkillsIndex,
+} from "./skills.ts";
 import type { SkillArtifact } from "./skills.ts";
 import { applyAgentVisibility } from "./visibility.ts";
 
@@ -25,13 +33,6 @@ const pageUrl = (route: string, site?: string, base = ""): string => {
   const path = mountBasePath(base, route);
   return encodeURI(site ? absoluteUrl(site, path) : path);
 };
-
-/**
- * A title as Markdown link text. An unescaped bracket in it — `[Beta] Webhooks`
- * — closes or nests the text early, and the line stops being a link.
- */
-const linkText = (title: string): string =>
-  title.replaceAll(/[\\[\]]/gu, String.raw`\$&`);
 
 /** Inputs only the build has: the published skills, collected once per build. */
 export interface LlmsIndexOptions {
@@ -75,7 +76,7 @@ const agentResourceLines = (project: BlumeProject): string[] => {
       `- [MCP server](${url(config.agents.mcp.route)}): Streamable HTTP Model Context Protocol server with search_docs, get_page, list_pages, and get_navigation tools, plus every page as a resource. Discovery document: ${url("/.well-known/mcp.json")}`
     );
   }
-  if (config.agents.skills) {
+  if (servesSkillsIndex(config)) {
     lines.push(
       `- [Agent skills](${url(AGENT_SKILLS_INDEX_PATH)}): Agent Skills discovery index of the skills this site publishes.`
     );
@@ -117,7 +118,7 @@ const eligiblePages = (
       !(
         page.meta.ai.exclude ||
         page.meta.draft ||
-        page.meta.sidebar.hidden ||
+        isHiddenPage(page, project.graph) ||
         (page.meta.seo.noindex && page.source.name !== "openapi") ||
         (options.versions === "current" && page.version !== "")
       ) &&
@@ -183,7 +184,10 @@ export const buildLlmsIndex = (
 
   const line = (page: PageRecord): string => {
     seen.add(page.route);
-    const summary = page.description ? `: ${page.description}` : "";
+    // The page's meta description, so a page summarized only in
+    // `seo.description` (a generated reference page) still gets one.
+    const description = metaDescription(page);
+    const summary = description ? `: ${description}` : "";
     return `- [${linkText(page.title)}](${pageUrl(page.route, site, base)})${summary}`;
   };
 
@@ -302,6 +306,26 @@ export const buildLlmsIndex = (
   return `${[lead, ...blocks].join("\n\n")}\n`;
 };
 
+// A line an ATX heading opens (`# Title`); any other first line can only open
+// a setext heading, underlined on the line after it.
+const ATX_HEADING = /^ {0,3}#/u;
+
+/**
+ * A page body without the `# Heading` it opens with, when that heading's text
+ * is the page's title. An untitled page takes its title from that heading,
+ * and its `llms-full.txt` section already opens with `# <title>`, so the
+ * heading would show twice; the rendered page drops it the same way (see
+ * `markdown/title-heading.ts`).
+ */
+const withoutTitleHeading = (body: string, title: string): string => {
+  const lines = body.split("\n");
+  const span = ATX_HEADING.test(lines[0] ?? "") ? 1 : 2;
+  const [heading] = extractHeadings(lines.slice(0, span).join("\n"));
+  return heading?.depth === 1 && heading.text === title
+    ? lines.slice(span).join("\n").trimStart()
+    : body;
+};
+
 /** Build `llms-full.txt`: the full Markdown body of every current-docs page. */
 const buildFull = async (project: BlumeProject): Promise<string> => {
   const { config } = project;
@@ -317,7 +341,7 @@ const buildFull = async (project: BlumeProject): Promise<string> => {
       // Colocated `./image.png` references resolve to nothing for a reader of
       // llms-full.txt; point them at the served originals instead.
       if (page.sourcePath) {
-        raw = rewriteRelativeImages({
+        raw = rewriteRelativeAssets({
           deployBase: config.deployment.options.base,
           projectRoot: project.context.root,
           source: raw,
@@ -342,7 +366,12 @@ const buildFull = async (project: BlumeProject): Promise<string> => {
         config.deployment.options.site,
         normalizeBasePath(config.deployment.options.base)
       );
-      return [`# ${page.title}`, `Source: ${url}`, "", body].join("\n");
+      return [
+        `# ${page.title}`,
+        `Source: ${url}`,
+        "",
+        withoutTitleHeading(body, page.title),
+      ].join("\n");
     })
   );
 

@@ -34,7 +34,12 @@ import {
   navVariants,
 } from "../components/layout/nav-utils.ts";
 import { normalizeBasePath, withBasePath } from "../core/base-path.ts";
-import { validateUsedComponents } from "../core/component-diagnostics.ts";
+import { withChangelogIndexText } from "../core/changelog-index.ts";
+import {
+  missingExampleDiagnostics,
+  unknownPropDiagnostics,
+  validateUsedComponents,
+} from "../core/component-diagnostics.ts";
 import {
   analyzeComponentOverrides,
   emptyComponentOverrides,
@@ -42,7 +47,7 @@ import {
 import type { ComponentOverrideAnalysis } from "../core/component-overrides.ts";
 import {
   collectContentAssets,
-  rewriteRelativeImages,
+  rewriteRelativeAssets,
 } from "../core/content-assets.ts";
 import type {
   BlumeBanner,
@@ -51,8 +56,13 @@ import type {
   BlumeFavicon,
   BlumeLogo,
 } from "../core/data.ts";
-import { BlumeError } from "../core/diagnostics.ts";
+import {
+  BlumeError,
+  enrichDiagnostic,
+  formatDiagnostic,
+} from "../core/diagnostics.ts";
 import { writeTextAtomic } from "../core/fs-atomic.ts";
+import { gitIgnoredPaths } from "../core/git-ignored.ts";
 import {
   apiUrl as githubApiUrl,
   editBaseUrl as githubEditBaseUrl,
@@ -63,6 +73,7 @@ import { resolveFallbackLocale } from "../core/i18n.ts";
 import { buildIncludeGraph } from "../core/includes.ts";
 import { resolveLocalizable } from "../core/localizable.ts";
 import {
+  validateMcpClientIcons,
   validateNavTargets,
   validateSearchPopularIcons,
 } from "../core/nav-diagnostics.ts";
@@ -75,7 +86,9 @@ import { trimChar } from "../core/trim.ts";
 import { resolveTsconfigAliases } from "../core/tsconfig-aliases.ts";
 import type { Diagnostic, Navigation } from "../core/types.ts";
 import { getBlumeVersion } from "../core/version.ts";
+import { servedFiles } from "../deploy/generated-files.ts";
 import { buildRssFeeds, renderRssFeed } from "../deploy/rss.ts";
+import { hreflangAlternates } from "../deploy/sitemap.ts";
 import {
   languageIconCss,
   languageIconSlugsIn,
@@ -93,13 +106,13 @@ import {
   builtinProxyReferences,
   hasScalarReferences,
   needsPlaygroundProxy,
-  referenceRoutes,
 } from "../openapi/references.ts";
 import { buildReferenceFiles } from "../openapi/scalar.ts";
 import { isOpenApiSource } from "../openapi/source.ts";
 import { registry } from "../registry/registry.ts";
 import { buildSearchDocuments } from "../search/documents.ts";
 import { resolveSearchPopular } from "../search/popular.ts";
+import { sourcePages } from "../search/source-pages.ts";
 import {
   examplesEntryTemplate,
   tailwindEntryTemplate,
@@ -125,6 +138,7 @@ import {
   customOgRoutes,
   discoverPages,
   hasGeneratedChangelog,
+  navTargetRoutes,
   routeIsTaken,
 } from "./pages.ts";
 import { candidateHolding } from "./render-deps.ts";
@@ -179,28 +193,35 @@ export type { PrerenderDepsPlugin } from "./render-deps.ts";
 const BLUME_SRC = join(packageRoot(), "src");
 
 /**
- * Absolute path to `babel-plugin-react-compiler`, resolved from Blume's own
- * package root (Blume ships it). Returns null when React or the compiler is off.
+ * Whether the generated `react()` call turns the React Compiler on: React and
+ * `react.compiler` are both on, and `oxc-transform-react` (Blume ships it)
+ * resolves. False when React or the compiler is off.
  *
- * The path must be absolute: @vitejs/plugin-react resolves babel plugins from
- * the *project* root, not `.blume/`, so a bare specifier fails in a user project
- * that never installed the plugin directly. Resolving from `packageRoot()` binds
- * to Blume's shipped copy regardless of the user's package manager or hoisting.
+ * The compiler is loaded by `@vitejs/plugin-react` with a bare
+ * `import("oxc-transform-react")` from its own directory, which fails the
+ * build when it throws, so the check walks the same chain — Blume →
+ * `@astrojs/react` → `@vitejs/plugin-react` — rather than resolving from
+ * Blume's root, which a strict package manager may not link the plugin to.
  */
 export const resolveReactCompiler = (
   config: ResolvedConfig,
   needsReact: boolean,
   pkgDir: string = packageRoot()
-): string | null => {
+): boolean => {
   if (!(needsReact && config.react.compiler)) {
-    return null;
+    return false;
   }
   try {
-    return createRequire(pathToFileURL(join(pkgDir, "_.js")).href).resolve(
-      "babel-plugin-react-compiler"
+    const astroReact = createRequire(
+      pathToFileURL(join(pkgDir, "_.js")).href
+    ).resolve("@astrojs/react");
+    const pluginReact = createRequire(astroReact).resolve(
+      "@vitejs/plugin-react"
     );
+    createRequire(pluginReact).resolve("oxc-transform-react");
+    return true;
   } catch {
-    return null;
+    return false;
   }
 };
 
@@ -212,11 +233,11 @@ export const resolveReactCompiler = (
 export const reactCompilerWarnings = (
   config: ResolvedConfig,
   needsReact: boolean,
-  compilerPath: string | null
+  compiler: boolean
 ): string[] =>
-  needsReact && config.react.compiler && !compilerPath
+  needsReact && config.react.compiler && !compiler
     ? [
-        "React Compiler is enabled but `babel-plugin-react-compiler` could not be resolved; falling back to an uncompiled build. Reinstall Blume, or set `react: { compiler: false }` to silence this.",
+        "React Compiler is enabled but `oxc-transform-react` could not be resolved; falling back to an uncompiled build. Reinstall Blume, or set `react: { compiler: false }` to silence this.",
       ]
     : [];
 
@@ -684,7 +705,7 @@ export const collectStaged = (project: BlumeProject): Map<string, string> => {
       // Point it at the served original instead — the same rewrite the
       // agent-facing Markdown gets.
       const text = page.sourcePath
-        ? rewriteRelativeImages({
+        ? rewriteRelativeAssets({
             deployBase: project.config.deployment.options.base,
             projectRoot: project.context.root,
             source: page.body.text,
@@ -754,12 +775,12 @@ const isStringShorthand = <T>(value: T | string): value is string =>
   typeof value === "string";
 
 /**
- * The URL behind the header's repo mark. A string is used as-is: `github`
- * drives the per-page edit link, the header mark and the manifest's
+ * The URL behind the footer's repo mark. A string is used as-is: `github`
+ * drives the per-page edit link, the footer mark and the manifest's
  * `repository` together, so a project whose docs repo is private has to unset
  * all three, and would otherwise have no way to point the mark at anything.
  */
-const headerRepoUrl = (
+const footerRepoUrl = (
   repo: boolean | string,
   derived: string | null
 ): string | null => {
@@ -1008,7 +1029,9 @@ const resolveFooter = (
 ): ResolvedConfig["footer"] | null => {
   const { footer } = config;
   return footer &&
-    (footer.links.length > 0 || Object.keys(footer.socials).length > 0)
+    (footer.copyright !== undefined ||
+      footer.links.length > 0 ||
+      Object.keys(footer.socials).length > 0)
     ? footer
     : null;
 };
@@ -1107,9 +1130,22 @@ export const buildRuntimeData = (project: BlumeProject): string => {
   const editBase = github ? githubEditBaseUrl(github) : null;
   const logo = resolveLogo(project);
   const ogLogo = resolveOgMark(project, logo?.svg);
+  // Files git ignores (a generated reference in a gitignored folder) are
+  // never in the repository, so an edit link would 404. One git call covers
+  // every page an edit link is built for.
+  const ignored = editBase
+    ? gitIgnoredPaths(
+        context.root,
+        manifest.routes.flatMap((route) =>
+          route.editUrl === undefined && route.sourcePath
+            ? [route.sourcePath]
+            : []
+        )
+      )
+    : new Set<string>();
 
   const editUrlFor = (sourcePath?: string): string | null => {
-    if (!(editBase && sourcePath)) {
+    if (!(editBase && sourcePath) || ignored.has(sourcePath)) {
       return null;
     }
     const rel = relative(context.root, sourcePath).split("\\").join("/");
@@ -1130,10 +1166,10 @@ export const buildRuntimeData = (project: BlumeProject): string => {
 
   const { i18n } = config;
 
-  // Resolve the header repo link per locale. API references no longer add a tab
+  // Resolve the footer's repo link per locale. API references no longer add a tab
   // automatically — authors point a `navigation.tabs` entry at the reference
   // route to surface it (see `referenceRoutes`).
-  const markUrl = headerRepoUrl(config.navigation.repo, repoUrl);
+  const markUrl = footerRepoUrl(config.navigation.repo, repoUrl);
   const withRepoUrl = (nav: Navigation): Navigation => ({
     ...nav,
     repoUrl: markUrl,
@@ -1141,23 +1177,34 @@ export const buildRuntimeData = (project: BlumeProject): string => {
 
   // Resolved UI dictionaries: one per locale under i18n, English baseline
   // otherwise. Threaded into chrome so the catch-all can pick the active locale.
+  // The `changelog` config's title and description replace the dictionaries'.
   const uiByLocale = i18n
     ? Object.fromEntries(
         i18n.locales.map(({ code }) => [
           code,
-          resolveUIStrings(code, {
-            defaultLocale: i18n.defaultLocale,
-            overrides: i18n.ui,
-          }),
+          withChangelogIndexText(
+            config,
+            resolveUIStrings(code, {
+              defaultLocale: i18n.defaultLocale,
+              overrides: i18n.ui,
+            }),
+            code
+          ),
         ])
       )
     : {};
-  const defaultUi = i18n
-    ? resolveUIStrings(i18n.defaultLocale, {
-        defaultLocale: i18n.defaultLocale,
-        overrides: i18n.ui,
-      })
-    : EN_UI;
+  const defaultUi = withChangelogIndexText(
+    config,
+    i18n
+      ? resolveUIStrings(i18n.defaultLocale, {
+          defaultLocale: i18n.defaultLocale,
+          overrides: i18n.ui,
+        })
+      : EN_UI,
+    i18n?.defaultLocale
+  );
+
+  const hreflang = hreflangAlternates(project);
 
   const navigationByLocale = i18n
     ? Object.fromEntries(
@@ -1215,6 +1262,7 @@ export const buildRuntimeData = (project: BlumeProject): string => {
               dir,
               label,
             })),
+            routeByBrowserLanguage: i18n.routeByBrowserLanguage,
           }
         : null,
       // `undefined` members drop out of the JSON snapshot; the null keeps the
@@ -1227,13 +1275,16 @@ export const buildRuntimeData = (project: BlumeProject): string => {
             }
           : null,
       imageZoom: config.markdown.imageZoom,
+      jsonLd: config.seo.jsonLd,
       logo,
       mcp: config.agents.mcp.enabled
         ? {
+            clients: config.agents.mcp.clients,
             name: config.agents.mcp.name ?? config.title,
             route: config.agents.mcp.route,
           }
         : null,
+      metatags: config.seo.metatags ?? null,
       narration: config.narration.enabled
         ? { generated: config.narration.provider !== null }
         : null,
@@ -1245,6 +1296,7 @@ export const buildRuntimeData = (project: BlumeProject): string => {
       og: {
         description: resolveOgDescription(config),
         enabled: config.seo.og.enabled ?? false,
+        image: config.seo.og.image,
         logo: ogLogo,
         palette: config.seo.og.palette,
         site: resolveOgSite(config),
@@ -1252,6 +1304,7 @@ export const buildRuntimeData = (project: BlumeProject): string => {
       openInChat: config.ai.openInChat,
       repoUrl,
       search: {
+        analytics: config.search.analytics,
         enabled: config.search.provider.mode !== "none",
         popular: resolveSearchPopular(config.search.popular, config.basePath),
         provider: config.search.provider.kind,
@@ -1304,12 +1357,14 @@ export const buildRuntimeData = (project: BlumeProject): string => {
       entryId: route.entryId,
       fallback: route.fallback ?? false,
       hidden: route.hidden,
+      hreflang: hreflang.get(route.path) ?? [],
       id: route.id,
       indexable: route.indexable,
       lastModified: route.lastModified ?? null,
       locale: route.locale,
       monolingual: route.monolingual ?? false,
       path: route.path,
+      published: route.published ?? null,
       title: route.title,
       version: route.version,
       versionAlternates: route.versionAlternates,
@@ -1793,21 +1848,26 @@ export const diagnosticWarning = (diagnostic: Diagnostic): string =>
 
 /**
  * Missing-dependency preflight: the search provider's SDK, content source
- * SDKs, the assistant backend's provider SDK, the deployment adapter's package,
- * and — since React ships with Blume while Vue/Svelte don't — any island
- * framework's Astro integration. A build fails here, before anything is
- * written, with the install command for the project's package manager —
- * otherwise Vite dies later on an opaque unresolved import from the hidden
- * runtime. Dev warns and keeps serving: only the pages and routes that import
- * the package break, and installing it is picked up on the next restart.
+ * SDKs, the assistant backend's and narration provider's SDKs, the deployment
+ * adapter's package, and — since React ships with Blume while Vue/Svelte
+ * don't — any island framework's Astro integration. A build fails here,
+ * before anything is written, with the install command for the project's
+ * package manager — otherwise Vite dies later on an opaque unresolved import
+ * from the hidden runtime. Dev warns and keeps serving: only the pages and
+ * routes that import the package break, and installing it is picked up on
+ * the next restart. Dev leaves narration's SDK out, since only a build
+ * generates the clips.
  */
 const dependencyPreflight = async (
   project: BlumeProject,
   frameworks: Set<string>
 ): Promise<string[]> => {
   const build = project.mode === "build";
+  const { config } = project;
   const diagnostic = await missingDependencyDiagnostic(
-    project.config,
+    build
+      ? config
+      : { ...config, narration: { ...config.narration, provider: null } },
     project.context.root,
     build ? "error" : "warning",
     frameworks
@@ -2060,11 +2120,12 @@ export const generateRuntime = async (
   const needsVue = frameworks.has("vue");
   const needsSvelte = frameworks.has("svelte");
 
-  // Absolute path to the React Compiler babel plugin (null when off). Resolved
-  // here, Node-side, so the generated config points babel straight at Blume's
-  // shipped copy — see resolveReactCompiler. Any unresolved-but-requested
-  // warning is folded into `warnings` below (declared later).
-  const reactCompilerPath = resolveReactCompiler(config, needsReact);
+  // Whether react() turns the React Compiler on (false when off). Checked here,
+  // Node-side, so an unresolvable compiler degrades to an uncompiled build
+  // instead of failing it — see resolveReactCompiler. Any
+  // unresolved-but-requested warning is folded into `warnings` below (declared
+  // later).
+  const reactCompiler = resolveReactCompiler(config, needsReact);
 
   // Custom pages that should get a generated OG card (the home most of all).
   // Computed before the MCP `.well-known` routes are appended below — those are
@@ -2141,7 +2202,7 @@ export const generateRuntime = async (
           needsSvelte,
           needsVue,
           pages,
-          reactCompilerPath,
+          reactCompiler,
           searchClientPath,
           themePath,
         })
@@ -2161,6 +2222,7 @@ export const generateRuntime = async (
           context,
           filesystem: hasFilesystemSource,
           staged: hasStaged,
+          unparsable: project.unparsable,
         })
       ),
       write(
@@ -2204,7 +2266,7 @@ export const generateRuntime = async (
           languageIcons,
           sources: [
             `${BLUME_SRC}/**/*.{astro,ts,tsx}`,
-            `${context.root}/**/*.{astro,mdx,ts,tsx}`,
+            `${context.root}/**/*.{astro,jsx,mdx,ts,tsx}`,
           ],
           twoslashCss: twoslashCss(),
           userTheme,
@@ -2242,7 +2304,10 @@ export const generateRuntime = async (
     writeMcpFiles(mcp, write, agentData),
     writeApiFiles(project, api, write, agentData, mcp),
     playgroundProxy.enabled
-      ? write(playgroundProxy.entrypoint, playgroundProxyTemplate(proxyOrigins))
+      ? write(
+          playgroundProxy.entrypoint,
+          playgroundProxyTemplate(proxyOrigins, config.rateLimit)
+        )
       : Promise.resolve(false),
   ]);
 
@@ -2272,7 +2337,6 @@ export const generateRuntime = async (
         exportEpub,
         exportPdf,
         needsReact,
-        staged: hasStaged,
       })
     );
   }
@@ -2311,7 +2375,11 @@ export const generateRuntime = async (
   if (searchAdapter.kind === "mixedbread") {
     await write(
       join(srcDir, "pages", "api", "search.ts"),
-      mixedbreadSearchEndpointTemplate(searchAdapter.options)
+      mixedbreadSearchEndpointTemplate(
+        searchAdapter.options,
+        sourcePages(project),
+        config.rateLimit
+      )
     );
   }
 
@@ -2366,7 +2434,7 @@ export const generateRuntime = async (
     ...(depsLinkWarning ? [depsLinkWarning] : []),
     ...proxyAllowlistWarnings(config, openApiData),
     ...apiPageProxyWarnings(project),
-    ...reactCompilerWarnings(config, needsReact, reactCompilerPath),
+    ...reactCompilerWarnings(config, needsReact, reactCompiler),
     ...mcp.warnings,
     ...islandDiscovery.warnings,
     ...exampleDiscovery.warnings,
@@ -2374,25 +2442,26 @@ export const generateRuntime = async (
     ...overrideWarnings,
   ];
 
-  // Missing-navigation-target check, now that every servable route is known:
-  // content routes, custom `.astro` pages, the generated changelog, and any
-  // OpenAPI reference routes (so a tab an author points at one still validates).
-  const navTargetRoutes = new Set<string>([
-    ...project.graph.routes.keys(),
-    ...pages.map((page) => page.pattern),
-    ...referenceRoutes(config),
-  ]);
-  if (changelogIndex) {
-    navTargetRoutes.add("/changelog");
-  }
-  // Curated `search.popular` icons live outside the navigation model, so they
-  // miss `validateNavIcons` in the graph build — they're checked here too,
-  // where the search config is known. A typo otherwise just renders the
-  // default glyph.
+  // Missing-navigation-target check, now that every servable route is known
+  // (see `navTargetRoutes`).
+  // Curated `search.popular` icons and custom MCP clients' icons live outside
+  // the navigation model, so they miss `validateNavIcons` in the graph build —
+  // they're checked here too, where their config is known. A typo otherwise
+  // just renders the default glyph, or no icon at all.
   warnings.push(
     ...[
-      ...validateNavTargets(project.graph.navigation, navTargetRoutes),
+      ...validateNavTargets(
+        project.graph.navigation,
+        navTargetRoutes(project, pages),
+        servedFiles(project)
+      ),
       ...validateSearchPopularIcons(config.search.popular),
+      ...(config.agents.mcp.enabled
+        ? validateMcpClientIcons(
+            config.agents.mcp.clients,
+            config.i18n?.defaultLocale
+          )
+        : []),
     ].map(diagnosticWarning)
   );
 
@@ -2408,6 +2477,17 @@ export const generateRuntime = async (
       knownComponentTags,
       new Set(registry.map((item) => item.name))
     ).map(diagnosticWarning),
+    ...missingExampleDiagnostics(
+      project.graph.pages,
+      exampleDiscovery,
+      context.root,
+      knownComponentTags
+    ).map(diagnosticWarning),
+    // Printed whole, like a scan diagnostic, so the line it names shows.
+    ...unknownPropDiagnostics(project.graph.pages, knownComponentTags).map(
+      (diagnostic) =>
+        formatDiagnostic(enrichDiagnostic(diagnostic), context.root)
+    ),
     ...dependencyWarnings
   );
   if (hasScalarReferences(config)) {

@@ -1,0 +1,580 @@
+---
+// Build one docs portal from multiple GitHub repositories: checked against the
+// content sources and remote MDX docs, the mdxRemote() adapter and engine
+// (sources/mdx-remote.ts, core/sources/mdx-remote.ts), snapshot caching and
+// keys (core/sources/cache.ts, core/sources/resolve.ts), `blume sync`, folder
+// meta keys (core/meta.ts), relative links and images in staged pages
+// (markdown/relative-links.ts, core/links.ts, collectStaged in
+// astro/generate.ts, @astrojs/markdown-satteri's image collection), required
+// secrets (cli/required-secrets.ts), and GitHub's REST, token, and Actions
+// docs. Ran mdxRemoteSource against two subtrees of a public GitHub repository
+// (one pinned to a tag, one to a commit SHA) to confirm routes, edit links,
+// the snapshot layout, and folder meta ordering; ran link validation and
+// route collection over mocked remote pages. Rechecked the prefixed-file
+// links, `!` include patterns (probed with picomatch), and the
+// BLUME_SOURCE_PATH_MISSING and BLUME_SOURCE_TRUNCATED warnings against
+// core/links.ts and core/sources/mdx-remote.ts. Not yet run end to end with
+// `blume build`.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import Step from "blume/components/content/Step.astro";
+import Steps from "blume/components/content/Steps.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("documentation-multiple-repositories")}>
+  <p>
+    To build one docs site from several GitHub repositories, give each
+    repository an <code>mdxRemote()</code> content source with its own{" "}
+    <code>prefix</code>. When you build, Blume lists each repository's docs
+    folder through the GitHub API, fetches its Markdown and MDX files, and
+    renders them beside your local pages. The result is one site with one
+    search index, where each repository keeps its own URL space.
+  </p>
+  <p>
+    By the end of this guide, the Acme docs portal owns its home page and a
+    shared API keys page, mounts the CLI repository's docs at <code>/cli</code>{" "}
+    and the Node SDK's at <code>/sdk</code>, and pins each to a release tag, so
+    upstream edits reach the site only when you move the pin. It also covers
+    tokens, cross-repository links and images, route collisions, and caching.
+  </p>
+  <p>
+    If all your docs already live in one repository, you don't need remote
+    sources: see{" "}
+    <a href="/guides/monorepo-documentation-site">Add documentation to a monorepo</a>.
+    Also note that <code>mdxRemote()</code> fetches page text only. It doesn't
+    download images, and a page can't import files from its own repository. If
+    your pages depend on those, copy each repository's docs folder into your
+    content folder in CI instead, so Blume reads them as local files.
+  </p>
+
+  <h2>The source repositories</h2>
+  <p>
+    Each product repository keeps its docs in a <code>docs/</code> folder beside
+    its code. Swap in your own owners, repositories, and tags as you go. The CLI
+    repository, <code>acme/cli</code>, has two pages:
+  </p>
+  <CodeBlock
+    code={`---
+title: Acme CLI
+description: Send messages and manage templates from your terminal.
+---
+
+The \`acme\` command wraps the Acme Messages API. Create an
+[API key](/api-keys) first, then [send a message](./send.mdx).`}
+    lang="mdx"
+    title="docs/index.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Send a message
+description: Send an email or SMS from the command line.
+---
+
+\`\`\`bash
+acme messages send --channel email --to ada@example.com --template welcome
+\`\`\`
+
+The command prints the new message's ID. To send from code instead, use the
+[Node SDK](/sdk/quickstart).
+
+![The send command and its output](/images/cli/send.png)`}
+    lang="mdx"
+    title="docs/send.mdx"
+  />
+  <p>The SDK repository, <code>acme/node-sdk</code>, has three:</p>
+  <CodeBlock
+    code={`---
+title: Node SDK
+description: Call the Acme Messages API from Node.js.
+---
+
+Start with the [quickstart](./quickstart.mdx).`}
+    lang="mdx"
+    title="docs/index.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Quickstart
+description: Send your first message from Node.js.
+---
+
+The SDK reads your key from the \`ACME_API_KEY\` environment variable. See
+[API keys](/api-keys) to create one. If a call fails, check
+[Errors](./errors.mdx). To send from a terminal, use the [CLI](/cli/send).`}
+    lang="mdx"
+    title="docs/quickstart.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Errors
+description: What the SDK throws when the API rejects a request.
+---
+
+A failed request throws an error with the HTTP status and the API's error
+code. A \`401\` means the key is missing or revoked: [create a new one](/api-keys).`}
+    lang="mdx"
+    title="docs/errors.mdx"
+  />
+  <p>Tag each repository at the commit you want to publish:</p>
+  <CodeBlock
+    code={`git tag v1.4.0
+git push origin v1.4.0`}
+    lang="bash"
+  />
+  <p>
+    This guide uses <code>v1.4.0</code> for the CLI and <code>v2.3.0</code> for
+    the SDK.
+  </p>
+
+  <h2>Create the portal</h2>
+  <p>The portal is its own repository. Scaffold it:</p>
+  <CodeBlock code="npx blume init acme-docs" lang="bash" />
+  <p>
+    Pick the <code>docs</code> template. When it asks where your content lives,
+    keep <code>filesystem</code> and add <code>mdx-remote</code>, then keep the
+    default <code>docs</code> content folder. You'll replace the generated
+    config in the next section. Replace <code>docs/index.mdx</code> and add a
+    page both repositories link to:
+  </p>
+  <CodeBlock
+    code={`---
+title: Acme docs
+description: Send transactional email and SMS from the CLI or the Node SDK.
+---
+
+- [CLI](/cli): send messages and manage templates from a terminal.
+- [Node SDK](/sdk): call the Acme Messages API from Node.js.
+
+Both need an [API key](/api-keys).`}
+    lang="mdx"
+    title="docs/index.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: API keys
+description: Create the API key the CLI and the SDK authenticate with.
+---
+
+Create a key in the Acme dashboard, then store it in an environment variable
+named \`ACME_API_KEY\`. The CLI and the SDK both read it from there.`}
+    lang="mdx"
+    title="docs/api-keys.mdx"
+  />
+
+  <h2>Mount each repository under its own prefix</h2>
+  <p>
+    Replace <code>blume.config.ts</code> with one local source and one remote
+    source per repository:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { filesystem, mdxRemote } from "blume/sources";
+
+export default defineConfig({
+  title: "Acme Docs",
+  description: "Docs for the Acme Messages API, its CLI, and its Node SDK.",
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      mdxRemote({
+        prefix: "cli",
+        github: { owner: "acme", repo: "cli", ref: "v1.4.0", path: "docs" },
+      }),
+      mdxRemote({
+        prefix: "sdk",
+        github: { owner: "acme", repo: "node-sdk", ref: "v2.3.0", path: "docs" },
+      }),
+    ],
+  },
+  navigation: {
+    tabs: [
+      { label: "CLI", path: "/cli" },
+      { label: "Node SDK", path: "/sdk" },
+    ],
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    A <code>sources</code> array replaces Blume's default content folder, so the{" "}
+    <code>filesystem()</code> entry is what keeps your local pages. Each{" "}
+    <code>mdxRemote()</code> reads the files under <code>path</code> at{" "}
+    <code>ref</code> (which defaults to <code>main</code>) and mounts them under{" "}
+    <code>/&lt;prefix&gt;</code>. The prefix also names the source in
+    diagnostics and in its cache folder. You get these routes:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">File</th>
+        <th scope="col">Route</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Portal <code>docs/index.mdx</code></td>
+        <td><code>/</code></td>
+      </tr>
+      <tr>
+        <td>Portal <code>docs/api-keys.mdx</code></td>
+        <td><code>/api-keys</code></td>
+      </tr>
+      <tr>
+        <td><code>acme/cli</code> <code>docs/index.mdx</code></td>
+        <td><code>/cli</code></td>
+      </tr>
+      <tr>
+        <td><code>acme/cli</code> <code>docs/send.mdx</code></td>
+        <td><code>/cli/send</code></td>
+      </tr>
+      <tr>
+        <td><code>acme/node-sdk</code> <code>docs/index.mdx</code></td>
+        <td><code>/sdk</code></td>
+      </tr>
+      <tr>
+        <td><code>acme/node-sdk</code> <code>docs/quickstart.mdx</code></td>
+        <td><code>/sdk/quickstart</code></td>
+      </tr>
+      <tr>
+        <td><code>acme/node-sdk</code> <code>docs/errors.mdx</code></td>
+        <td><code>/sdk/errors</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Each tab scopes the sidebar to its section, and on the home page the
+    sidebar lists the local pages that belong to no tab. A frontmatter <code>slug</code> in a
+    remote page stays inside its prefix, too. Every <code>.md</code> and{" "}
+    <code>.mdx</code> file under <code>path</code> becomes a page, so keep
+    READMEs and contributing notes out of the docs folder, or leave them out
+    with a <code>!</code> pattern in <code>include</code>, such as{" "}
+    <code>{'["**/*.{md,mdx}", "!**/README.md"]'}</code>.
+  </p>
+  <h3>Order a remote section from the portal</h3>
+  <p>
+    Blume fetches only Markdown from a repository, never its{" "}
+    <code>meta.ts</code>, so the SDK section sorts its index first and the rest
+    alphabetically: Errors above Quickstart. Folder meta is matched by sidebar
+    path rather than by source, so a <code>meta.ts</code> in the portal's own{" "}
+    <code>docs/sdk/</code> folder orders the remote pages mounted at{" "}
+    <code>/sdk</code>:
+  </p>
+  <CodeBlock
+    code={`import { defineMeta } from "blume";
+
+export default defineMeta({
+  pages: ["quickstart", "errors"],
+});`}
+    lang="ts"
+    title="docs/sdk/meta.ts"
+  />
+  <p>
+    To keep the order in the source repository instead, set{" "}
+    <code>sidebar.order</code> in each page's frontmatter.
+  </p>
+
+  <h2>Pin each repository to a revision</h2>
+  <p>
+    The <code>ref</code> takes a branch, a tag, or a commit SHA. Blume passes it
+    to GitHub's tree API and to the raw file URLs it reads each page from. What
+    you pin decides what a build can publish:
+  </p>
+  <ul>
+    <li>
+      <strong>A tag</strong> is readable and changes only if someone
+      force-pushes it.
+    </li>
+    <li>
+      <strong>A full commit SHA</strong> can't change at all. To pin the commit
+      a branch points at right now, run{" "}
+      <code>git ls-remote https://github.com/acme/cli refs/heads/main</code> and
+      paste the 40-character SHA it prints.
+    </li>
+    <li>
+      <strong>A branch</strong> publishes whatever it holds when a build runs,
+      and Blume doesn't record which commit that was. GitHub also serves raw
+      files with a five-minute cache header, so a build right after a push can
+      list new files while still reading older copies of changed ones.
+    </li>
+  </ul>
+  <p>
+    With a pin, <code>blume.config.ts</code> records what's published, and the
+    portal's Git history shows when each repository moved. Each remote page's
+    edit link carries the same ref and points at the source repository: the
+    send page links to{" "}
+    <code>https://github.com/acme/cli/edit/v1.4.0/docs/send.mdx</code>.
+  </p>
+
+  <h2>Give Blume a GitHub token</h2>
+  <p>
+    Public repositories work without a token, though <code>blume dev</code>{" "}
+    and <code>blume build</code> still warn <code>BLUME_MISSING_SECRET</code>.
+    Each fetch makes one GitHub API call per source to list its files, and
+    GitHub allows 60 unauthenticated API requests an hour, so set a token in CI
+    even for public repositories.
+  </p>
+  <p>
+    For private repositories, Blume reads a single variable,{" "}
+    <code>GITHUB_TOKEN</code>, for every <code>mdxRemote()</code> source, and
+    only ever sends it to <code>api.github.com</code> and{" "}
+    <code>raw.githubusercontent.com</code>. That one token has to read every
+    source repository. Create a fine-grained personal access token with the
+    organization as its resource owner, only the source repositories selected,
+    and read-only Contents permission. A fine-grained token reaches
+    repositories under one owner only, so keep the source repositories in one
+    organization.
+  </p>
+  <p>
+    Locally, put the token in <code>.env.local</code> at the portal's root as{" "}
+    <code>GITHUB_TOKEN=</code> followed by the token. <code>blume init</code>{" "}
+    already listed that file in <code>.gitignore</code>, and Blume loads{" "}
+    <code>.env</code> and <code>.env.local</code> itself. To
+    use your GitHub CLI login for one run without writing it to disk:
+  </p>
+  <CodeBlock code="GITHUB_TOKEN=$(gh auth token) npx blume dev" lang="bash" />
+  <p>
+    In GitHub Actions, store the token as a repository secret named{" "}
+    <code>DOCS_SOURCES_TOKEN</code> (secret names can't start with{" "}
+    <code>GITHUB_</code>) and expose it as <code>GITHUB_TOKEN</code>, as the
+    workflow below does. The token Actions creates for each run can't stand in:
+    its permissions are limited to the repository running the workflow. If your
+    host builds the site instead, set <code>GITHUB_TOKEN</code> in its build
+    environment.
+  </p>
+
+  <h2>Make links and images work across repositories</h2>
+  <p>
+    A source repository's docs are read on GitHub and on the portal, and only
+    some links work in both.
+  </p>
+  <ul>
+    <li>
+      <strong>Pages in the same folder:</strong> use relative file links like{" "}
+      <code>./send.mdx</code>. GitHub opens the file, and Blume rewrites the
+      link to the page's route, <code>/cli/send</code>.
+    </li>
+    <li>
+      <strong>Another repository or a portal page:</strong> use the portal
+      route, like <code>/sdk/quickstart</code> or <code>/api-keys</code>. These
+      links break when someone reads the file on GitHub.
+    </li>
+    <li>
+      <strong>Anything outside the docs folder:</strong> a link like{" "}
+      <code>../README.md</code> fails <code>blume validate</code> with{" "}
+      <code>BLUME_BROKEN_LINK</code>. Link to the file on GitHub with a full URL
+      instead.
+    </li>
+    <li>
+      <strong>Ordering prefixes:</strong> Blume drops a numeric prefix like{" "}
+      <code>02-</code> from a remote file's route, and a link to{" "}
+      <code>./02-errors.mdx</code> lands on <code>/sdk/errors</code>, in the
+      page and in <code>blume validate</code> alike.
+    </li>
+  </ul>
+  <p>
+    Images need more care. Blume doesn't download them for a remote source or
+    rewrite relative image paths in remote pages, and a remote page is compiled
+    from a staging copy with no files beside it. So{" "}
+    <code>![Output](./images/send.png)</code> points at nothing, and the page
+    fails to build. Keep images in the portal's <code>public/</code> folder, one
+    folder per repository, and reference them from the root: the send page's{" "}
+    <code>/images/cli/send.png</code> is <code>public/images/cli/send.png</code>.{" "}
+    <code>blume validate</code> reports a missing one as{" "}
+    <code>BLUME_BROKEN_ASSET</code>.
+  </p>
+  <p>
+    For a public repository, a full raw URL such as{" "}
+    <code>https://raw.githubusercontent.com/acme/cli/v1.4.0/docs/images/send.png</code>{" "}
+    also works, and shows on GitHub too. Readers' browsers then load it from
+    GitHub, and it fails for a private repository, since they have no token.
+  </p>
+
+  <h2>What Blume caches, and how to refresh it</h2>
+  <p>
+    Every successful fetch is saved as a snapshot in{" "}
+    <code>.blume/cache/&lt;prefix&gt;/published-&lt;hash&gt;/entries.json</code>,
+    where the hash covers the source's options, <code>ref</code> included. It
+    holds each file's text, a content hash, and its edit URL, but no commit
+    SHA. <code>.blume/</code> is regenerated, so don't commit it.
+  </p>
+  <ul>
+    <li>
+      <strong><code>blume build</code></strong> always fetches. If GitHub fails
+      and a snapshot for the same options exists, it builds from the snapshot
+      and warns <code>BLUME_SOURCE_OFFLINE</code>. With no snapshot, as on a
+      fresh CI runner, it fails with <code>BLUME_SOURCE_FETCH_FAILED</code>. If
+      only some files fail, it skips them with a warning of the same code and
+      builds the rest.
+    </li>
+    <li>
+      <strong><code>blume dev</code></strong> serves a source from its snapshot
+      when it has one, so restarting doesn't refetch. Run{" "}
+      <code>npx blume sync</code> to refetch every remote source (a running dev
+      server reloads), or <code>npx blume sync --force</code> to delete{" "}
+      <code>.blume/cache</code> first. To refetch on a timer in dev, set{" "}
+      <code>pollInterval</code> (in seconds) on a source.
+    </li>
+    <li>
+      <strong>Changing a source's options</strong>, such as its{" "}
+      <code>ref</code>, <code>path</code>, or <code>include</code>, gives it a
+      new snapshot, so the next run fetches fresh.
+    </li>
+  </ul>
+  <p>
+    None of these gets around GitHub's five-minute cache on branch files. A new
+    pin does, because it's a new URL.
+  </p>
+
+  <h2>Check the portal in CI</h2>
+  <p>
+    Click through both tabs in <code>npx blume dev</code>, then run what CI will
+    run:
+  </p>
+  <CodeBlock
+    code={`npx blume validate --strict
+npx blume build`}
+    lang="bash"
+  />
+  <p>
+    <code>blume build</code> fails on errors, but snapshot fallbacks and skipped
+    files are only warnings. <code>blume validate --strict</code> fails on
+    those too, and on broken links and missing images. It fetches the sources
+    itself, so pinned refs make sure it checks what the build publishes. This
+    workflow runs both on every pull request and push to <code>main</code>:
+  </p>
+  <CodeBlock
+    code={`name: Docs
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: \${{ secrets.DOCS_SOURCES_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npx blume validate --strict
+      - run: npx blume build`}
+    lang="yaml"
+    title=".github/workflows/docs.yml"
+  />
+
+  <h2>Ship an upstream change</h2>
+  <p>
+    With pins, an upstream edit reaches the portal as a reviewed one-line
+    change.
+  </p>
+  <Steps>
+    <Step title="Tag the change in the source repository">
+      <p>Merge the docs change in <code>acme/cli</code> and tag it:</p>
+      <CodeBlock
+        code={`git tag v1.5.0
+git push origin v1.5.0`}
+        lang="bash"
+      />
+    </Step>
+    <Step title="Move the pin on a portal branch">
+      <p>
+        Create a branch in the portal and change the CLI source's{" "}
+        <code>ref</code> from <code>"v1.4.0"</code> to <code>"v1.5.0"</code>.
+      </p>
+      <CodeBlock code="git switch -c cli-v1.5.0" lang="bash" />
+    </Step>
+    <Step title="Preview it">
+      <p>
+        Run <code>npx blume dev</code>. The new ref has no snapshot yet, so Blume
+        fetches the tag instead of serving the old copy. Check the pages that
+        changed, and add any new images to <code>public/images/cli/</code>.
+      </p>
+    </Step>
+    <Step title="Review and merge">
+      <p>
+        Open a pull request. CI validates and builds against the new tag, and
+        your host's preview deployment shows the result. Merging publishes it,
+        and reverting the one-line change rolls it back.
+      </p>
+    </Step>
+  </Steps>
+  <p>
+    To publish each repository's release notes as well, see{" "}
+    <a href="/guides/github-releases-changelog-website">Turn GitHub releases into a product changelog</a>.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>Two files resolve to the same route</h3>
+  <p>
+    <code>BLUME_DUPLICATE_ROUTE</code> is a build error naming the route and both
+    files. It usually means two sources share a <code>prefix</code>, a remote
+    source has no prefix so its <code>index.mdx</code> lands on <code>/</code>{" "}
+    beside yours, or the portal has local pages under <code>docs/cli/</code>{" "}
+    that match remote ones. Give every source a distinct prefix and keep local
+    pages out of the remote sections.
+  </p>
+  <h3>A source fails with a 404</h3>
+  <p>
+    <code>BLUME_SOURCE_FETCH_FAILED</code> with <code>-&gt; 404</code> on the{" "}
+    <code>api.github.com</code> tree URL means the owner, repository, or ref
+    doesn't exist, or the token can't read the repository: GitHub can answer a
+    missing or insufficient token with a 404 rather than a 403. Check that{" "}
+    <code>GITHUB_TOKEN</code> is set where the build runs and that the token has
+    the repository selected. A 403 or 429 can also mean a rate limit.
+  </p>
+  <h3>A section is empty</h3>
+  <p>
+    If <code>path</code> doesn't exist at the pinned ref, the source loads zero
+    pages and warns <code>BLUME_SOURCE_PATH_MISSING</code>, for example when a
+    repository moved its docs folder before or after the tag you pinned. If{" "}
+    <code>include</code> matches none of the files under it, the section is
+    empty without a diagnostic. Browse the repository at that ref on GitHub,
+    then fix <code>path</code>, <code>include</code>, or the pin.
+  </p>
+  <h3>The site shows older content than the repository</h3>
+  <p>
+    In dev, you're seeing the snapshot: run <code>npx blume sync</code>. In a
+    build, look for <code>BLUME_SOURCE_OFFLINE</code>, which means the fetch
+    failed and a snapshot was used. On a branch ref, GitHub's raw cache may
+    still hold the old file, so pin the new commit.
+  </p>
+  <h3>A remote page fails on its frontmatter</h3>
+  <p>
+    Blume's frontmatter schema is strict, so a key another docs tool accepted
+    fails with <code>BLUME_FRONTMATTER_INVALID</code>, naming the page as{" "}
+    <code>sdk:quickstart.mdx</code> (the prefix, then the file's path under{" "}
+    <code>path</code>). Rename or remove the key in the source repository, or
+    declare it in the portal with{" "}
+    <a href="/docs/content/frontmatter#custom-keys">frontmatter.extend</a>.
+  </p>
+  <h3>A large repository imports only some pages</h3>
+  <p>
+    Blume lists a repository's whole tree even when <code>path</code> points at
+    one folder, and GitHub caps that listing at 100,000 entries or 7 MB.
+    Past the cap, Blume warns <code>BLUME_SOURCE_TRUNCATED</code>, and
+    narrowing <code>path</code> doesn't help. List the files yourself with a raw
+    base URL instead:
+  </p>
+  <CodeBlock
+    code={`mdxRemote({
+  prefix: "cli",
+  url: "https://raw.githubusercontent.com/acme/cli/v1.4.0/docs",
+  files: ["index.mdx", "send.mdx"],
+}),`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <Callout type="info">
+    A <code>raw.githubusercontent.com</code> URL still receives{" "}
+    <code>GITHUB_TOKEN</code>, so this works for private repositories. The ref
+    now lives in the URL: move it there when you move the pin.
+  </Callout>
+</GuidePage>

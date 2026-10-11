@@ -401,6 +401,142 @@ describe("normalizeEntry", () => {
     expect(escaped.pages[0]?.headings[0]?.slug).toBe("a");
   });
 
+  it("reports the spaced and kramdown {#id} spellings as written in .mdx", () => {
+    const mdx = normalizeEntry(
+      {
+        body: { format: "mdx", text: "## A { #a }\n\n## B {: #b }\n" },
+        data: {},
+        ref: "a.mdx",
+      },
+      { defaultType: "doc", source: { name: "s", staged: false } }
+    );
+    expect(mdx.diagnostics.map((d) => [d.message, d.suggestion])).toStrictEqual(
+      [
+        [
+          "`{ #a }` is a JSX expression in .mdx, so this page fails to compile.",
+          "Write `[#a]` or escape it as `\\{#a\\}` — both pin the same anchor in .md and .mdx.",
+        ],
+        [
+          "`{: #b }` is a JSX expression in .mdx, so this page fails to compile.",
+          "Write `[#b]` or escape it as `\\{#b\\}` — both pin the same anchor in .md and .mdx.",
+        ],
+      ]
+    );
+  });
+
+  it("warns about the spaced and kramdown {#id} spellings in .md", () => {
+    const md = normalizeEntry(
+      {
+        body: {
+          format: "md",
+          text: "## A { #a }\n\n## B {: #b }\n\n## C {#c}\n",
+        },
+        data: {},
+        raw: "---\ntitle: X\n---\n## A { #a }\n\n## B {: #b }\n\n## C {#c}\n",
+        ref: "a.md",
+        sourcePath: "/abs/a.md",
+      },
+      { defaultType: "doc", source: { name: "s", staged: false } }
+    );
+    // Only the unspaced `{#id}` is an anchor in .md; the others stay heading
+    // text, slugged into the id, and are reported where they're written.
+    expect(md.pages[0]?.headings).toStrictEqual([
+      { depth: 2, slug: "a--a", text: "A { #a }" },
+      { depth: 2, slug: "b--b", text: "B {: #b }" },
+      { depth: 2, slug: "c", text: "C" },
+    ]);
+    expect(md.diagnostics).toStrictEqual([
+      {
+        code: "BLUME_MD_CURLY_ANCHOR",
+        file: "/abs/a.md",
+        line: 4,
+        message:
+          "`{ #a }` doesn't pin an anchor: only the unspaced `{#a}` does, so this one shows in the heading and its id is slugged from it.",
+        severity: "warning",
+        suggestion: "Write `{#a}` or `[#a]` to pin the anchor `#a`.",
+      },
+      {
+        code: "BLUME_MD_CURLY_ANCHOR",
+        file: "/abs/a.md",
+        line: 6,
+        message:
+          "`{: #b }` doesn't pin an anchor: only the unspaced `{#b}` does, so this one shows in the heading and its id is slugged from it.",
+        severity: "warning",
+        suggestion: "Write `{#b}` or `[#b]` to pin the anchor `#b`.",
+      },
+    ]);
+  });
+
+  it("warns about an attribute list that sets a heading's id beside classes in .md", () => {
+    const text =
+      "## A { #a .wide }\n\n## B {: .wide #b }\n\nC {#c data-x=1}\n===\n\n## D { .wide }\n";
+    const md = normalizeEntry(
+      { body: { format: "md", text }, data: {}, ref: "a.md" },
+      { defaultType: "doc", source: { name: "s", staged: false } }
+    );
+    // The list stays heading text, slugged into the id, as `{ #id }` does.
+    expect(md.pages[0]?.headings.map((heading) => heading.slug)).toStrictEqual([
+      "a--a-wide",
+      "b--wide-b",
+      "c-c-data-x1",
+      "d--wide",
+    ]);
+    expect(
+      md.diagnostics.map(({ code, line, message, suggestion }) => ({
+        code,
+        line,
+        message,
+        suggestion,
+      }))
+    ).toStrictEqual([
+      {
+        code: "BLUME_MD_CURLY_ANCHOR",
+        line: 1,
+        message:
+          "`{ #a .wide }` doesn't pin an anchor: only the unspaced `{#a}` does, so this one shows in the heading and its id is slugged from it.",
+        suggestion:
+          "Write `{#a}` or `[#a]` to pin the anchor `#a`. Blume sets no classes or other attributes on a heading.",
+      },
+      {
+        code: "BLUME_MD_CURLY_ANCHOR",
+        line: 3,
+        message:
+          "`{: .wide #b }` doesn't pin an anchor: only the unspaced `{#b}` does, so this one shows in the heading and its id is slugged from it.",
+        suggestion:
+          "Write `{#b}` or `[#b]` to pin the anchor `#b`. Blume sets no classes or other attributes on a heading.",
+      },
+      {
+        code: "BLUME_MD_CURLY_ANCHOR",
+        line: 5,
+        message:
+          "`{#c data-x=1}` doesn't pin an anchor: only the unspaced `{#c}` does, so this one shows in the heading and its id is slugged from it.",
+        suggestion:
+          "Write `{#c}` or `[#c]` to pin the anchor `#c`. Blume sets no classes or other attributes on a heading.",
+      },
+    ]);
+  });
+
+  it("leaves an .mdx heading's attribute list to the attribute-list warning", () => {
+    const mdx = normalizeEntry(
+      {
+        body: { format: "mdx", text: "## A { #a .wide }\n" },
+        data: {},
+        ref: "a.mdx",
+      },
+      { defaultType: "doc", source: { name: "s", staged: false } }
+    );
+    expect(mdx.diagnostics).toStrictEqual([]);
+  });
+
+  it("names a path-less remote .md entry by source and ref in the {#id} warning", () => {
+    const { diagnostics } = normalizeEntry(
+      { body: { format: "md", text: "## A { #a }\n" }, data: {}, ref: "a.md" },
+      { defaultType: "doc", source: { name: "cms", staged: false } }
+    );
+    expect(diagnostics[0]?.file).toBe("cms:a.md");
+    expect(diagnostics[0]?.line).toBe(1);
+  });
+
   it("names a path-less remote .mdx entry by source and ref in the {#id} diagnostic", () => {
     const { diagnostics } = normalizeEntry(
       { body: { format: "mdx", text: "## A {#a}\n" }, data: {}, ref: "a.mdx" },
@@ -648,7 +784,7 @@ describe("normalizeEntry with content.types frontmatter", () => {
 describe("mdxRemoteSource (files mode)", () => {
   const FILES = new Map([
     ["guide.md", "---\ntitle: Guide\n---\n# Guide\n"],
-    ["intro.mdx", "---\ntitle: Intro\n---\n# Intro\n"],
+    ["intro.mdx", "---\ntitle: Intro\n---\n# Intro\n\nWelcome.\n"],
     ["notes.txt", "ignored\n"],
   ]);
 
@@ -679,8 +815,10 @@ describe("mdxRemoteSource (files mode)", () => {
     expect(refs).toStrictEqual(["guide.md", "intro.mdx"]);
 
     const intro = entries.find((entry) => entry.ref === "intro.mdx");
-    expect(intro?.body.text.trim()).toBe("# Intro");
-    expect(intro?.raw).toContain("title: Intro");
+    // The `# Intro` heading repeats the title Blume renders as the h1, so its
+    // line is blanked in both the body and the staged raw text.
+    expect(intro?.body.text).toBe("\n\nWelcome.\n");
+    expect(intro?.raw).toBe("---\ntitle: Intro\n---\n\n\nWelcome.\n");
     expect(intro?.editUrl).toBe("https://example.com/docs/intro.mdx");
     expect(await source.read?.("intro.mdx")).toContain("title: Intro");
   });
@@ -820,6 +958,116 @@ describe("mdxRemoteSource (files mode)", () => {
       "BLUME_SOURCE_FETCH_FAILED"
     );
   });
+
+  it("names GITHUB_TOKEN only when GitHub refuses a request a token could fix", async () => {
+    const original = process.env.GITHUB_TOKEN;
+    const statuses = new Map([
+      ["gone.mdx", 404],
+      ["broken.mdx", 500],
+    ]);
+    const failing = asFetch((input) => {
+      const ref = input.toString().split("/").pop() ?? "";
+      return Promise.resolve(
+        new Response(ref === "ok.mdx" ? "Ok.\n" : "", {
+          status: statuses.get(ref) ?? 200,
+        })
+      );
+    });
+    const reasons = async (url: string): Promise<string[]> => {
+      const cacheDir = join(await makeProject({}), ".cache");
+      const { diagnostics } = await mdxRemoteSource(
+        {
+          fetchImpl: failing,
+          files: ["ok.mdx", "gone.mdx", "broken.mdx"],
+          include: ["**/*.mdx"],
+          name: "sdk",
+          url,
+        },
+        ctxFor(cacheDir)
+      ).load();
+      return diagnostics.map((d) => d.message);
+    };
+    const raw = "https://raw.githubusercontent.com/o/r/main/docs";
+    try {
+      delete process.env.GITHUB_TOKEN;
+      // A private repository's file is a 404 without a token; a 500 is the
+      // server's own failure, which no token fixes.
+      expect(await reasons(raw)).toStrictEqual([
+        `Source "sdk" skipped "gone.mdx" (${raw}/gone.mdx -> 404; GITHUB_TOKEN is not set, which a private repository needs); the rest were imported.`,
+        `Source "sdk" skipped "broken.mdx" (${raw}/broken.mdx -> 500); the rest were imported.`,
+      ]);
+      // Another host is never sent the token, so it never names it.
+      expect(await reasons("https://example.com/docs")).toContain(
+        'Source "sdk" skipped "gone.mdx" (https://example.com/docs/gone.mdx -> 404); the rest were imported.'
+      );
+      // With a token set, the 404 is the file's own.
+      process.env.GITHUB_TOKEN = "t0ken";
+      expect(await reasons(raw)).toContain(
+        `Source "sdk" skipped "gone.mdx" (${raw}/gone.mdx -> 404); the rest were imported.`
+      );
+    } finally {
+      if (original === undefined) {
+        delete process.env.GITHUB_TOKEN;
+      } else {
+        process.env.GITHUB_TOKEN = original;
+      }
+    }
+  });
+
+  it("drops a leading h1 that is the page's title", async () => {
+    const pages = new Map([
+      // No front matter title: the heading becomes it.
+      ["untitled.md", "# Getting started\n\nBody.\n"],
+      // A setext heading spans its underline too.
+      ["setext.md", "\nOverview\n========\n\nText.\n"],
+      // A title the heading doesn't match: both stay.
+      ["differs.md", "---\ntitle: Install\n---\n# Installation\n"],
+      // Not an h1, not first, or no text: nothing to drop.
+      ["section.md", "## Usage\n\n# Later\n"],
+      ["prose.md", "Intro.\n\n# Heading\n"],
+      ["blank.md", "# <span></span>\n\nText.\n"],
+      ["empty.md", ""],
+    ]);
+    const cacheDir = join(await makeProject({}), ".cache");
+    const { entries } = await mdxRemoteSource(
+      {
+        fetchImpl: asFetch((input) => {
+          const ref = input.toString().split("/").pop() ?? "";
+          return Promise.resolve(ok(pages.get(ref) ?? ""));
+        }),
+        files: [...pages.keys()],
+        include: ["**/*.md"],
+        name: "sdk",
+        url: "https://example.com/docs",
+      },
+      ctxFor(cacheDir)
+    ).load();
+    const byRef = new Map(entries.map((entry) => [entry.ref, entry]));
+    const read = (ref: string) => {
+      const entry = byRef.get(ref);
+      return { body: entry?.body.text, data: entry?.data, raw: entry?.raw };
+    };
+
+    expect(read("untitled.md")).toStrictEqual({
+      body: "\n\nBody.\n",
+      data: { title: "Getting started" },
+      raw: "\n\nBody.\n",
+    });
+    expect(read("setext.md")).toStrictEqual({
+      body: "\n\n\n\nText.\n",
+      data: { title: "Overview" },
+      raw: "\n\n\n\nText.\n",
+    });
+    expect(read("differs.md")).toStrictEqual({
+      body: "# Installation\n",
+      data: { title: "Install" },
+      raw: "---\ntitle: Install\n---\n# Installation\n",
+    });
+    for (const ref of ["section.md", "prose.md", "blank.md", "empty.md"]) {
+      const text = pages.get(ref);
+      expect(read(ref)).toStrictEqual({ body: text, data: {}, raw: text });
+    }
+  });
 });
 
 describe("mdxRemoteSource (github mode)", () => {
@@ -887,18 +1135,71 @@ describe("mdxRemoteSource (github mode)", () => {
     const { diagnostics } = await source.load();
     expect(diagnostics.map((d) => d.code)).toContain("BLUME_SOURCE_TRUNCATED");
   });
+
+  it("warns when path isn't a folder at the ref", async () => {
+    const tree = { tree: [{ path: "documentation/a.md", type: "blob" }] };
+    const fetchImpl = asFetch(() => Promise.resolve(okJson(tree)));
+    const source = mdxRemoteSource(
+      {
+        fetchImpl,
+        github: { owner: "acme", path: "docs", ref: "v1", repo: "sdk" },
+        include: ["**/*.{md,mdx}"],
+        name: "sdk",
+      },
+      ctxFor(join(await makeProject({}), ".cache"))
+    );
+    const { diagnostics, entries } = await source.load();
+    expect(entries).toStrictEqual([]);
+    expect(diagnostics.map((d) => [d.code, d.message])).toStrictEqual([
+      [
+        "BLUME_SOURCE_PATH_MISSING",
+        'Source "sdk" read no files: there is no folder "docs" in acme/sdk at v1.',
+      ],
+    ]);
+  });
+
+  it("excludes what a negated include glob matches, as the filesystem source does", async () => {
+    const tree = {
+      tree: [
+        { path: "docs/a.md", type: "blob" },
+        { path: "docs/drafts/b.md", type: "blob" },
+        { path: "docs/notes.txt", type: "blob" },
+      ],
+    };
+    const fetchImpl = asFetch((input) =>
+      isTreeApi(input.toString())
+        ? Promise.resolve(okJson(tree))
+        : Promise.resolve(ok("---\ntitle: A\n---\nbody\n"))
+    );
+    const load = async (include: string[]) => {
+      const source = mdxRemoteSource(
+        {
+          fetchImpl,
+          github: { owner: "acme", path: "docs", ref: "main", repo: "sdk" },
+          include,
+          name: "sdk",
+        },
+        ctxFor(join(await makeProject({}), ".cache"))
+      );
+      const { entries } = await source.load();
+      return entries.map((entry) => entry.ref);
+    };
+    expect(await load(["**/*.md", "!drafts/**"])).toStrictEqual(["a.md"]);
+    // Negations alone include nothing, as in tinyglobby.
+    expect(await load(["!drafts/**"])).toStrictEqual([]);
+  });
 });
 
-describe("scanProject composition", () => {
-  const withConfig = async (
-    files: Record<string, string>,
-    config: string
-  ): Promise<string> => {
-    const root = await makeProject(files);
-    await writeFile(join(root, "blume.config.ts"), config);
-    return root;
-  };
+const withConfig = async (
+  files: Record<string, string>,
+  config: string
+): Promise<string> => {
+  const root = await makeProject(files);
+  await writeFile(join(root, "blume.config.ts"), config);
+  return root;
+};
 
+describe("scanProject composition", () => {
   it("merges multiple filesystem sources and namespaces by prefix", async () => {
     const root = await withConfig(
       {

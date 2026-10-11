@@ -11,12 +11,15 @@
  * the shared store fails to count (logged, not blocked). A shared store
  * without its secrets or binding falls back to counting in memory.
  */
+import { z } from "zod";
+
 import { clientAddressOf } from "../core/client-address.ts";
 import type { ClientContext } from "../core/client-address.ts";
 import { RATE_LIMIT_BINDING } from "./cloudflare.ts";
 import { DEFAULT_REQUESTS, DEFAULT_WINDOW } from "./memory.ts";
 import type { RateLimitAdapter } from "./schema.ts";
-import { UPSTASH_SECRETS } from "./upstash.ts";
+import { UNKEY_MAX_WINDOW, UNKEY_NAMESPACE, unkeySecrets } from "./unkey.ts";
+import { upstashSecrets } from "./upstash.ts";
 
 /** What a limiter says about one request. */
 export interface RateLimitResult {
@@ -86,16 +89,32 @@ export const memoryLimiter = (
   };
 };
 
-/** One command's reply from Upstash's REST pipeline. */
+/**
+ * Counts the request and reads what's left of the window, run by Redis as
+ * one step. A key without an expiry — the one `INCR` just created, or one a
+ * failed call left behind — gets the window as its expiry, so a count can't
+ * outlive its window and lock a reader out of the route for good. Separate
+ * commands, even pipelined, let the key expire between them, and the `INCR`
+ * after that created a key that never expired.
+ */
+export const UPSTASH_COUNT_SCRIPT = `local count = redis.call("INCR", KEYS[1])
+local ttl = redis.call("TTL", KEYS[1])
+if ttl < 0 then
+  redis.call("EXPIRE", KEYS[1], ARGV[1])
+  ttl = tonumber(ARGV[1])
+end
+return {count, ttl}`;
+
+/** Upstash's REST reply to one command. */
 interface UpstashReply {
   error?: string;
-  result?: number | string | null;
+  result?: (number | null)[] | null;
 }
 
 /**
- * Count in Upstash Redis over its REST API: one pipeline opens the window
- * (`SET … EX … NX`), counts the request (`INCR`), and reads what's left of
- * the window (`TTL`).
+ * Count in Upstash Redis over its REST API: one `EVAL` of
+ * {@link UPSTASH_COUNT_SCRIPT} counts the request, opens the window when it's
+ * the first, and reads what's left of it.
  */
 export const upstashLimiter = (
   requests: number,
@@ -104,13 +123,15 @@ export const upstashLimiter = (
   token: string,
   fetchImpl: typeof fetch = fetch
 ): Limiter => {
-  const url = `${endpoint.replace(/\/+$/u, "")}/pipeline`;
+  const url = endpoint.replace(/\/+$/u, "");
   return async (key) => {
     const response = await fetchImpl(url, {
       body: JSON.stringify([
-        ["SET", key, "0", "EX", String(window), "NX"],
-        ["INCR", key],
-        ["TTL", key],
+        "EVAL",
+        UPSTASH_COUNT_SCRIPT,
+        "1",
+        key,
+        String(window),
       ]),
       headers: {
         authorization: `Bearer ${token}`,
@@ -121,17 +142,80 @@ export const upstashLimiter = (
     if (!response.ok) {
       throw new Error(`Upstash answered ${response.status}.`);
     }
-    // SAFETY: Upstash's pipeline endpoint answers with one reply object per
-    // command, in order; a missing or failed reply reads as `NaN` below.
-    const replies = (await response.json()) as UpstashReply[];
-    const count = Number(replies[1]?.result ?? Number.NaN);
-    const ttl = Number(replies[2]?.result);
+    // SAFETY: Upstash's REST API answers a command with `{ result }`, here
+    // the script's `{count, ttl}`; a missing or failed reply reads as `NaN`
+    // below.
+    const reply = (await response.json()) as UpstashReply;
+    const count = Number(reply.result?.[0] ?? Number.NaN);
+    const ttl = Number(reply.result?.[1]);
     if (Number.isNaN(count)) {
       throw new TypeError("Upstash sent no count.");
     }
     return { allowed: count <= requests, retryAfter: ttl > 0 ? ttl : window };
   };
 };
+
+/** Unkey's rate limit endpoint. */
+const UNKEY_LIMIT_URL = "https://api.unkey.com/v2/ratelimit.limit";
+
+/**
+ * How long Unkey gets to count a request, in milliseconds, before the
+ * request is let through without it.
+ */
+export const UNKEY_TIMEOUT = 2000;
+
+/** The part of Unkey's reply the limiter reads. */
+const unkeyReplySchema = z.object({
+  data: z.object({
+    overrideId: z.string().optional(),
+    reset: z.number(),
+    success: z.boolean(),
+  }),
+});
+
+/**
+ * Count with Unkey's rate limit API. Unkey takes identifiers of letters,
+ * digits, and `_.:/-`, so anything else in the key (an IPv6 host's brackets,
+ * an address's `%` zone) becomes `_`. Its `reset` is a timestamp on Unkey's
+ * clock, which this server's may not match, so `retryAfter` is kept between
+ * one second and the window: the configured one, or Unkey's longest when an
+ * override set in Unkey replaced it.
+ */
+export const unkeyLimiter =
+  (
+    requests: number,
+    window: number,
+    namespace: string,
+    rootKey: string,
+    { fetch: fetchImpl = fetch, now = Date.now }: LimiterRuntime = {}
+  ): Limiter =>
+  async (key) => {
+    const response = await fetchImpl(UNKEY_LIMIT_URL, {
+      body: JSON.stringify({
+        duration: window * 1000,
+        identifier: key.replaceAll(/[^\w.:/-]/gu, "_"),
+        limit: requests,
+        namespace,
+      }),
+      headers: {
+        authorization: `Bearer ${rootKey}`,
+        "content-type": "application/json",
+      },
+      method: "POST",
+      signal: AbortSignal.timeout(UNKEY_TIMEOUT),
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`Unkey answered ${response.status}.`);
+    }
+    const { data } = unkeyReplySchema.parse(await response.json());
+    const seconds = Math.ceil((data.reset - now()) / 1000);
+    const longest = data.overrideId ? UNKEY_MAX_WINDOW : window;
+    return {
+      allowed: data.success,
+      retryAfter: Math.min(longest, Math.max(1, seconds)),
+    };
+  };
 
 /** Count with a Workers rate limiting binding. */
 export const bindingLimiter =
@@ -166,6 +250,22 @@ export const createLimiter = (
     return null;
   }
   const { requests, window } = limitOf(adapter);
+  if (adapter.kind === "unkey") {
+    const [secret] = unkeySecrets(adapter.options);
+    const rootKey = runtime.secret?.(secret);
+    if (rootKey) {
+      return unkeyLimiter(
+        requests,
+        window,
+        adapter.options.namespace ?? UNKEY_NAMESPACE,
+        rootKey,
+        runtime
+      );
+    }
+    console.warn(
+      `Rate limiting counts in memory: set ${secret} to share the count through Unkey.`
+    );
+  }
   if (adapter.kind === "cloudflare") {
     if (runtime.binding) {
       return bindingLimiter(runtime.binding, window);
@@ -175,14 +275,13 @@ export const createLimiter = (
     );
   }
   if (adapter.kind === "upstash") {
-    const [endpoint, token] = UPSTASH_SECRETS.map((name) =>
-      runtime.secret?.(name)
-    );
+    const secrets = upstashSecrets(adapter.options);
+    const [endpoint, token] = secrets.map((name) => runtime.secret?.(name));
     if (endpoint && token) {
       return upstashLimiter(requests, window, endpoint, token, runtime.fetch);
     }
     console.warn(
-      `Rate limiting counts in memory: set ${UPSTASH_SECRETS.join(" and ")} to share the count through Upstash.`
+      `Rate limiting counts in memory: set ${secrets.join(" and ")} to share the count through Upstash.`
     );
   }
   return memoryLimiter(requests, window, runtime.now);

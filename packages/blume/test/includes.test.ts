@@ -17,18 +17,23 @@ import {
   matchIncludeStatement,
   parseIncludeLine,
   parseIncludeStatement,
+  withDefinitions,
 } from "../src/core/includes.ts";
 import { validateLinks } from "../src/core/links.ts";
 import { scanProject } from "../src/core/project-graph.ts";
 import {
   extractHeadings,
+  linkDefinitions,
   normalizeEntry,
 } from "../src/core/sources/normalize.ts";
 import { readExpandedEntryText } from "../src/core/sources/read.ts";
 import type { ContentSource } from "../src/core/sources/types.ts";
 import type { PageRecord } from "../src/core/types.ts";
 import { includePlugin } from "../src/markdown/include.ts";
-import { blumeMarkdownProcessor } from "../src/markdown/index.ts";
+import {
+  blumeMarkdownProcessor,
+  blumeMdxProcessor,
+} from "../src/markdown/index.ts";
 import type { MdastNode } from "../src/markdown/mdast.ts";
 import { buildSearchDocuments } from "../src/search/documents.ts";
 
@@ -232,6 +237,35 @@ describe("expandIncludes — wrapped and malformed statements", () => {
       }),
     ]);
     expect(result.text).toContain("<include>");
+  });
+
+  it("says props are read when an unquoted attribute breaks a statement", async () => {
+    const root = await fixture({ "p.md": "u", "s.md": "{{plan}}\n" });
+    const result = await expandIncludes(
+      "<include plan=Pro>./s.md</include>\n",
+      {
+        contentRoot: root,
+        sourcePath: join(root, "p.md"),
+      }
+    );
+    expect(result.errors[0]?.code).toBe("BLUME_INCLUDE_MALFORMED");
+    // Include props exist, so "only lang and meta are read" would mislead.
+    expect(result.errors[0]?.suggestion).toContain(
+      "any other is a prop the included file reads as {{name}}"
+    );
+  });
+
+  it("leaves a code include's {{name}} alone: props reach .md and .mdx only", async () => {
+    const root = await fixture({
+      "p.md": "u",
+      "plan.ts": 'export const plan = "{{plan}}";\n',
+    });
+    const result = await expandIncludes(
+      '<include plan="Pro">./plan.ts</include>\n',
+      { contentRoot: root, sourcePath: join(root, "p.md") }
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.text).toContain('export const plan = "{{plan}}";');
   });
 
   it("leaves a wrapped statement folded into a setext heading alone", async () => {
@@ -457,6 +491,202 @@ describe("expandIncludes", () => {
     expect(result.text).toContain("![web](https://x.dev/i.png)");
     expect(result.text).toContain("`![code](./skip.png)`");
     expect(result.text).toContain("![fenced](./skip.png)");
+  });
+
+  it("rebases every destination form, writing each back in its own", async () => {
+    const root = await fixture({
+      "_snippets/tip.md": [
+        "![angled](<img/a b.png>)",
+        `![double](img/x.png "A \\"title\\"") ![single]( img/x.png 'T' )`,
+        "![paren](img/x.png (T)) ![balanced](img/a(1).png)",
+        String.raw`![escaped](img/a\(1.png) ![nested [alt]](<img/c.png>)`,
+        "",
+      ].join("\n"),
+      "guides/page.mdx": "unused",
+    });
+    const result = await expandIncludes(
+      "<include>../_snippets/tip.md</include>",
+      { contentRoot: root, sourcePath: join(root, "guides/page.mdx") }
+    );
+    expect(result.text.split("\n")).toStrictEqual([
+      "![angled](<../_snippets/img/a b.png>)",
+      `![double](../_snippets/img/x.png "A \\"title\\"") ![single]( ../_snippets/img/x.png 'T' )`,
+      "![paren](../_snippets/img/x.png (T)) ![balanced](../_snippets/img/a(1).png)",
+      String.raw`![escaped](../_snippets/img/a\(1.png) ![nested [alt]](<../_snippets/img/c.png>)`,
+    ]);
+
+    // A path with a space can't be written bare, so it gains brackets.
+    await mkdir(join(root, "my parts"));
+    await writeFile(join(root, "my parts/p.md"), "![x](img/x.png)\n");
+    const spaced = await expandIncludes("<include>../my parts/p.md</include>", {
+      contentRoot: root,
+      sourcePath: join(root, "guides/page.mdx"),
+    });
+    expect(spaced.text).toBe("![x](<../my parts/img/x.png>)");
+  });
+
+  it("rebases a partial's links and element URLs to files beside it", async () => {
+    const root = await fixture({
+      "_snippets/files.md": [
+        "[Spec](./spec.pdf#page=2) and [a page](./other.md).",
+        "[Missing](./nope.pdf) <img src='./pic.png'> <a href=\"spec.pdf\">x</a>",
+        "",
+        "[spec]: ./spec.pdf",
+        "",
+      ].join("\n"),
+      "_snippets/pic.png": "png",
+      "_snippets/spec.pdf": "pdf",
+      "guides/page.md": "unused",
+    });
+    const result = await expandIncludes(
+      "<include>../_snippets/files.md</include>",
+      { contentRoot: root, sourcePath: join(root, "guides/page.md") }
+    );
+    expect(result.text.split("\n")).toStrictEqual([
+      "[Spec](../_snippets/spec.pdf#page=2) and [a page](./other.md).",
+      "[Missing](./nope.pdf) <img src='../_snippets/pic.png'> <a href=\"../_snippets/spec.pdf\">x</a>",
+      "",
+      "[spec]: ../_snippets/spec.pdf",
+    ]);
+  });
+
+  it("writes a .md partial's HTML comments as MDX comments in an .mdx page", async () => {
+    const partial = [
+      "Before <!-- a note */ here --> after `<!-- shown -->`.",
+      "<!--",
+      "A block comment.",
+      "-->",
+      "```html",
+      "<!-- fenced -->",
+      "```",
+      "",
+    ].join("\n");
+    const root = await fixture({
+      "_p.md": partial,
+      "_q.mdx": "<!-- an .mdx partial's is its own -->\n",
+      "page.md": "unused",
+      "page.mdx": "unused",
+    });
+    const expand = async (target: string, page: string) => {
+      const expanded = await expandIncludes(`<include>${target}</include>`, {
+        contentRoot: root,
+        sourcePath: join(root, page),
+      });
+      return expanded.text;
+    };
+    const intoMdx = await expand("./_p.md", "page.mdx");
+    expect(intoMdx.split("\n")).toStrictEqual([
+      "Before {/* a note * / here */} after `<!-- shown -->`.",
+      "{/*",
+      "A block comment.",
+      "*/}",
+      "```html",
+      "<!-- fenced -->",
+      "```",
+    ]);
+    expect(await expand("./_p.md", "page.md")).toBe(partial.trimEnd());
+    expect(await expand("./_q.mdx", "page.mdx")).toBe(
+      "<!-- an .mdx partial's is its own -->"
+    );
+  });
+
+  it("hides a .md partial's HTML comment on a rendered .mdx page", async () => {
+    const root = await fixture({
+      "_p.md": "Shown <!-- hidden --> text.\n\n<!--\nAlso hidden.\n-->\n",
+      "page.mdx": "u",
+    });
+    const processor = blumeMdxProcessor({ contentRoot: root });
+    if (!processor.createMdxRenderer) {
+      throw new Error("The satteri processor has no MDX renderer.");
+    }
+    const renderer = await processor.createMdxRenderer({}, { optimize: false });
+    const { code } = await renderer.process(
+      "<include>./_p.md</include>\n",
+      join(root, "page.mdx"),
+      {}
+    );
+    expect(String(code)).toContain("Shown ");
+    expect(String(code)).not.toContain("hidden");
+  });
+
+  it("resolves references across a page and its partials, as if inline", async () => {
+    const root = await fixture({
+      "_parts/defs.md": [
+        "[pep 508]: https://peps.dev/508 'PEP'",
+        "[spec]: ./spec.pdf",
+        "[page def]: https://partial.dev",
+        "",
+      ].join("\n"),
+      "_parts/spec.pdf": "pdf",
+      "_parts/uses.md":
+        "Partial uses [page def], [Other], and [mine].\n\n[mine]: https://mine.dev\n",
+      "guides/page.md": "u",
+      "guides/page.mdx": "u",
+    });
+    const page = [
+      "Page uses [PEP 508], [the spec][spec], and [page def].",
+      "",
+      "<include>../_parts/uses.md</include>",
+      "",
+      "[page def]: https://page.dev",
+      "[other]: https://other.dev",
+      "",
+      "<include>../_parts/defs.md</include>",
+      "",
+    ].join("\n");
+    const contentRoot = root;
+    const md = await blumeMarkdownProcessor({ contentRoot }).createRenderer({});
+    const rendered = await md.render(page, {
+      fileURL: pathToFileURL(join(root, "guides/page.md")),
+    });
+    const html = rendered.code;
+    expect(html).toContain(
+      '<a href="https://peps.dev/508" title="PEP">PEP 508</a>'
+    );
+    expect(html).toContain('<a href="../_parts/spec.pdf">the spec</a>');
+    // The page's own definition wins, in the page and in its partials.
+    expect(html).toContain("Page uses");
+    expect(html).not.toContain("partial.dev");
+    expect(html).toContain(
+      '<a href="https://page.dev">page def</a>, <a href="https://other.dev">Other</a>, and <a href="https://mine.dev">mine</a>'
+    );
+
+    const processor = blumeMdxProcessor({ contentRoot });
+    if (!processor.createMdxRenderer) {
+      throw new Error("The satteri processor has no MDX renderer.");
+    }
+    const mdx = await processor.createMdxRenderer({}, { optimize: false });
+    const { code } = await mdx.process(page, join(root, "guides/page.mdx"), {});
+    expect(code).toContain('href: "https://peps.dev/508"');
+    expect(code).toContain('href: "https://other.dev"');
+  });
+
+  it("appends only definitions a text lacks, and none into an open fence", () => {
+    const definitions = linkDefinitions(
+      [
+        "> [Quoted]: /quoted 'Q'",
+        "[^1]: A footnote.",
+        "[dup]: /first",
+        "[DUP]: /second",
+        "`[code]: /code`",
+        "```",
+        "[fenced]: /fenced",
+        "```",
+        "[bare]:",
+        "[text]: /url and then more words",
+      ].join("\n")
+    );
+    expect(definitions).toStrictEqual([
+      { key: "quoted", text: "[Quoted]: /quoted 'Q'" },
+      { key: "dup", text: "[dup]: /first" },
+    ]);
+    expect(withDefinitions("Uses [quoted].\n\n[dup]: /mine", definitions)).toBe(
+      "Uses [quoted].\n\n[dup]: /mine\n\n[Quoted]: /quoted 'Q'\n"
+    );
+    expect(withDefinitions("[quoted]: /x\n[dup]: /y", definitions)).toBe(
+      "[quoted]: /x\n[dup]: /y"
+    );
+    expect(withDefinitions("```\nopen", definitions)).toBe("```\nopen");
   });
 
   it("trims blank edge lines off a splice", async () => {
@@ -724,6 +954,7 @@ const fakeCtx = (options: {
         reports.push(report.message);
       },
       source: options.source ?? "",
+      sourceFormat: "mdx" as const,
       textContent: () => options.text ?? "",
     },
     replaced,

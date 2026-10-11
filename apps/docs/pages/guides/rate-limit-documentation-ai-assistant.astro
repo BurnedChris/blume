@@ -1,0 +1,536 @@
+---
+// Rate-limit a public documentation AI assistant: checked against the rate
+// limiting, assistant, deployment, and doctor docs, and the source on main
+// (ratelimit/*.ts, captcha/*.ts, the generated ask route in
+// astro/templates.ts, cli/required-secrets.ts, components/islands/hooks.ts),
+// plus Astro 7.3.2's node request handling and origin check, and the Upstash,
+// Vercel, and Cloudflare docs. Ran the load-test script below against an
+// emulated route built on Blume's real limiter (createLimiter/rateLimited from
+// ratelimit/runtime.ts) under Bun: one memory() instance (5 past of 8, 429s,
+// then a 400 after the wait), two instances behind a round-robin balancer
+// (memory() let 10 of 20 through at a limit of 5, upstash() against a mock of
+// Upstash's /pipeline endpoint let exactly 5, and 30 of 40 at a limit of 30),
+// upstash() with no secrets (memory fallback and its warning), and an
+// unreachable store (requests let through, error logged). Not yet run end to
+// end with blume dev, a real Upstash database, or a Cloudflare Worker.
+// Updated against 400b5ff3: upstash() counts in one EVAL script and takes
+// urlEnv/tokenEnv (ratelimit/upstash.ts), node() takes allowedDomains
+// (deploy/adapters/node.ts, docs rate-limiting.mdx "Behind a reverse
+// proxy"); read, not rerun. The Marketplace's KV_REST_API_* names come from
+// Upstash's docs.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("rate-limit-documentation-ai-assistant")}>
+  <p>
+    To stop one visitor from sending your docs assistant request after request,
+    count requests per visitor at the server and refuse the extras. Blume does
+    this by default. The assistant's <code>/api/ask</code> route lets each IP
+    address ask 30 questions every 10 minutes. Past that, it answers{" "}
+    <code>429 Too Many Requests</code> with a <code>Retry-After</code> header,
+    and the panel tells the reader to try again in a few minutes.
+  </p>
+  <p>
+    The catch is where the count lives. By default it's in the server's
+    memory, which is exact on a single Node process but separate for every
+    instance on Vercel, Netlify, and Cloudflare. In this guide you reproduce
+    the limit locally with a small load-test script, move the count to a
+    shared store so it holds across instances, test the deployed limit and its
+    recovery, and add a bot check for scripts that rotate addresses.
+  </p>
+  <p>
+    If you run one Node server that sees each reader's own address, the default
+    already holds and you only need to pick the numbers. If your assistant
+    answers from your own backend through the <code>endpoint</code> option,
+    Blume generates no route, so rate limiting is that backend's job. And a
+    rate limit is neither a spending cap nor a sign-in:{" "}
+    <a href="#what-a-rate-limit-doesnt-do">what a rate limit doesn't do</a>{" "}
+    covers what to pair it with.
+  </p>
+
+  <h2>How the limit works</h2>
+  <p>
+    The limit check is the first thing the route does, before it reads the
+    body, checks a bot token, or calls the model. So every request counts,
+    including ones the route then refuses. The count is kept per site
+    hostname, per route, and per IP address, which means the assistant, the
+    API playground proxy, and server-side search each have their own budget.
+  </p>
+  <p>
+    Two cases are always let through, so readers are never locked out by
+    accident: a request whose address the host can't tell, and one the shared
+    store fails to count. The second is logged. A static site has no server
+    routes, so there's nothing to limit.
+  </p>
+  <p>These are the responses you'll see while testing:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Status</th>
+        <th scope="col">Body starts with</th>
+        <th scope="col">Meaning</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>429</td>
+        <td><code>Too many requests: try again in</code></td>
+        <td>Over the limit. <code>Retry-After</code> gives the seconds left.</td>
+      </tr>
+      <tr>
+        <td>400</td>
+        <td><code>Invalid request:</code></td>
+        <td>Counted, then refused for a malformed body.</td>
+      </tr>
+      <tr>
+        <td>403</td>
+        <td><code>Verification failed:</code></td>
+        <td>Counted, then refused by the bot check.</td>
+      </tr>
+      <tr>
+        <td>503</td>
+        <td><code>The assistant is not configured:</code></td>
+        <td>A provider key or bot-check secret is missing.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Reproduce the limit locally</h2>
+  <p>
+    Start with numbers small enough to hit in seconds. Turn the assistant on,
+    name a host adapter (the assistant needs server output), and set a limit
+    of 5 requests a minute. If you haven't set up the assistant yet,{" "}
+    <a href="/guides/ai-assistant-for-documentation">add it first</a>.
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { vercel } from "blume/deploy";
+import { memory } from "blume/ratelimit";
+
+export default defineConfig({
+  title: "Acme Docs",
+  deployment: vercel(),
+  ai: {
+    assistant: { enabled: true },
+  },
+  // Test numbers: 5 requests per reader per 60 seconds.
+  rateLimit: memory({ requests: 5, window: 60 }),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Next, save the load-test script. It sends requests with an empty message
+    list. The route counts each one, then refuses it with a 400 before the
+    model runs, so the test spends no tokens and works without an API key. It
+    prints each status it got, waits out the window, and sends one more request
+    to check the limit resets.
+  </p>
+  <CodeBlock
+    code={`// Sends requests the assistant route counts but never answers, prints the
+// statuses that came back, then waits out the window and checks it recovers.
+//
+//   node ask-load-test.mjs <url> [total] [concurrency]
+const [
+  url = "http://localhost:4321/api/ask",
+  total = "40",
+  concurrency = "1",
+] = process.argv.slice(2);
+
+const headers = { "content-type": "application/json" };
+const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+if (bypass) {
+  headers["x-vercel-protection-bypass"] = bypass;
+}
+// No messages: the route counts the request against the limit, then
+// refuses it with a 400 before it calls the model.
+const body = JSON.stringify({ messages: [] });
+
+const send = async () => {
+  const response = await fetch(url, { body, headers, method: "POST" });
+  const text = await response.text();
+  return {
+    retryAfter: Number(response.headers.get("retry-after") ?? 0),
+    status: response.status,
+    text: text.slice(0, 80),
+  };
+};
+
+const counts = new Map();
+const samples = new Map();
+let retryAfter = 0;
+let started = 0;
+const worker = async () => {
+  while (started < Number(total)) {
+    started += 1;
+    const result = await send();
+    counts.set(result.status, (counts.get(result.status) ?? 0) + 1);
+    if (!samples.has(result.status)) {
+      samples.set(result.status, result.text);
+    }
+    if (result.status === 429) {
+      retryAfter = Math.max(retryAfter, result.retryAfter);
+    }
+  }
+};
+await Promise.all(Array.from({ length: Number(concurrency) }, worker));
+
+for (const [status, count] of [...counts].sort((a, b) => a[0] - b[0])) {
+  console.log(status + "  x" + count + "  " + samples.get(status));
+}
+const limited = counts.get(429) ?? 0;
+console.log("Got past the limit: " + (Number(total) - limited) + " of " + total);
+
+if (limited > 0) {
+  console.log("Waiting " + (retryAfter + 1) + "s for the window to reset...");
+  await new Promise((resolve) => setTimeout(resolve, (retryAfter + 1) * 1000));
+  const after = await send();
+  console.log("After the wait: " + after.status + "  " + after.text);
+}`}
+    lang="js"
+    title="scripts/ask-load-test.mjs"
+  />
+  <p>Start the dev server, and in a second terminal, send 8 requests:</p>
+  <CodeBlock
+    code={`npx blume dev
+node scripts/ask-load-test.mjs http://localhost:4321/api/ask 8`}
+    lang="bash"
+  />
+  <p>The first five reach validation, and the rest are limited:</p>
+  <CodeBlock
+    code={`400  x5  Invalid request: send 1-40 user/assistant messages with string content.
+429  x3  Too many requests: try again in 60 seconds.
+Got past the limit: 5 of 8
+Waiting 61s for the window to reset...
+After the wait: 400  Invalid request: send 1-40 user/assistant messages with string content.`}
+    lang="text"
+  />
+  <p>
+    Before the wait ends, open the assistant in the browser on the same machine
+    and ask something. The browser shares the script's address, so the panel
+    answers "You've asked a lot of questions. Try again in a few minutes."
+    instead of calling the model. After the wait, it answers normally, once a
+    provider key is set.
+  </p>
+  <p>
+    With <code>memory()</code> and <code>upstash()</code>, the window opens
+    with a reader's first request and resets when it ends; it doesn't slide.
+    Restarting the dev server clears a memory count.
+  </p>
+
+  <h2>Share the count across serverless instances</h2>
+  <p>
+    On Vercel, Netlify, and Cloudflare, your route runs on many short-lived
+    instances, and <code>memory()</code> gives each its own count. It still
+    stops a fast burst, but a reader whose requests land on several instances
+    can get more than the limit. For an exact limit, keep the count in a store
+    every instance shares:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Adapter</th>
+        <th scope="col">Count kept in</th>
+        <th scope="col">Limit holds</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>memory()</code></td>
+        <td>The server's memory (the default)</td>
+        <td>Exactly on one process; per instance on serverless hosts</td>
+      </tr>
+      <tr>
+        <td><code>upstash()</code></td>
+        <td>Upstash Redis</td>
+        <td>Exactly, on every host</td>
+      </tr>
+      <tr>
+        <td><code>cloudflare()</code></td>
+        <td>Workers rate limiting</td>
+        <td>Per Cloudflare location</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Upstash on Vercel</h3>
+  <p>
+    Create an Upstash Redis database, either from the Vercel Marketplace or in
+    the Upstash console. Blume talks to it over Upstash's REST API, so there's
+    no package to install. By default it reads two variables:{" "}
+    <code>UPSTASH_REDIS_REST_URL</code> and{" "}
+    <code>UPSTASH_REDIS_REST_TOKEN</code>.
+  </p>
+  <p>
+    The Marketplace connects the database to your project as{" "}
+    <code>KV_REST_API_URL</code> and <code>KV_REST_API_TOKEN</code> instead,
+    with any prefix you chose when you connected it. Name those variables with{" "}
+    <code>urlEnv</code> and <code>tokenEnv</code> when you switch the adapter,
+    back at the default numbers. For a database from the Upstash console, set
+    the two <code>UPSTASH_</code> variables and leave both options out.
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { vercel } from "blume/deploy";
+import { upstash } from "blume/ratelimit";
+
+export default defineConfig({
+  title: "Acme Docs",
+  deployment: vercel(),
+  ai: {
+    assistant: { enabled: true },
+  },
+  rateLimit: upstash({
+    requests: 30,
+    window: 600,
+    // The names the Vercel Marketplace sets.
+    urlEnv: "KV_REST_API_URL",
+    tokenEnv: "KV_REST_API_TOKEN",
+  }),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    To use the same database locally, put both variables in{" "}
+    <code>.env.local</code>. Then run <code>npx blume doctor</code>: its
+    summary should read <code>Rate limiting: upstash</code>, with no{" "}
+    <code>BLUME_MISSING_SECRET</code> warning for either variable. Without
+    them, the routes quietly count in memory, so this check matters. Variables
+    only reach new deployments, so push or redeploy after adding them.
+  </p>
+
+  <h3>Cloudflare Workers</h3>
+  <p>
+    On a site deployed with <code>deployment: cloudflare()</code>, count with
+    Cloudflare's own rate limiting instead. Blume declares the binding in the
+    Worker's config when it builds, so there's no store to create:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { cloudflare } from "blume/deploy";
+import { cloudflare as cloudflareRateLimit } from "blume/ratelimit";
+
+export default defineConfig({
+  title: "Acme Docs",
+  deployment: cloudflare(),
+  ai: {
+    assistant: { enabled: true },
+  },
+  rateLimit: cloudflareRateLimit({ requests: 10, window: 60 }),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The window must be 10 or 60 seconds. Cloudflare counts per location and
+    describes the counter as permissive and eventually consistent, so treat
+    the number as approximate. <code>blume build</code> logs "Declared the
+    Workers rate limiting binding" when it's in place. The{" "}
+    <a href="/guides/cloudflare-workers-documentation">Cloudflare Workers guide</a>{" "}
+    covers the deploy.
+  </p>
+
+  <h2>Test the deployed limit and recovery</h2>
+  <p>
+    A small test against <code>memory()</code> on a serverless host can pass by
+    luck, when one instance happens to serve every request. So test with the
+    shared adapter in place, and send requests in parallel so they spread
+    across instances. Replace <code>docs.acme.example</code> with your
+    deployment's domain:
+  </p>
+  <CodeBlock
+    code="node scripts/ask-load-test.mjs https://docs.acme.example/api/ask 40 8"
+    lang="bash"
+  />
+  <p>
+    With <code>upstash()</code> at 30 requests, the script should print{" "}
+    <code>Got past the limit: 30 of 40</code>. Anything above 30 means the
+    count isn't shared. For comparison, with two instances behind a
+    round-robin balancer and a limit of 5, <code>memory()</code> let 10 of 20
+    requests through and <code>upstash()</code> let exactly 5. The script then
+    waits out the window, up to 10 minutes at these numbers, and its last
+    request should get a 400 again.
+  </p>
+  <p>
+    If the deployment uses Vercel Deployment Protection, the script's requests
+    stop at the login page. Export the project's automation bypass secret as{" "}
+    <code>VERCEL_AUTOMATION_BYPASS_SECRET</code> first, and the script sends it
+    in the <code>x-vercel-protection-bypass</code> header.
+  </p>
+  <p>You can also look at the counters in the database:</p>
+  <CodeBlock
+    code={`curl -s -X POST "$KV_REST_API_URL" \\
+  -H "Authorization: Bearer $KV_REST_API_TOKEN" \\
+  -d '["KEYS", "blume:*"]'`}
+    lang="bash"
+  />
+  <p>
+    Each key is <code>blume:</code>, then the hostname, the route, and the
+    address, like <code>blume:docs.acme.example:ask:203.0.113.7</code>, and it
+    expires when its window ends. Blume counts a request and sets the key's
+    expiry in one script, so a count can't outlive its window. Give the
+    counters a database of their own, since <code>KEYS</code> scans everything
+    in it.
+  </p>
+  <p>
+    The test uses up your own address's budget, so the production assistant
+    refuses you until the window ends. To see whether real readers hit the
+    limit, configure an{" "}
+    <a href="/docs/configuration/analytics">analytics provider</a>: a refused
+    question is reported as an <code>ask_error</code> event with{" "}
+    <code>status</code> 429. If those show up for ordinary use, raise{" "}
+    <code>requests</code>.
+  </p>
+
+  <h2>Add a bot check</h2>
+  <p>
+    Counting by address stops one machine. A script that rotates through many
+    addresses gets a fresh budget on each. To stop it, add a bot check from{" "}
+    <code>blume/captcha</code>. Before each question, the panel gets a token
+    from the check, and the route verifies it with the provider before the
+    model runs. Most readers never see a challenge.
+  </p>
+  <p>
+    In the Cloudflare dashboard, add a Turnstile widget, list your docs domain
+    under hostname management, and choose the Managed or Invisible mode. For
+    local testing, Cloudflare publishes an invisible test site key that always
+    passes:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { turnstile } from "blume/captcha";
+import { vercel } from "blume/deploy";
+import { upstash } from "blume/ratelimit";
+
+export default defineConfig({
+  title: "Acme Docs",
+  deployment: vercel(),
+  ai: {
+    assistant: {
+      enabled: true,
+      // Cloudflare's always-pass test key. Use your widget's site key to deploy.
+      captcha: turnstile({ siteKey: "1x00000000000000000000BB" }),
+    },
+  },
+  rateLimit: upstash({
+    requests: 30,
+    window: 600,
+    urlEnv: "KV_REST_API_URL",
+    tokenEnv: "KV_REST_API_TOKEN",
+  }),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <CodeBlock
+    code="TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA"
+    lang="bash"
+    title=".env.local"
+  />
+  <p>
+    The site key is public and safe to commit. Set the widget's real secret key
+    as <code>TURNSTILE_SECRET_KEY</code> in your host's environment. Until it's
+    set, <code>blume build</code> warns and the assistant answers that it isn't
+    configured. To use hCaptcha instead, swap in <code>hcaptcha()</code> from
+    the same module, with <code>HCAPTCHA_SECRET_KEY</code>.
+  </p>
+  <p>
+    A failed check answers 403, and the panel says it couldn't check that the
+    reader is human. The rate limit still runs first, so failed checks count
+    too. The load-test script keeps working, since its requests are refused
+    for their empty body before the check.
+  </p>
+
+  <h2>What a rate limit doesn't do</h2>
+  <p>
+    <strong>It isn't a spending cap.</strong> Blume bounds each request: at
+    most 40 messages and 24,000 characters of conversation, a 64 KB body, and
+    five model steps per question. The limit then bounds each address. Nothing
+    bounds the total across many addresses, so set a budget or usage limit
+    with your model provider as well. The{" "}
+    <a href="/pricing">pricing page</a> covers what the assistant costs to run.
+  </p>
+  <p>
+    <strong>It isn't authentication.</strong> The route has to be callable
+    without signing in, because the in-page panel calls it. If only your
+    customers should reach the assistant, protect the whole site with your
+    host's <a href="/docs/deployment#private-docs">access protection</a>, or
+    point <code>endpoint</code> at a backend that checks sessions itself.
+  </p>
+  <p>
+    <strong>It can't tell people apart on a shared address.</strong> An office
+    network or a mobile carrier can put many readers behind one IP address,
+    and they share one count. If your readers mostly sit behind one network,
+    raise <code>requests</code>.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>Every request gets 403 "Cross-site POST form submissions are forbidden"</h3>
+  <p>
+    Astro's cross-site check refuses a <code>POST</code> with no content type,
+    or a form-like one such as <code>text/plain</code>, before the route runs.
+    Send <code>content-type: application/json</code>, as the script does. These
+    refusals don't count against the limit.
+  </p>
+  <h3>The deployed limit lets through more than you set</h3>
+  <p>
+    Check that the adapter really is shared. Your function logs say "Rate
+    limiting counts in memory: set KV_REST_API_URL and KV_REST_API_TOKEN to
+    share the count through Upstash." (naming the variables your config reads)
+    when they didn't reach the deployment, and "Rate limiting failed; letting
+    the request through" when the store can't be reached. Also check that{" "}
+    <code>rateLimit</code> isn't set to <code>false</code>.
+  </p>
+  <h3>The build warns BLUME_MISSING_SECRET for an Upstash variable</h3>
+  <p>
+    The warning names the variable Blume looked for. If it says{" "}
+    <code>UPSTASH_REDIS_REST_URL</code> on a Marketplace database, set{" "}
+    <code>urlEnv</code> and <code>tokenEnv</code> as shown above. If it names
+    your <code>KV_REST_API_</code> variables, check their prefix in the
+    project's environment variables, then redeploy.
+  </p>
+  <h3 id="everyone-hits-the-limit-at-once">Everyone hits the limit at once on a self-hosted server</h3>
+  <p>
+    On <code>deployment: node()</code> behind a reverse proxy or load balancer,
+    the server sees the proxy's address on every request, so every reader
+    shares one count. Astro only reads the reader's address from{" "}
+    <code>X-Forwarded-For</code> for a host listed in its{" "}
+    <code>security.allowedDomains</code>, which <code>node()</code> sets from{" "}
+    <code>allowedDomains</code>. List the host the proxy answers for:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { node } from "blume/deploy";
+
+export default defineConfig({
+  title: "Acme Docs",
+  deployment: node({
+    site: "https://docs.acme.example",
+    allowedDomains: [{ hostname: "docs.acme.example" }],
+  }),
+  ai: {
+    assistant: { enabled: true },
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Have the proxy pass the site's host through and replace any{" "}
+    <code>X-Forwarded-For</code> the reader sent with the address it sees, like
+    nginx's <code>proxy_set_header X-Forwarded-For $remote_addr;</code>. A
+    proxy that appends to the header lets a reader name their own address and
+    get a fresh count on every request. Leave <code>allowedDomains</code> unset
+    when readers reach the server directly.
+  </p>
+  <h3>Readers see "We couldn't check that you're human"</h3>
+  <p>
+    The bot check failed in the browser or at the route. Make sure the widget's
+    hostname list includes your docs domain, and that the site key and secret
+    key come from the same widget. Cloudflare's test tokens only pass with the
+    test secret, and production secrets reject them.
+  </p>
+</GuidePage>

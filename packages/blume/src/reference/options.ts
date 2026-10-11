@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { AUTH_METHODS } from "../components/content/api-page.ts";
+import type { AuthMethod } from "../components/content/api-page.ts";
 import { unrecognizedKeysMessage } from "../core/unrecognized-keys.ts";
 
 /**
@@ -66,17 +68,77 @@ export interface ReferenceSourceOptions {
 export type ResolvedReferenceSource = z.output<typeof referenceSourceSchema>;
 
 /**
+ * [OpenAPI Overlay](https://spec.openapis.org/overlay/latest.html) documents
+ * (local paths or `http(s)` URLs) applied in order to an OpenAPI spec before
+ * it renders: changes to a spec you don't edit by hand.
+ */
+export const overlaysSchema = z.array(z.string()).default([]);
+
+/** Whether adapter-level `overlays` has the `spec` it belongs to. */
+export const overlaysHaveSpec = (options: {
+  overlays?: string[];
+  spec?: string;
+}): boolean => !options.overlays || options.spec !== undefined;
+
+/** The refinement issue for `overlays` set beside `sources` instead of `spec`. */
+export const overlaysNeedSpecIssue = {
+  message:
+    "`overlays` belongs to the `spec` shorthand; with `sources`, give each source its own `overlays`.",
+  path: ["overlays"],
+};
+
+/** An OpenAPI spec source: the shared shape plus its `overlays`. */
+export const openapiSourceSchema = referenceSourceSchema.extend({
+  overlays: overlaysSchema,
+});
+
+/** One OpenAPI spec source, as `openapi()` accepts it. */
+export interface OpenApiSourceOptions extends ReferenceSourceOptions {
+  /**
+   * OpenAPI Overlay documents (local paths or `http(s)` URLs) applied in
+   * order to the spec before it renders.
+   */
+  overlays?: string[];
+}
+
+/**
+ * How a GraphQL endpoint authenticates, in the shape the site's `api.auth`
+ * takes for hand-written endpoints: `bearer`, `basic`, or `key` (sent in the
+ * `name` header, `x-api-key` by default). A schema, unlike an OpenAPI
+ * document, declares no security schemes, so this is what gives the Try it
+ * panel its credential field.
+ */
+export const graphqlAuthSchema = z.strictObject({
+  method: z.enum(AUTH_METHODS),
+  /** The header an API key goes in. Defaults to `x-api-key`. */
+  name: z.string().optional(),
+});
+
+/** The `auth` option of `graphql()` and its sources. */
+export interface GraphqlAuthOptions {
+  /** `bearer`, `basic`, `key`, or `none`. */
+  method: AuthMethod;
+  /** The header an API key goes in. Defaults to `x-api-key`. */
+  name?: string;
+}
+
+/**
  * A single GraphQL schema: the shared source shape plus `endpoint`, the live
  * GraphQL API URL the playground and code samples target (a schema, unlike an
- * OpenAPI document, names no server).
+ * OpenAPI document, names no server), and `auth`, how that endpoint
+ * authenticates.
  */
 export const graphqlSourceSchema = referenceSourceSchema.extend({
+  /** How the endpoint authenticates (playground + code samples). */
+  auth: graphqlAuthSchema.optional(),
   /** URL of the live GraphQL endpoint (playground + code samples). */
   endpoint: z.string().optional(),
 });
 
 /** One schema source, as `graphql()` accepts it. */
 export interface GraphqlSourceOptions extends ReferenceSourceOptions {
+  /** How the endpoint authenticates; wins over the adapter's `auth`. */
+  auth?: GraphqlAuthOptions;
   /** URL of the live GraphQL endpoint (playground + code samples); wins over the adapter's `endpoint`. */
   endpoint?: string;
 }
@@ -173,8 +235,9 @@ export const sharedOptions = (defaults: {
 });
 
 /**
- * Resolve the `spec` shorthand into `sources` so downstream code reads one
- * field: the shorthand becomes the first source (with the source defaults
+ * Resolve the `spec` shorthand (and, on OpenAPI kinds, the `overlays` beside
+ * it) into `sources` so downstream code reads one field: the shorthand becomes
+ * the first source (with the source defaults
  * applied through the source schema itself, so the two can never drift) and
  * the `spec` key is dropped. An adapter with neither renders nothing, which
  * is a config mistake rather than a choice — `refine` it away with
@@ -184,15 +247,19 @@ export const liftSpec =
   <Source extends { spec: string }>(
     sourceSchema: z.ZodType<Source, { spec: string }>
   ) =>
-  <Options extends { sources: Source[]; spec?: string }>({
+  <Options extends { sources: Source[]; spec?: string; overlays?: string[] }>({
+    overlays,
     spec,
     ...options
-  }: Options): Omit<Options, "spec"> => ({
+  }: Options): Omit<Options, "spec" | "overlays"> => ({
     ...options,
     sources:
       spec === undefined
         ? options.sources
-        : [sourceSchema.parse({ spec }), ...options.sources],
+        : [
+            sourceSchema.parse(overlays ? { overlays, spec } : { spec }),
+            ...options.sources,
+          ],
   });
 
 /** Whether an adapter has anything to render; pairs with {@link missingSourcesIssue}. */

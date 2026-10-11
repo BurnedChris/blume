@@ -1,4 +1,6 @@
 import type { JsonValue } from "../core/adapter.ts";
+import { normalizeBasePath, withBasePath } from "../core/base-path.ts";
+import { CLICS_SCRIPT_SRC } from "./clics.ts";
 import type { AnalyticsAdapter } from "./schema.ts";
 
 const attrs = (settings: Record<string, JsonValue>) =>
@@ -11,9 +13,14 @@ const attrs = (settings: Record<string, JsonValue>) =>
 
 /** Compile legacy serializable adapters into real c15t SDK calls in the browser.
  * Only selected vendors are imported. SDK closures never pass through JSON.
+ * `base` is the deployment base a `script()` adapter's root-relative `src`
+ * (a file in `public/`) is served under.
  */
 // oxlint-disable-next-line complexity -- Explicit legacy-to-SDK mappings remain exhaustive in one place.
-export const analyticsClientModule = (adapters: AnalyticsAdapter[]): string => {
+export const analyticsClientModule = (
+  adapters: AnalyticsAdapter[],
+  base = "/"
+): string => {
   const imports: string[] = [];
   const entries: string[] = [];
   const pageviews: string[] = [];
@@ -59,6 +66,29 @@ export const analyticsClientModule = (adapters: AnalyticsAdapter[]): string => {
       }
       case "clearbit": {
         add("clearbit", "clearbit", { publishableKey: adapter.options.key });
+        break;
+      }
+      case "clics": {
+        // No c15t integration yet: Clics' documented deferred tag. The
+        // tracker reads these from `document.currentScript`, and the two
+        // flags by presence alone.
+        const { projectId, allowLocalhost, disableOutboundLinks } =
+          adapter.options;
+        entries.push(
+          JSON.stringify({
+            attributes: {
+              "data-project-id": projectId,
+              ...(allowLocalhost && { "data-allow-localhost": "" }),
+              ...(disableOutboundLinks && {
+                "data-disable-outbound-links": "",
+              }),
+            },
+            category: "measurement",
+            defer: true,
+            id: `blume-clics-${entries.length}`,
+            src: CLICS_SCRIPT_SRC,
+          })
+        );
         break;
       }
       case "cloudflare": {
@@ -217,9 +247,13 @@ export const analyticsClientModule = (adapters: AnalyticsAdapter[]): string => {
         break;
       }
       case "script": {
+        const { src } = adapter.options;
         entries.push(
           JSON.stringify({
             ...adapter.options,
+            // A root-relative `src` gains the base the way a link does; one
+            // already under it, or an absolute URL, is left alone.
+            ...(src && { src: withBasePath(normalizeBasePath(base), src) }),
             category: "measurement",
             id: `blume-custom-${entries.length}`,
             textContent: adapter.options.content,

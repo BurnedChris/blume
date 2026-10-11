@@ -34,6 +34,7 @@ export const uk: UIStringsOverride = {
     error: "Вибачте, щось пішло не так.",
     explainCode: "Поясни цей код.",
     label: "Поставити запитання",
+    open: "Відкрити асистента",
     placeholder: "Поставте запитання…",
     rateLimited:
       "Ви поставили багато запитань. Спробуйте знову за кілька хвилин.",
@@ -49,6 +50,7 @@ export const uk: UIStringsOverride = {
   banner: { dismiss: "Закрити оголошення" },
   changelog: {
     description: "Оновлення продукту та примітки до випусків.",
+    empty: "У журналі змін поки немає записів.",
     title: "Журнал змін",
   },
   consent: {
@@ -70,6 +72,7 @@ export const uk: UIStringsOverride = {
     preview: "Попередній перегляд",
     prop: "Властивість",
     selectTab: "Вибрати вкладку",
+    selectView: "Вибрати подання",
     showLess: "Показати менше",
     showMore: "Показати більше",
     stars: "Зірки",

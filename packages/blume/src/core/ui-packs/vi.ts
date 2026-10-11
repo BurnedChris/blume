@@ -33,6 +33,7 @@ export const vi: UIStringsOverride = {
     error: "Xin lỗi, đã xảy ra sự cố.",
     explainCode: "Giải thích đoạn mã này.",
     label: "Đặt câu hỏi",
+    open: "Mở trợ lý",
     placeholder: "Đặt câu hỏi…",
     rateLimited: "Bạn đã hỏi rất nhiều câu hỏi. Hãy thử lại sau vài phút.",
     removeCode: "Xóa mã",
@@ -48,6 +49,7 @@ export const vi: UIStringsOverride = {
   banner: { dismiss: "Đóng thông báo" },
   changelog: {
     description: "Cập nhật sản phẩm và ghi chú phát hành.",
+    empty: "Chưa có mục nào trong nhật ký thay đổi.",
     title: "Nhật ký thay đổi",
   },
   consent: {
@@ -69,6 +71,7 @@ export const vi: UIStringsOverride = {
     preview: "Xem trước",
     prop: "Thuộc tính",
     selectTab: "Chọn tab",
+    selectView: "Chọn chế độ xem",
     showLess: "Ẩn bớt",
     showMore: "Hiển thị thêm",
     stars: "Sao",

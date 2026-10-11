@@ -1,0 +1,722 @@
+---
+// Serve HTML and Markdown from the same URL: checked against the Markdown
+// for agents, deployment, and agent discovery docs, and the negotiation
+// source on main (astro/markdown-negotiation.ts, astro/integration.ts,
+// deploy/vercel-negotiation.ts, deploy/cloudflare-negotiation.ts,
+// deploy/platforms/{vercel,cloudflare}.ts, ai/markdown.ts,
+// ai/agent-readability.ts, components/layout/DiscoveryLinks.astro). Ran: the
+// sample page through Blume's own downlevelComponents to get its exact .md
+// output; check-negotiation.mjs (Node 24) against useblume.dev, a
+// cloudflare() server build, across every docs page, and against the local
+// dev server; curl probes of useblume.dev's HTML, Markdown, .md, homepage,
+// and 404 responses. Vercel behavior and Vercel's CDN cache key checked in
+// source and Vercel's docs only. Review: rechecked the dev middleware
+// (integration.ts negotiateMarkdown), Vercel and Cloudflare negotiation,
+// canonical/noindex, and agent-readability.json in source; reran the script
+// against useblume.dev and blume dev; Vercel cache key, Cloudflare Vary, and
+// Firefox's Accept against their docs. Not yet run end to end on a fresh
+// Vercel or Cloudflare deployment. Updated against 400b5ff3 (read, not
+// rerun): Vercel's conditions honor q-values and case except when both types
+// sit below 1 (deploy/vercel-negotiation.ts), and dev sends Vary: Accept on
+// the HTML answer too (integration.ts negotiateMarkdown).
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const checkNegotiationMjsCode = `// Checks that each docs URL serves HTML to a browser and Markdown to an agent.
+// Usage: node check-negotiation.mjs <site> <path> [path...]
+const [site, ...paths] = process.argv.slice(2);
+if (!site || paths.length === 0) {
+  console.error("Usage: node check-negotiation.mjs <site> <path> [path...]");
+  process.exit(2);
+}
+
+// What Firefox sends when you open a page, and what an agent sends.
+const BROWSER =
+  "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+const AGENT = "text/markdown";
+const CACHE_HEADERS = ["x-vercel-cache", "cf-cache-status", "x-cache", "age"];
+
+let failures = 0;
+const report = (ok, message) => {
+  if (!ok) failures += 1;
+  console.log(\`  \${ok ? "ok  " : "FAIL"} \${message}\`);
+};
+
+const get = async (url, accept) => {
+  const response = await fetch(url, { headers: { accept } });
+  return {
+    body: await response.text(),
+    headers: response.headers,
+    status: response.status,
+    type: response.headers.get("content-type") ?? "(none)",
+  };
+};
+
+const variesOnAccept = (headers) =>
+  (headers.get("vary") ?? "")
+    .toLowerCase()
+    .split(",")
+    .some((value) => value.trim() === "accept");
+
+const cacheInfo = (headers) =>
+  CACHE_HEADERS.filter((name) => headers.has(name))
+    .map((name) => \`\${name}: \${headers.get(name)}\`)
+    .join(", ");
+
+const decode = (text) =>
+  text
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'")
+    .replaceAll("&#x27;", "'")
+    .replaceAll("&amp;", "&");
+
+// Blume typesets quotes and dashes in the HTML, so compare plain punctuation.
+const squash = (text) =>
+  text
+    .replace(/[\\u2018\\u2019]/gu, "'")
+    .replace(/[\\u201C\\u201D]/gu, '"')
+    .replace(/\\u2026/gu, "...")
+    .replace(/-{2,3}|[\\u2013\\u2014]/gu, "-")
+    .replace(/\\s+/gu, " ")
+    .trim();
+
+// Markdown lines outside fenced code blocks.
+const prose = (markdown) => {
+  let fenced = false;
+  return markdown.split("\\n").filter((line) => {
+    if (/^\\s*(\`\`\`|~~~)/u.test(line)) {
+      fenced = !fenced;
+      return false;
+    }
+    return !fenced;
+  });
+};
+
+// Headings, minus the anchor and TOC markers (\`[#id]\`, \`[!toc]\`); a \`[toc]\`
+// heading renders only in the table of contents, so it's skipped.
+const markdownHeadings = (markdown) =>
+  prose(markdown)
+    .map((line) => /^#{2,6}\\s+(.+?)\\s*#*$/u.exec(line)?.[1])
+    .filter((text) => text && !/\\[toc\\]/u.test(text))
+    .map((text) => text.replace(/\\s*(\\[(#[^\\]]+|!toc)\\]|\\\\?\\{#[^}]*\\})/gu, ""))
+    .map((text) =>
+      squash(
+        text
+          .replace(/\\[([^\\]]*)\\]\\([^)]*\\)/gu, "$1")
+          .replaceAll("\`", "")
+          .replaceAll("**", ""),
+      ),
+    );
+
+const htmlHeadings = (html) =>
+  [...html.matchAll(/<h[1-6]\\b[^>]*>([\\s\\S]*?)<\\/h[1-6]>/giu)].map(
+    ([, inner]) => squash(decode(inner.replace(/<[^>]+>/gu, ""))),
+  );
+
+// Root-relative page links in the prose: not images, not inline code.
+const markdownLinks = (markdown) => {
+  const links = new Set();
+  for (const line of prose(markdown)) {
+    const text = line.replace(/\`[^\`]*\`/gu, "");
+    for (const [, target] of text.matchAll(/(?<!!)\\[[^\\]]*\\]\\((\\/[^)\\s]*)/gu)) {
+      links.add(target);
+    }
+  }
+  return [...links];
+};
+
+const htmlLinks = (html) =>
+  new Set(
+    [...html.matchAll(/\\shref="([^"]*)"/giu)].map(([, href]) => decode(href)),
+  );
+
+const linkTags = (html) =>
+  [...html.matchAll(/<link\\b[^>]*>/giu)].map(([tag]) =>
+    Object.fromEntries(
+      [...tag.matchAll(/([a-z-]+)="([^"]*)"/giu)].map(([, name, value]) => [
+        name.toLowerCase(),
+        decode(value),
+      ]),
+    ),
+  );
+
+for (const path of paths) {
+  const url = new URL(path, site).href;
+  const mirror = new URL(
+    path === "/" ? "/index.md" : \`\${path.replace(/\\/$/u, "")}.md\`,
+    site,
+  ).href;
+  console.log(path);
+
+  // Browser, then agent, then browser again, so a cache that ignores Accept
+  // shows up as the wrong format on one of them.
+  const html = await get(url, BROWSER);
+  const markdown = await get(url, AGENT);
+  const again = await get(url, BROWSER);
+  const file = await get(mirror, "*/*");
+
+  report(
+    html.status === 200 && html.type.startsWith("text/html"),
+    \`browser gets \${html.status} \${html.type}\`,
+  );
+  report(
+    markdown.status === 200 && markdown.type.startsWith("text/markdown"),
+    \`agent gets \${markdown.status} \${markdown.type}\`,
+  );
+  report(
+    again.type.startsWith("text/html"),
+    \`browser still gets \${again.type} after an agent request\`,
+  );
+  report(
+    variesOnAccept(html.headers) && variesOnAccept(markdown.headers),
+    "both responses send Vary: Accept",
+  );
+  report(
+    file.status === 200 && file.body === markdown.body,
+    \`negotiated Markdown matches \${new URL(mirror).pathname} byte for byte\`,
+  );
+
+  const tags = linkTags(html.body);
+  const canonical = tags.find((tag) => tag.rel === "canonical")?.href;
+  const alternate = tags.find(
+    (tag) => tag.rel === "alternate" && tag.type === "text/markdown",
+  )?.href;
+  report(
+    canonical !== undefined &&
+      new URL(canonical).pathname === new URL(url).pathname,
+    \`canonical is \${canonical ?? "missing"}\`,
+  );
+  report(
+    alternate !== undefined && new URL(alternate, url).href === mirror,
+    \`HTML names \${alternate ?? "no"} Markdown alternate\`,
+  );
+
+  const headings = htmlHeadings(html.body);
+  const missingHeadings = markdownHeadings(markdown.body).filter(
+    (heading) => !headings.some((text) => text.includes(heading)),
+  );
+  report(
+    missingHeadings.length === 0,
+    missingHeadings.length === 0
+      ? "every Markdown heading is in the HTML"
+      : \`headings missing from the HTML: \${missingHeadings.join(" | ")}\`,
+  );
+
+  const hrefs = htmlLinks(html.body);
+  const missingLinks = markdownLinks(markdown.body).filter(
+    (link) => !hrefs.has(link),
+  );
+  report(
+    missingLinks.length === 0,
+    missingLinks.length === 0
+      ? "every root-relative Markdown link is in the HTML"
+      : \`links missing from the HTML: \${missingLinks.join(" ")}\`,
+  );
+
+  const cache = [html, markdown, again].map((response) =>
+    cacheInfo(response.headers),
+  );
+  if (cache.some(Boolean))
+    console.log(\`  cache: \${cache.map((info) => info || "-").join(" / ")}\`);
+}
+
+console.log(
+  failures === 0 ? "\\nAll checks passed." : \`\\n\${failures} check(s) failed.\`,
+);
+process.exit(failures === 0 ? 0 : 1);`;
+
+const sendAMessageMdxCode = `---
+title: Send your first message
+description: Send a transactional email with the Acme Messages API and check that it arrived.
+---
+
+Every message goes through \`POST /messages\`, authenticated with an API key.
+Create one first, as [Authentication](/authentication) describes.
+
+:::warning
+Keep API keys on your server. Never ship one in a browser bundle.
+:::
+
+## Send the message
+
+<Steps>
+  <Step title="Create a template">
+    Add a template named \`welcome\` in the dashboard.
+  </Step>
+  <Step title="Call the API">
+    Send the recipient and the template name.
+  </Step>
+</Steps>
+
+\`\`\`bash
+curl https://api.acme.example/v1/messages \\
+  -H "Authorization: Bearer $ACME_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"channel":"email","to":"ada@example.com","template":"welcome"}'
+\`\`\`
+
+## Check delivery
+
+Fetch the message by its ID until its \`status\` is \`delivered\`.`;
+---
+
+<GuidePage guide={guideById("html-markdown-content-negotiation")}>
+  <p>
+    Yes. A Blume site already serves every content page twice: as HTML at its
+    URL, and as Markdown at the same URL with <code>.md</code> on the end.
+    Deploy it as a server build on Vercel or Cloudflare, and the page URL
+    itself answers with Markdown when a request's <code>Accept</code> header
+    asks for <code>text/markdown</code>. Browsers keep getting HTML, because
+    they never ask for Markdown.
+  </p>
+  <p>
+    By the end of this guide, your docs negotiate at every content URL, and
+    you have a script that proves it: it checks both formats' headers and
+    bodies and the page's canonical URL, and catches a cache that hands one
+    client the other's format.
+  </p>
+  <p>
+    You may not need negotiation at all. Every Blume build, static ones
+    included, publishes the <code>.md</code> URLs and points to each one from
+    the page's HTML, so an agent that looks for them finds them on any host.
+    Negotiation helps agents that request the page URL they were given and say
+    which format they want, and it needs a host where Blume can act on each
+    request. To pull every page at once, for a search index or a RAG
+    pipeline, use the JSON API instead, as in{" "}
+    <a href="/guides/documentation-json-api-rag">Index documentation for RAG without scraping HTML</a
+    >.
+  </p>
+
+  <h2>How one URL serves two formats</h2>
+  <p>Every content page has three addresses:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">URL</th>
+        <th scope="col">Returns</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>/send-a-message</code></td>
+        <td>The rendered page, or its Markdown when the request asks for it</td>
+      </tr>
+      <tr>
+        <td><code>/send-a-message.md</code></td>
+        <td>Markdown, with components converted to plain Markdown</td>
+      </tr>
+      <tr>
+        <td><code>/send-a-message.mdx</code></td>
+        <td>The MDX source, with components as written</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The homepage's Markdown lives at <code>/index.md</code>. When the homepage
+    is a custom landing page rather than a content page, its Markdown is the
+    site's <code>llms.txt</code> index, so an agent asking the site root for
+    Markdown still gets a map of the docs.
+  </p>
+  <p>
+    A request gets Markdown when its <code>Accept</code> header lists{" "}
+    <code>text/markdown</code> (or <code>text/x-markdown</code>, in any case)
+    with a quality value above zero and at least as high as{" "}
+    <code>text/html</code>'s (Vercel has one exception: see{" "}
+    <a href="#troubleshooting">Troubleshooting</a>). A browser opening a page
+    sends{" "}
+    <code>text/html</code> first and never mentions Markdown. The answer is a
+    rewrite, not a redirect: the agent stays on the page URL, and the body is
+    the same file the <code>.md</code> URL serves.
+  </p>
+  <p>Where that decision runs depends on how you deploy:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Where the site runs</th>
+        <th scope="col">Markdown at the page URL</th>
+        <th scope="col">Markdown at <code>.md</code> URLs</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>blume dev</code></td>
+        <td>Yes</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>vercel()</code> server build</td>
+        <td>Yes, through routing rules Blume adds to the deploy</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>cloudflare()</code> server build</td>
+        <td>Yes, through a Worker Blume generates in front of the site</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>
+          Static builds on any host, <code>netlify()</code>, and{" "}
+          <code>node()</code>
+        </td>
+        <td>No</td>
+        <td>Yes</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The last row isn't a missing setting. Those hosts serve prerendered pages
+    from a static layer that runs no code per request, so there's nowhere for
+    the decision to happen, and agents there use the <code>.md</code> URLs. An
+    adapter with <code>output: "static"</code> is a static build too. If you're
+    still choosing, see{" "}
+    <a href="/guides/static-vs-server-documentation">
+      static or server-rendered documentation
+    </a>.
+  </p>
+
+  <h2>Look at the Markdown mirror</h2>
+  <p>
+    Start with the dev server, which negotiates the same way. Take a page like
+    this one, saved as <code>docs/send-a-message.mdx</code>:
+  </p>
+  <CodeBlock code={sendAMessageMdxCode} lang="mdx" title="docs/send-a-message.mdx" />
+  <p>
+    Run <code>npx blume dev</code>, then fetch the page's Markdown both ways
+    from another terminal:
+  </p>
+  <CodeBlock
+    code={`curl -s http://localhost:4321/send-a-message.md
+curl -s -H "Accept: text/markdown" http://localhost:4321/send-a-message`}
+    lang="bash"
+  />
+  <p>
+    Both print the same Markdown. The front matter stays, so an agent gets the
+    title and description, and plain Markdown passes through as written, the{" "}
+    <code>:::warning</code> directive included. Only components change. Here,{" "}
+    <code>&lt;Steps&gt;</code> becomes a numbered list:
+  </p>
+  <CodeBlock code={`## Send the message
+
+1. **Create a template**
+
+    Add a template named \`welcome\` in the dashboard.
+
+2. **Call the API**
+
+    Send the recipient and the template name.`} lang="md" title="send-a-message.md" />
+  <p>
+    The HTML side of the pair is the same text inside your site's layout, with
+    the header, sidebar, and styled components around it. Its head ties the
+    two together. With the site URL set to{" "}
+    <code>https://docs.acme.example</code>, the page carries:
+  </p>
+  <CodeBlock
+    code={`<link rel="canonical" href="https://docs.acme.example/send-a-message">
+<link href="/send-a-message.md" rel="alternate" type="text/markdown">`}
+    lang="html"
+  />
+  <p>
+    The canonical link names the page URL as the one identity for both
+    formats. The alternate link tells any client where the Markdown lives, even
+    on a host that can't negotiate. Your sitemap lists page URLs only, never
+    the <code>.md</code> files.
+  </p>
+
+  <h2>Deploy to a host that negotiates</h2>
+  <p>
+    Name your host's adapter as <code>deployment</code> in{" "}
+    <code>blume.config.ts</code>. That switches the build to server output,
+    which is what turns negotiation on. Your content pages are still
+    prerendered, and the host decides per request which prerendered file to
+    serve.
+  </p>
+
+  <h3>Vercel</h3>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { vercel } from "blume/deploy";
+
+export default defineConfig({
+  deployment: vercel(),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The <code>vercel()</code> adapter ships with Blume. Push the repository,
+    import it in Vercel, and set the project's Node.js version to 22 or later.
+    Blume detects your production domain for the canonical URLs, and adds
+    header-conditional rewrites to the deploy's routing config, so Vercel's
+    router sends a Markdown request to the page's <code>.md</code> file.
+  </p>
+
+  <h3>Cloudflare Workers</h3>
+  <p>Install the adapter, which Blume doesn't bundle:</p>
+  <CodeBlock code="npm install -D @astrojs/cloudflare@14" lang="bash" />
+  <p>
+    Then name it with your site URL. Blume can't detect your domain on a
+    Workers build, and without a site URL your pages have no canonical link.
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { cloudflare } from "blume/deploy";
+
+export default defineConfig({
+  deployment: cloudflare({ site: "https://docs.acme.example" }),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Build and deploy from the project root. Run <code>npx wrangler login</code>{" "}
+    first if you haven't.
+  </p>
+  <CodeBlock
+    code={`npx blume build
+npx wrangler deploy`}
+    lang="bash"
+  />
+  <p>
+    Blume generates a small Worker in front of the site's own. It serves the
+    page's <code>.md</code> file when a request prefers Markdown and passes
+    everything else through. For that to work, every page request goes through
+    the Worker, while the build assets and the raw <code>.md</code>,{" "}
+    <code>.txt</code>, and <code>.well-known</code> files stay on Cloudflare's
+    static layer. The{" "}
+    <a href="/guides/cloudflare-workers-documentation">Cloudflare Workers guide</a>{" "}
+    covers custom domains and the rest of the setup.
+  </p>
+
+  <h3>Confirm the build wired it</h3>
+  <p>The build log says when negotiation is in place, with one of these lines:</p>
+  <CodeBlock
+    code={`Wired Accept: text/markdown negotiation into the Vercel routing config
+Wired Accept: text/markdown negotiation into the Cloudflare Worker`}
+    lang="txt"
+  />
+  <p>
+    Once deployed, the site's agent readability manifest says so too. Its{" "}
+    <code>artifacts.markdown</code> entry lists{" "}
+    <code>contentNegotiation</code> only on a deployment that honors the header:
+  </p>
+  <CodeBlock
+    code="curl -s https://docs.acme.example/agent-readability.json"
+    lang="bash"
+  />
+  <CodeBlock
+    code={`"markdown": {
+  "contentNegotiation": "text/markdown",
+  "pattern": "https://docs.acme.example/{route}.md"
+}`}
+    lang="json"
+  />
+
+  <h2>Send both Accept headers</h2>
+  <p>
+    Ask for the same URL twice, once as a browser and once as an agent, and
+    print the two headers that matter:
+  </p>
+  <CodeBlock
+    code={`curl -sI https://docs.acme.example/send-a-message \\
+  | grep -iE '^(content-type|vary):'
+curl -sI -H "Accept: text/markdown" https://docs.acme.example/send-a-message \\
+  | grep -iE '^(content-type|vary):'`}
+    lang="bash"
+  />
+  <p>
+    The first should report <code>text/html</code> and the second{" "}
+    <code>text/markdown</code>, and both should list <code>Accept</code> in{" "}
+    <code>Vary</code>. That header tells caches the URL has two
+    representations. Your host may add other values to it, like{" "}
+    <code>accept-encoding</code>. On Cloudflare, the Worker sends the Markdown
+    as <code>text/markdown; charset=utf-8</code>.
+  </p>
+  <p>
+    On both hosts, missing pages negotiate too. A request for a URL with no
+    page behind it that asks for Markdown gets a short Markdown not-found page,
+    with links
+    to each top-level section, the sitemap, and <code>llms.txt</code>, and a
+    real <code>404</code> status. A 404 page of your own replaces it, so
+    missing pages then answer with your HTML page.
+  </p>
+
+  <h2>Compare the two representations</h2>
+  <p>
+    Headers only prove the format. To check that both formats describe the
+    same page, save this script as <code>check-negotiation.mjs</code>. It
+    needs Node.js 22 or later and no dependencies.
+  </p>
+  <CodeBlock code={checkNegotiationMjsCode} lang="js" title="check-negotiation.mjs" />
+  <p>Run it against a few content pages:</p>
+  <CodeBlock
+    code="node check-negotiation.mjs https://docs.acme.example /send-a-message /authentication"
+    lang="bash"
+  />
+  <p>
+    For each path, it requests the page as a browser, as an agent, and as a
+    browser again, then fetches the <code>.md</code> file. It checks:
+  </p>
+  <ul>
+    <li>
+      <strong>The formats.</strong> The browser gets a <code>200</code> HTML
+      page both times, and the agent gets <code>200</code> Markdown.
+    </li>
+    <li>
+      <strong>The cache header.</strong> Both responses carry{" "}
+      <code>Vary: Accept</code>.
+    </li>
+    <li>
+      <strong>The body.</strong> The negotiated Markdown is byte for byte the
+      same as the <code>.md</code> file, so the two addresses can't drift
+      apart.
+    </li>
+    <li>
+      <strong>The identity.</strong> The HTML's canonical URL is the page's own
+      path, and its Markdown alternate points at the <code>.md</code> file.
+    </li>
+    <li>
+      <strong>The content.</strong> Every heading in the Markdown appears in
+      the HTML, and so does every root-relative link.
+    </li>
+  </ul>
+  <p>
+    To see a passing run before your own deploy is up, point it at
+    useblume.dev, Blume's own docs, which deploy with <code>cloudflare()</code>:
+  </p>
+  <CodeBlock
+    code="node check-negotiation.mjs https://useblume.dev /docs/quickstart"
+    lang="bash"
+  />
+  <CodeBlock code={`/docs/quickstart
+  ok   browser gets 200 text/html
+  ok   agent gets 200 text/markdown; charset=utf-8
+  ok   browser still gets text/html after an agent request
+  ok   both responses send Vary: Accept
+  ok   negotiated Markdown matches /docs/quickstart.md byte for byte
+  ok   canonical is https://useblume.dev/docs/quickstart
+  ok   HTML names /docs/quickstart.md Markdown alternate
+  ok   every Markdown heading is in the HTML
+  ok   every root-relative Markdown link is in the HTML
+  cache: cf-cache-status: HIT / cf-cache-status: HIT / cf-cache-status: HIT
+
+All checks passed.`} lang="txt" />
+  <p>
+    The script exits with status 1 when a check fails, so it can run in CI
+    after each deploy. Leave a landing-page homepage out of the run: its
+    Markdown is the <code>llms.txt</code> index, not a copy of the page, so
+    the heading check fails there by design. The dev server negotiates the same
+    way and sends <code>Vary: Accept</code> with both formats, so you can try
+    the script against <code>http://localhost:4321</code> before you deploy,
+    but only a deployment tests the cache in front of it.
+  </p>
+
+  <h3>When the formats differ on purpose</h3>
+  <p>
+    The script checks that what the Markdown says is also on the page, not the
+    reverse, so it won't notice what the Markdown leaves out. Two features can
+    leave things out, so check pages that use them by hand:
+  </p>
+  <ul>
+    <li>
+      Content in <code>&lt;Visibility for="web"&gt;</code> is left out of the
+      Markdown, and content in <code>&lt;Visibility for="agents"&gt;</code>{" "}
+      appears only there. Keep both to asides, like a note telling agents
+      which page to read next, so the two formats still cover the same
+      material.
+    </li>
+    <li>
+      A component of your own with no Markdown form stays as JSX in the{" "}
+      <code>.md</code> file, so an agent reads its props, not what it renders.
+      Give it a{" "}
+      <a href="/docs/discoverability/markdown#custom-component-serializers">
+        Markdown serializer
+      </a>{" "}
+      in <code>agents.markdownComponents</code>.
+    </li>
+  </ul>
+
+  <h2>Check what your CDN caches</h2>
+  <p>
+    Two formats at one URL only work if every cache between the client and
+    your host keys its entries on <code>Accept</code>. Otherwise the first
+    response a cache stores is what everyone gets: agents receive HTML, or
+    browsers receive raw Markdown.
+  </p>
+  <p>On the two hosts that negotiate, the host's own layer is covered:</p>
+  <ul>
+    <li>
+      Vercel's CDN includes the <code>Accept</code> header in its cache key by
+      default, and Blume adds <code>Vary: Accept</code> to both formats of
+      every negotiated URL.
+    </li>
+    <li>
+      On Cloudflare, Workers run in front of the cache, so the generated
+      Worker chooses the file, the page or its <code>.md</code>, on every
+      request.
+    </li>
+  </ul>
+  <p>
+    The risk is a layer you add in front, like a second CDN or a proxy on
+    another provider. Cloudflare's cache, for example, doesn't consider{" "}
+    <code>Vary</code> values by default, except <code>Accept-Encoding</code>,
+    so a rule that makes it cache your HTML pages stores whichever format
+    arrived first. If you run a layer like that, configure it to vary on{" "}
+    <code>Accept</code>, or keep it from caching pages.
+  </p>
+  <p>
+    The script's browser, agent, browser order already tests this, and its{" "}
+    <code>cache:</code> line prints the cache status headers each response
+    carried. Run it twice in a row, so the second run reads from whatever the
+    first one warmed.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The agent gets HTML on the deployed site</h3>
+  <p>
+    Look for the <code>Wired Accept: text/markdown negotiation</code> line in
+    the build log. If it's missing, the build isn't a Vercel or Cloudflare
+    server build: check that <code>deployment</code> names{" "}
+    <code>vercel()</code> or <code>cloudflare()</code> without{" "}
+    <code>output: "static"</code>. On a static host, Netlify, or{" "}
+    <code>node()</code>, use the <code>.md</code> URLs instead. Pages you wrote
+    as <code>.astro</code> files in <code>pages/</code> have no Markdown
+    mirror, so they always answer with HTML, except a landing-page homepage,
+    which answers with <code>llms.txt</code>.
+  </p>
+  <h3>The Cloudflare build says it could not wire negotiation</h3>
+  <p>
+    Blume merges its routing rules into any <code>run_worker_first</code> list
+    in your own <code>wrangler.jsonc</code>. When the combined list breaks
+    Wrangler's limits of 100 rules of 100 characters each, Blume leaves the
+    routing alone and warns, and the <code>.md</code> URLs keep working. Trim
+    your own rules until the combined list fits, then build again.
+  </p>
+  <h3>Dev and production answer the same request differently</h3>
+  <p>
+    Every host compares quality values, so{" "}
+    <code>Accept: text/markdown;q=0.5, text/html</code> gets HTML everywhere.
+    Vercel's routing rules can't compare two quality values below 1, though.
+    For <code>Accept: text/markdown;q=0.9, text/html;q=0.8</code>, the dev
+    server and the Cloudflare Worker answer with Markdown, and Vercel answers
+    with HTML. Send <code>text/markdown</code> without a quality value, and
+    every host answers the same way.
+  </p>
+  <h3>The canonical check fails</h3>
+  <p>
+    A missing canonical means Blume doesn't know the site URL: set{" "}
+    <code>site</code> in the adapter, as in the Cloudflare config above. Some
+    pages point elsewhere on purpose. A page marked <code>noindex</code> has no
+    canonical, and a page in an archived version names the latest version's
+    page as its canonical by default, so leave those out of the run.
+  </p>
+  <h3>Every check fails on a Vercel preview</h3>
+  <p>
+    Deployment Protection answers the script with a login page instead of your
+    docs. Run it against production, or add your project's Protection Bypass
+    for Automation secret to the headers in the script's <code>get</code>{" "}
+    function, as an <code>x-vercel-protection-bypass</code> header.
+  </p>
+</GuidePage>

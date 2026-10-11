@@ -86,7 +86,23 @@ i18n: {
 
 Cada idioma ganha sua própria barra lateral, construída a partir dos arquivos daquele locale — então as traduções podem divergir em estrutura, ordenação ou rótulos. Os arquivos [`meta.ts`](/docs/content/meta) de pasta também são resolvidos por locale: com o parser `dir` padrão, coloque um `meta.ts` em `fr/guides/` para ordenar o grupo em francês de forma independente. Até que um locale tenha o seu (ou um `meta.$.ts` compartilhado), o grupo dele espelha o do locale de [fallback](#fallbacks) — o `meta.ts` daquela pasta e o `sidebar.display` definido pela página de índice dela —, de modo que as páginas que recorrem ao fallback mantêm os mesmos títulos, a mesma ordem e os mesmos grupos recolhíveis. Com o parser `dot`, as traduções ficam ao lado das originais, portanto o `meta.ts` de uma pasta se aplica a todos os locales. Todo o resto da [navegação](/docs/content/navigation) funciona da mesma forma, por idioma.
 
-As abas do cabeçalho são configuradas, e não derivadas do conteúdo, então seus rótulos são localizados em `blume.config.ts`: o `label` de uma aba aceita um mapa por locale (`{ en: "Docs", fr: "Documentation" }`) além da forma de string simples, recorrendo à entrada do locale padrão para os locales que você não preencheu. Veja [Abas](/docs/content/navigation#tabs). Os caminhos das abas, os links do cabeçalho e o link do logo do cabeçalho também passam para o locale do leitor sempre que esse locale serve a rota, de modo que o cabeçalho permanece dentro de um único idioma. Uma rota servida apenas pelo locale padrão — uma [página personalizada](/docs/advanced/custom-pages) ou o índice gerado do [changelog](/docs/advanced/changelog) — mantém o próprio caminho em vez de apontar para uma URL localizada que daria 404.
+As abas do cabeçalho, os links do cabeçalho e o rodapé são configurados, e não derivados do conteúdo, então seus rótulos são localizados em `blume.config.ts`. Todo rótulo configurado aceita um mapa por locale (`{ en: "Docs", fr: "Documentation" }`) além da forma de string simples, recorrendo à entrada do locale padrão para os locales que você não preencheu: rótulos de abas e de menus suspensos ([Abas](/docs/content/navigation#tabs)), [links em destaque](/docs/content/navigation#featured-links), [ações do cabeçalho](/docs/content/navigation#header-actions) e a chamada para ação, links do [rodapé](/docs/configuration#footer), o texto do [banner](/docs/configuration#banner) e do link dele, e os clientes personalizados do menu [Conectar ao MCP](/docs/discoverability/mcp#connect-to-mcp-menu).
+
+```ts blume.config.ts lineNumbers
+navigation: {
+  cta: {
+    href: "https://acme.dev/signup",
+    label: { en: "Start free", fr: "Essai gratuit" },
+  },
+},
+footer: {
+  links: [
+    { label: { en: "Pricing", fr: "Tarifs" }, href: "https://acme.dev/pricing" },
+  ],
+},
+```
+
+Os caminhos das abas, os links do cabeçalho e do rodapé e o link do logo do cabeçalho também passam para o locale do leitor sempre que esse locale serve a rota, de modo que os elementos da interface permanecem dentro de um único idioma. Uma rota servida apenas pelo locale padrão — uma [página personalizada](/docs/advanced/custom-pages) ou o índice gerado do [changelog](/docs/advanced/changelog) — mantém o próprio caminho em vez de apontar para uma URL localizada que daria 404.
 
 ## Fallbacks
 
@@ -101,7 +117,7 @@ i18n: {
 
 Páginas de fallback apontam o link canônico para a página que copiam, são excluídas do índice de busca, do `llms.txt` e das listas de páginas do MCP e da API JSON, e não são anunciadas como traduções reais no `hreflang`, de modo que conteúdo não traduzido não concorre por posicionamento. Elas ainda aparecem na barra lateral daquele locale, então a navegação permanece completa — um leitor consegue chegar a qualquer página em qualquer idioma.
 
-As notas de versão de uma fonte [`githubReleases()`](/docs/content/sources#github-releases) são a exceção: elas são publicadas em um único idioma, então nunca são copiadas para as URLs de outros locales e não exibem seletor de idiomas.
+As notas de versão de uma fonte [`githubReleases()`](/docs/content/sources/github-releases) são a exceção: elas são publicadas em um único idioma, então nunca são copiadas para as URLs de outros locales e não exibem seletor de idiomas.
 
 :::tip
 Comece traduzindo suas páginas mais importantes — a página inicial, o guia rápido e os principais guias — e deixe o resto usar o fallback. Você pode preencher as traduções ao longo do tempo sem quebrar nenhum link.
@@ -125,7 +141,26 @@ O Blume valida a estrutura de cada resultado — frontmatter, blocos de código,
 
 ## O seletor de idiomas [#the-language-switcher]
 
-Quando a i18n está ativada, um seletor de idiomas aparece automaticamente no cabeçalho, gerado a partir dos seus `locales`. Para cada página, ele aponta para a tradução correspondente em todos os idiomas; onde falta uma tradução, ele aponta para a página de fallback e a marca como não traduzida. Não há nada para configurar. Páginas de uma fonte [GitHub Releases](/docs/content/sources#github-releases) são a exceção: as notas de versão existem em um único idioma, então essas páginas são renderizadas sem seletor.
+Quando a i18n está ativada, um seletor de idiomas aparece automaticamente no cabeçalho, gerado a partir dos seus `locales`. Para cada página, ele aponta para a tradução correspondente em todos os idiomas; onde falta uma tradução, ele aponta para a página de fallback e a marca como não traduzida. Com os fallbacks desativados (`fallbackLocale: null`), não há página para a qual apontar, então o seletor deixa esse idioma de fora. Não há nada para configurar. Páginas de uma fonte [GitHub Releases](/docs/content/sources/github-releases) são a exceção: as notas de versão existem em um único idioma, então essas páginas são renderizadas sem seletor.
+
+## Roteamento pelo idioma do navegador [#routing-by-browser-language]
+
+Para enviar os visitantes para o próprio idioma deles, ative o `routeByBrowserLanguage`:
+
+```ts blume.config.ts lineNumbers
+i18n: {
+  defaultLocale: "en",
+  locales: [
+    { code: "en", label: "English" },
+    { code: "fr", label: "Français" },
+  ],
+  routeByBrowserLanguage: true,
+}
+```
+
+Um visitante que chega de fora do site à página inicial do idioma padrão é então levado à página inicial no idioma preferido do navegador dele, quando o site tem esse idioma. O Blume tenta cada idioma que o navegador prefere, em ordem, buscando primeiro uma correspondência exata de código e depois o idioma base (`fr-CA` encontra `fr`). Se o idioma padrão vier primeiro, o visitante permanece onde está. Depois que um leitor escolhe um idioma com o seletor, o Blume lembra a escolha e deixa de redirecioná-lo. Só a página inicial é redirecionada; um link para qualquer outra página abre exatamente como foi escrito.
+
+O redirecionamento acontece no navegador antes de a página ser exibida, então funciona em qualquer host, inclusive em builds estáticos. Ele vem desativado por padrão porque os motores de busca rastreiam em um único idioma: com ele ativado, mantenha as [alternativas `hreflang`](#seo) que o Blume emite para que as páginas de cada idioma continuem sendo indexadas.
 
 ## Interface traduzida [#translated-ui]
 
@@ -152,14 +187,14 @@ i18n: {
 O SEO localizado é cuidado para você — não há metadados por página para escrever:
 
 - `<html lang>` e `dir` são definidos a partir do locale ativo.
-- As alternativas `hreflang` apontam para todas as traduções reais de uma página, mais um `x-default` apontando para o locale padrão.
+- As alternativas `hreflang` apontam para todas as traduções reais de uma página que os motores de busca podem indexar (uma tradução com `noindex`, oculta ou com canonical apontando para outro lugar fica de fora), mais um `x-default` apontando para o locale padrão.
 - As URLs canônicas são corretas por locale, e o JSON-LD carrega `inLanguage`.
 
 Defina [`deployment.site`](/docs/deployment) para que isso possa ser emitido como URLs absolutas.
 
 ## Busca [#search]
 
-A busca é limitada ao idioma ativo: em uma página `/fr/…`, o diálogo retorna resultados em francês, com uma opção **Todos os idiomas** para buscar em todos os locales de uma vez. Os índices padrão (Orama) e FlexSearch filtram no navegador; provedores hospedados carregam uma faceta `locale` em cada registro.
+A busca é limitada ao idioma ativo: em uma página `/fr/…`, o diálogo retorna resultados em francês, com uma opção **Todos os idiomas** para buscar em todos os locales de uma vez. Os índices padrão (Orama) e FlexSearch filtram no navegador, o Pagefind mantém um índice por idioma, e o Algolia, o Orama Cloud e o Typesense carregam um campo `locale` em cada registro. O Mixedbread não consegue limitar a busca por idioma, então com ele toda busca abrange todos os locales e o diálogo não exibe essa opção. Veja [Busca](/docs/configuration/search) para saber como cada adaptador lida com isso.
 
 ## Da direita para a esquerda [#right-to-left]
 

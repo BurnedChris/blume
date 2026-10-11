@@ -1,0 +1,520 @@
+---
+// Add an AI assistant: checked against the assistant, evals, rate limiting,
+// deployment, and frontmatter docs, and on main against the grounding and
+// excerpt code (ai/ask-context.ts), the docs tools (ai/ask-tools.ts), the
+// generated route (askEndpointTemplate in astro/templates.ts), the adapters
+// (ai/ask.ts), the secret warning (cli/required-secrets.ts), the static
+// build gate (cli/prepare.ts), the panel (components/islands/assistant.tsx,
+// hooks.ts, support-link.ts), and the snapshot filter (core/manifest.ts);
+// the AI Gateway key, model id, and Vercel protection bypass against Vercel's
+// docs. What we ran: ask-eval.mjs against a mock server (pass, empty 200,
+// 429, 503, bypass header), then five runs (30 questions) against this
+// site's own assistant on a local `blume dev`, plus createAskContext over
+// that server's snapshot to see which pages each question retrieved. The
+// Acme walkthrough itself is not yet run end to end or deployed.
+// Review: rechecked the snapshot filter, retrieval sizes, limits, and panel
+// strings on main; the observed-results table is from that site's own config
+// (apps/docs/blume.config.ts: openai() with its configured model, default
+// retrieval, tools on) and is labeled as one site's runs, not a benchmark.
+// Updated against 400b5ff3 (read, not rerun): questions from outside the docs
+// keep to the URL's locale or the default one (readerScope in
+// ai/ask-context.ts), so the home-page misses those runs saw were dropped;
+// blume init gitignores .env.local; ai.exclude also drops the site skill.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const askEvalMjsCode = `import { readFile } from "node:fs/promises";
+
+const site = new URL(process.env.DOCS_URL ?? "http://localhost:4321");
+const cases = JSON.parse(await readFile(process.argv[2] ?? "ask-evals.json", "utf8"));
+const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+
+// The pages an answer links to on this site, without trailing slashes.
+const citedRoutes = (answer) => {
+  const routes = new Set();
+  for (const [, href] of answer.matchAll(/\\]\\(([^)\\s]+)\\)/g)) {
+    const url = new URL(href, site);
+    if (url.origin === site.origin) {
+      routes.add(url.pathname.length > 1 ? url.pathname.replace(/\\/$/, "") : "/");
+    }
+  }
+  return [...routes];
+};
+
+let failures = 0;
+for (const test of cases) {
+  const response = await fetch(new URL("api/ask", \`\${site.href.replace(/\\/$/, "")}/\`), {
+    body: JSON.stringify({
+      messages: [{ content: test.question, role: "user" }],
+      page: { path: test.page ?? "/" },
+    }),
+    headers: {
+      "content-type": "application/json",
+      ...(bypass && { "x-vercel-protection-bypass": bypass }),
+    },
+    method: "POST",
+  });
+  const answer = (await response.text()).trim();
+  const cited = citedRoutes(answer);
+  const problems = [];
+  if (!response.ok) {
+    problems.push(\`HTTP \${response.status}\`);
+  } else if (answer === "") {
+    problems.push("empty answer: check the server log");
+  } else {
+    if (test.cites && !test.cites.some((route) => cited.includes(route))) {
+      problems.push(\`expected a link to \${test.cites.join(" or ")}\`);
+    }
+    for (const phrase of test.mentions ?? []) {
+      if (!answer.toLowerCase().includes(phrase.toLowerCase())) {
+        problems.push(\`never says "\${phrase}"\`);
+      }
+    }
+  }
+  const verdict = problems.length > 0 ? "FAIL" : test.review ? "REVIEW" : "PASS";
+  failures += verdict === "FAIL" ? 1 : 0;
+  console.log(\`\${verdict.padEnd(6)} \${test.id}  cited: \${cited.join(", ") || "nothing"}\`);
+  for (const problem of problems) {
+    console.log(\`       \${problem}\`);
+  }
+  if (verdict !== "PASS") {
+    console.log(\`       answer: \${answer.replace(/\\s+/g, " ").slice(0, 300)}\`);
+  }
+}
+console.log(\`\\n\${failures} of \${cases.length} failed\`);
+process.exitCode = failures > 0 ? 1 : 0;`;
+---
+
+<GuidePage guide={guideById("ai-assistant-for-documentation")}>
+  <p>
+    To add an AI chatbot that answers from your documentation and links to its
+    sources, turn on Blume's assistant, pick a model provider, and deploy with
+    a host adapter so its server route can run. Each question retrieves the
+    most relevant pages of your docs, the model answers from them, and it
+    cites the pages it used as links in the answer.
+  </p>
+  <p>
+    By the end, the Acme Messages API docs from{" "}
+    <a href="/guides/openapi-documentation-website">Generate API docs from an OpenAPI spec</a
+    > have an assistant with suggested questions and a handoff to support,
+    plus a small evaluation set you can run locally and in production. You'll
+    also see a real run, failures included.
+  </p>
+  <p>
+    Grounding makes wrong answers less likely, not impossible. If you only need
+    readers to find the right page, the built-in search already does that with
+    no server and no model bill. If you want coding agents in an editor to read
+    your docs, <a href="/guides/mcp-server-for-documentation">an MCP server</a>{" "}
+    is the better fit.
+  </p>
+
+  <h2>How the assistant finds an answer</h2>
+  <p>
+    At build time, Blume takes a snapshot of every page that's in search, as
+    Markdown, even when search itself is off. A page with{" "}
+    <code>search.exclude: true</code> in its frontmatter, or one hidden from the
+    sidebar, stays out by default. <code>ai.exclude</code> doesn't keep a page
+    from the assistant: it's for <code>llms.txt</code> and your site's skill.
+  </p>
+  <p>For each question, the server route:</p>
+  <ol>
+    <li>
+      Runs a keyword search over the snapshot, kept to the language (and docs
+      version) of the page the reader is on. From a page outside the docs, it
+      keeps to the language the URL names, or the default one.
+    </li>
+    <li>
+      Puts that page first, then up to six matches, each cut down to its most
+      relevant sections: 2,000 characters a page and 10,000 in all.
+    </li>
+    <li>
+      Tells the model to answer only from those excerpts, to say when
+      something isn't covered, and to cite each page as a Markdown link.
+    </li>
+    <li>
+      Lets the model call <code>search_docs</code> and <code>read_page</code>{" "}
+      for up to four rounds before it answers.
+    </li>
+  </ol>
+  <p>
+    Two things follow. Retrieval matches words, so a question phrased in words
+    your docs never use can pull the wrong pages. And the instructions are text
+    the model follows, not a check: nothing compares the finished answer
+    against the excerpts.
+  </p>
+
+  <h2>Turn on the assistant</h2>
+  <p>
+    The built-in assistant is a server route, <code>POST /api/ask</code>, so it
+    needs server output. Name your host's adapter from <code>blume/deploy</code>{" "}
+    in the same config. This guide uses Vercel and the Vercel AI Gateway,
+    Blume's default provider, which needs no extra package:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { gateway } from "blume/ai";
+import { vercel } from "blume/deploy";
+
+export default defineConfig({
+  // ...the rest of your config
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: gateway({ model: "openai/gpt-5.5" }),
+      suggestions: [
+        { label: "How do I authenticate requests?", icon: "key-round" },
+        { label: "How do I send an SMS?", icon: "message-square" },
+        { label: "How do I check whether a message was delivered?", icon: "circle-check" },
+      ],
+      instructions:
+        "You are the Acme Messages docs assistant. Keep answers short, and show the request when one helps. For billing or account questions, say the docs don't cover them and suggest contacting support.",
+      support: "mailto:support@acme.example",
+    },
+  },
+  deployment: vercel(),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <ul>
+    <li>
+      <strong><code>provider</code></strong> picks who answers. This is the
+      default, written out so you can see where to change the model. To call a
+      provider like Anthropic directly, use its{" "}
+      <a href="/docs/configuration/assistant#adapters">adapter</a>.
+    </li>
+    <li>
+      <strong><code>suggestions</code></strong> are the questions a reader can
+      click before typing. Take them from your support inbox: they're also your
+      first test cases.
+    </li>
+    <li>
+      <strong><code>instructions</code></strong> are added after Blume's own
+      instructions, never in place of them, so the rule to cite pages stays in
+      force. They shape tone and scope. They can't make an answer true.
+    </li>
+    <li>
+      <strong><code>support</code></strong> adds a Contact support link under
+      the conversation. A <code>mailto:</code> address opens an email holding
+      the latest turns (up to 1,500 characters) and the conversation's id. A
+      URL or a path on your site gets the id as a <code>thread</code> query
+      parameter instead.
+    </li>
+  </ul>
+
+  <h2>Keep the key on the server</h2>
+  <p>
+    Create a key on the AI Gateway's API Keys page in your Vercel dashboard.
+    For local development, put it in <code>.env.local</code> at the project
+    root, which <code>blume dev</code> and <code>blume build</code> load:
+  </p>
+  <CodeBlock code={`AI_GATEWAY_API_KEY=your-gateway-key`} lang="bash" title=".env.local" />
+  <p>
+    The <code>.gitignore</code> that <code>blume init</code> writes already
+    lists <code>.env.local</code>. If you set the project up another way, add
+    it:
+  </p>
+  <CodeBlock code={`echo ".env.local" >> .gitignore`} lang="bash" />
+  <p>
+    The config holds only the variable's <em>name</em>. The generated route
+    reads the value on the server at request time, so the key never lands in
+    a built file or reaches the browser. An adapter's <code>headers</code>{" "}
+    are written into the route as-is, so keep secrets out of those.
+  </p>
+  <p>
+    Until the key is set, <code>blume dev</code> and <code>blume build</code>{" "}
+    warn with <code>BLUME_MISSING_SECRET</code>, and the route answers{" "}
+    <code>503</code> with a message naming the variable, which the panel shows
+    as is.
+  </p>
+
+  <h2>Try it locally</h2>
+  <CodeBlock code="npx blume dev" lang="bash" />
+  <p>
+    Open <code>http://localhost:4321</code>, then open the assistant from its
+    button in the header, or with <kbd>⌘</kbd> <kbd>I</kbd> (<kbd>Ctrl</kbd>{" "}
+    <kbd>I</kbd> on Windows and Linux). Click each suggestion and check three
+    things:
+  </p>
+  <ul>
+    <li>
+      <strong>It cites pages.</strong> Sources show up as small pill-shaped
+      links in the answer. An answer with none is worth a second look.
+    </li>
+    <li>
+      <strong>The pages say what the answer says.</strong> A citation is a link
+      the model wrote, not proof. Click each one.
+    </li>
+    <li>
+      <strong>The current page counts.</strong> Go to{" "}
+      <code>/api/messages/get-message</code> and ask "What does a 404 mean
+      here?" The page you're on goes into the context first, so the answer
+      should come from it.
+    </li>
+  </ul>
+  <p>
+    Then ask something the docs don't cover, like "How do I get a refund for
+    unused credits?" You want a plain "the docs don't cover this", not a
+    guess. Click Contact support: your mail client should open a draft to{" "}
+    <code>support@acme.example</code> with the conversation in it. The link
+    shows under every conversation once an answer finishes, not only after a
+    failed one.
+  </p>
+
+  <h2>Write a small evaluation set</h2>
+  <p>
+    Clicking around doesn't scale, and the same question can come back
+    differently each time, so write the questions down. Each entry lists pages
+    a good answer cites (<code>cites</code>, any one will do), words it must
+    contain (<code>mentions</code>), and optionally the page it's asked from{" "}
+    (<code>page</code>). Mark questions the docs shouldn't answer as{" "}
+    <code>review</code>: only a person can judge a refusal.
+  </p>
+  <CodeBlock
+    code={`[
+  {
+    "id": "authenticate",
+    "question": "How do I authenticate requests to the Acme API?",
+    "cites": ["/api/authentication"],
+    "mentions": ["Bearer"]
+  },
+  {
+    "id": "send-sms",
+    "question": "How do I send an SMS?",
+    "cites": ["/api/messages/send-message"],
+    "mentions": ["/messages"]
+  },
+  {
+    "id": "delivery-status",
+    "question": "How do I check whether a message was delivered?",
+    "cites": ["/api/messages/get-message"]
+  },
+  {
+    "id": "not-found-here",
+    "page": "/api/messages/get-message",
+    "question": "What does a 404 mean here?",
+    "cites": ["/api/messages/get-message"]
+  },
+  {
+    "id": "template-ids",
+    "question": "Where do I find my template IDs?",
+    "cites": ["/api/templates/list-templates"]
+  },
+  { "id": "whatsapp", "question": "Can I send WhatsApp messages?", "review": true },
+  { "id": "refund", "question": "How do I get a refund for unused credits?", "review": true }
+]`}
+    lang="json"
+    title="ask-evals.json"
+  />
+  <p>
+    This script sends each question the way the panel does, reads the streamed
+    answer, and checks it. It needs Node.js 22 or later and nothing else:
+  </p>
+  <CodeBlock
+    code={askEvalMjsCode}
+    lang="js"
+    title="ask-eval.mjs"
+  />
+  <p>With <code>blume dev</code> running, in a second terminal:</p>
+  <CodeBlock code="node ask-eval.mjs" lang="bash" />
+  <p>
+    Each line reads <code>PASS</code>, <code>FAIL</code> with the reason, or{" "}
+    <code>REVIEW</code> with the answer, and any failure exits non-zero. A pass
+    means "cited the right page and used the right words", not "correct": the
+    checks match strings, so read the answers too.
+  </p>
+
+  <h2>What we saw on one site</h2>
+  <p>
+    In September 2026 we ran eight questions in this format against this
+    site's own assistant on a local <code>blume dev</code>: the{" "}
+    <code>openai()</code> adapter with the default retrieval and docs tools,
+    over docs in five languages. That was three full runs, then two shorter
+    ones. It's one site, one model, and a handful of runs, so read the table as
+    the kinds of failure to look for, not as results to expect on yours.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Question</th>
+        <th scope="col">What happened</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>
+          Suggested questions, the <code>anthropic()</code> key variable,
+          deploying to Vercel
+        </td>
+        <td>Passed every run, each citing the page that answers it.</td>
+      </tr>
+      <tr>
+        <td>"What is the default limit here?", asked from Rate limiting</td>
+        <td>Passed every run: it answered 30 and cited that page.</td>
+      </tr>
+      <tr>
+        <td>"How do I keep a page out of search results?"</td>
+        <td>
+          Right answer every time, but it cited Search where our test expected
+          Frontmatter. Both pages say it, so the test was wrong. We let it
+          accept either.
+        </td>
+      </tr>
+      <tr>
+        <td>"Does Blume support SAML single sign-on for readers?"</td>
+        <td>
+          Asked from a docs page (once reworded), it passed both times, citing
+          Deployment, whose
+          Private docs section says Blume has no sign-in of its own.
+        </td>
+      </tr>
+      <tr>
+        <td>"How do I stop scripts from spamming the chat box?"</td>
+        <td>
+          From a docs page, it mentioned the captcha option and cited the right
+          pages twice. Two runs came back empty.
+        </td>
+      </tr>
+      <tr>
+        <td>"How do I turn on voice mode for the assistant?"</td>
+        <td>
+          No such feature exists. Every answer said so and pointed to narration
+          as a separate feature, which is what we wanted.
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Where a question is asked matters. The reader's page goes into the context
+    first, and retrieval and the model's own searches keep to its language. On
+    a page outside the docs, like this site's custom home page, there's no page
+    to put first, and they keep to the language the URL names, or the default
+    one. So set <code>page</code> on each eval question to the page a reader
+    would ask it from, as the panel does.
+  </p>
+  <p>
+    The empty answers were <code>200</code> responses with no text, which is
+    how a provider error looks once an answer has started streaming. The last
+    run also hit the rate limit and got a <code>429</code>. Run the set more
+    than once before you trust a pass or a fail.
+  </p>
+
+  <h2>Check the docs themselves with blume eval</h2>
+  <p>
+    <code>ask-eval.mjs</code> tests the assistant. <code>blume eval</code> tests
+    the docs: Codex or Claude Code answers each question using only your
+    pages, and a second session grades the answer against facts you list. It
+    never calls your assistant. Use it to find what the docs don't say, and
+    the script to see how the assistant handles what they do.
+  </p>
+  <CodeBlock
+    code={`questions:
+  - id: authenticate
+    question: How do I authenticate requests to the Acme API?
+    expected:
+      - Send an API key as a bearer token in the Authorization header
+    routes: /api/authentication
+  - id: delivery-status
+    question: How do I check whether a message was delivered?
+    expected:
+      - Call Get a message with the ID returned by Send a message
+    routes: /api/messages/get-message`}
+    lang="yaml"
+    title="evals.yaml"
+  />
+  <CodeBlock code="npx blume eval --agent claude" lang="bash" />
+  <p>
+    It uses your installed agent CLI and its account, not your gateway key.{" "}
+    <a href="/guides/documentation-evals-ci">Test whether your documentation can answer user questions</a
+    > covers running it in CI.
+  </p>
+
+  <h2>Deploy and rerun in production</h2>
+  <p>
+    Add <code>AI_GATEWAY_API_KEY</code> to your Vercel project's environment
+    variables for Production and Preview. (On Vercel, Blume also accepts the
+    deployment's OIDC token instead.) Commit, push, and import the repository
+    in Vercel with Node.js 22 or later, then point the script at it:
+  </p>
+  <CodeBlock code="DOCS_URL=https://docs.acme.example node ask-eval.mjs" lang="bash" />
+  <p>
+    Previews behind Vercel Authentication return a login page instead of an
+    answer. Create a Protection Bypass for Automation secret in the project
+    settings and export it as <code>VERCEL_AUTOMATION_BYPASS_SECRET</code>; the
+    script sends it as the <code>x-vercel-protection-bypass</code> header.
+  </p>
+  <p>
+    The snapshot is part of the build, so an edit to the docs reaches the
+    assistant on the next deploy. If you later add a{" "}
+    <a href="/guides/rate-limit-documentation-ai-assistant#add-a-bot-check">bot check</a>,
+    the script can't pass it and gets <code>403</code>, so run it locally or on
+    a deployment without one.
+  </p>
+
+  <h2>What it costs to run</h2>
+  <p>
+    Blume is free; the assistant bills in two places. Your model provider
+    charges for every question: the excerpts and conversation go in, the
+    answer comes out, and each round of searching or reading before the answer
+    is another call. Your host charges for the server function that streams
+    each answer. Closing the panel mid-answer stops the model call.
+  </p>
+  <p>
+    Rate limiting is on by default, at 30 questions per reader every 10
+    minutes, which also caps an eval run from one machine. On serverless hosts
+    the default count is per instance: see{" "}
+    <a href="/guides/rate-limit-documentation-ai-assistant">Rate-limit a public documentation AI assistant</a
+    > to make it exact. The AI Gateway can also put a budget on a key. The{" "}
+    <a href="/pricing">pricing page</a> estimates what answers cost in
+    practice.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The build fails with BLUME_SERVER_FEATURE_REQUIRED</h3>
+  <p>
+    The assistant is on, but the build is static. Set{" "}
+    <code>deployment</code> to a host adapter such as <code>vercel()</code>, or
+    drop <code>output: "static"</code> from the one you have. To keep the site
+    static, point <code>endpoint</code> at a backend you run instead.
+  </p>
+  <h3>The build stops with BLUME_DEPENDENCY_MISSING</h3>
+  <p>
+    Direct provider adapters need their AI SDK package, such as{" "}
+    <code>@ai-sdk/anthropic</code> for <code>anthropic()</code>. The message
+    includes the install command for your package manager. The gateway needs
+    none.
+  </p>
+  <h3>The panel says "The assistant is not configured"</h3>
+  <p>
+    The route can't read the key and answered <code>503</code>. Locally, check{" "}
+    <code>.env.local</code> and restart <code>blume dev</code>. In production,
+    set the variable in the host's environment and redeploy.
+  </p>
+  <h3>The panel says "Sorry, something went wrong"</h3>
+  <p>
+    Provider errors arrive after the answer has started streaming, so the
+    reader gets this notice instead of an answer. The server log (the{" "}
+    <code>blume dev</code> terminal, or your host's function logs) has the
+    cause, after <code>Assistant provider error:</code>. The usual
+    ones are a wrong model id, a revoked key, or the provider's own limits.
+  </p>
+  <h3>It says the docs don't cover something they do</h3>
+  <p>
+    Check that the page isn't set to <code>search.exclude</code> or hidden from
+    the sidebar, and that the change is deployed. Otherwise it's usually
+    wording: the reader's words aren't on the page. Use them in the text, or
+    add them as <code>search.keywords</code> in the page's frontmatter, which
+    retrieval weights like the title.
+  </p>
+  <h3>Answers cite a page in another language</h3>
+  <p>
+    On a multilingual site, retrieval keeps to the language of the page the
+    question came from. Asked from a page outside the docs, like a custom
+    landing page, it keeps to the locale the URL starts with (<code>/ja</code>),
+    or the default language when there's none. So a Japanese reader on an
+    unprefixed landing page gets answers from the default language's pages.
+    Put a localized landing page under its locale's prefix, and set{" "}
+    <code>page</code> on each eval question.
+  </p>
+</GuidePage>

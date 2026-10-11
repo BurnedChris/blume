@@ -4,13 +4,28 @@ description: >-
   Generierte 1200×630-Social-Cards für jede Seite — Branding, Card-Ebenen, Schriften für nicht-lateinische Schriftsysteme und Overrides pro Seite.
 ---
 
-Blume kann für jede Seite zur Build-Zeit eine 1200×630-Social-Card rendern — dank [Takumi](https://takumi.kane.tw) ohne Headless-Browser, sodass deine Builds schnell bleiben. Standardmäßig aktiv, sobald [`deployment.site`](/docs/deployment) gesetzt oder automatisch erkannt wurde (die `og:image`-URL muss absolut sein, damit Crawler etwas damit anfangen können), ansonsten deaktiviert. Mit `enabled` überschreibst du das in beide Richtungen:
+Blume kann für jede Seite zur Build-Zeit eine 1200×630-Social-Card rendern — dank [Takumi](https://takumi.kane.tw) ohne Headless-Browser, sodass deine Builds schnell bleiben. Standardmäßig aktiv, sobald [`deployment.site`](/docs/deployment) gesetzt oder automatisch erkannt wurde (die `og:image`-URL muss absolut sein, damit Crawler etwas damit anfangen können), ansonsten deaktiviert, ebenso wenn ein [Standardbild](#default-image) die Cards ersetzt. Mit `enabled` überschreibst du das in beide Richtungen:
 
 ```ts blume.config.ts lineNumbers
 seo: {
   og: { enabled: true }, // or false to opt out even with a site set
 }
 ```
+
+## Standardbild [#default-image]
+
+Setze `seo.og.image`, um statt einer generierten Card ein einziges Bild für alle Seiten zu verwenden, oder gib jeder Locale ihr eigenes:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  og: {
+    image: { en: "/og/default-en.png", fr: "/og/default-fr.png" },
+    // Or image: "https://example.com/og/default.png"
+  },
+}
+```
+
+Das `seo.image` einer Seite oder die `ogImage`-Prop einer benutzerdefinierten Seite hat Vorrang vor dem Standardbild. Eine Locale, die in der Map fehlt, bekommt das Bild der Standard-Locale. Das Standardbild gilt auch für benutzerdefinierte Seiten, die mit `PageLayout` gerendert werden, sowie für den generierten Changelog-Index. Sobald es gesetzt ist, generiert Blume daher keine Cards mehr, es sei denn, `enabled` ist `true`. Root-relative Pfade werden unterhalb der Deployment-Base aufgelöst. Blume gibt Bildabmessungen nur für generierte Cards an. Welches Bild eine Seite am Ende auch bekommt, es landet außerdem als `image` der Seite in ihrem [JSON-LD](/docs/discoverability/structured-data).
 
 ## Die generierte Card branden [#brand-the-generated-card]
 
@@ -50,7 +65,7 @@ seo:
 ```
 
 :::note
-Jede Palettenfarbe akzeptiert beliebige CSS-Farben — Hex, `oklch(…)`, `rgb(…)` und so weiter. Der Accent akzeptiert außerdem ein benanntes Preset (`blue`, `teal`, …), passend zu [`theme.accent`](/docs/configuration/theming#accent). Eine Farbe, die der Renderer nicht parsen kann, lässt den Build fehlschlagen, statt stillschweigend eine Card in der Standardfarbe auszuliefern.
+Jede Palettenfarbe akzeptiert beliebige CSS-Farben — Hex, `oklch(…)`, `rgb(…)` und so weiter. Der Accent akzeptiert außerdem ein benanntes Preset (`blue`, `teal`, …), passend zu [`theme.accent`](/docs/configuration/theming#accent). Eine Farbe, die der Renderer nicht parsen kann, lässt den Build fehlschlagen, statt stillschweigend eine Card in der Standardfarbe auszuliefern, und eine, die überhaupt keine CSS-Farbe ist, löst zusätzlich noch vor dem Rendern der Card die Warnung `BLUME_THEME_COLOR_INVALID` mit der Zeile aus, in der sie gesetzt wird.
 :::
 
 Emojis in einem Seitentitel oder Site-Titel werden als [Twemoji](https://github.com/jdecked/twemoji)-Glyphen gerendert und während des Card-Renderings von einem CDN geladen — ein Build, dessen Titel Emojis enthalten, braucht also Netzwerkzugriff. Jede Glyphe wird pro Build nur einmal geladen, egal wie viele Seiten sie verwenden.

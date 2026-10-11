@@ -33,6 +33,7 @@ export const cs: UIStringsOverride = {
     error: "Omlouváme se, něco se pokazilo.",
     explainCode: "Vysvětli tento kód.",
     label: "Položit otázku",
+    open: "Otevřít asistenta",
     placeholder: "Položit otázku…",
     rateLimited: "Položili jste hodně otázek. Zkuste to znovu za pár minut.",
     removeCode: "Odebrat kód",
@@ -47,6 +48,7 @@ export const cs: UIStringsOverride = {
   banner: { dismiss: "Zavřít oznámení" },
   changelog: {
     description: "Novinky produktu a poznámky k vydání.",
+    empty: "V seznamu změn zatím nejsou žádné záznamy.",
     title: "Seznam změn",
   },
   consent: {
@@ -68,6 +70,7 @@ export const cs: UIStringsOverride = {
     preview: "Náhled",
     prop: "Vlastnost",
     selectTab: "Vybrat kartu",
+    selectView: "Vybrat zobrazení",
     showLess: "Zobrazit méně",
     showMore: "Zobrazit více",
     stars: "Hvězdy",

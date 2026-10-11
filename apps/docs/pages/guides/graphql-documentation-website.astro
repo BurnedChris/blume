@@ -1,0 +1,783 @@
+---
+// Generate GraphQL docs from a schema: checked against the GraphQL reference
+// docs, the graphql() adapter and its options (reference/graphql.ts,
+// reference/options.ts), schema lowering and page extraction
+// (openapi/graphql-build.ts, openapi/graphql.ts, openapi/model.ts), the page
+// components and Try it panel (components/openapi/Graphql*.astro,
+// graphql-helpers.ts, request.ts, Playground.astro, playground-client.ts), and
+// the proxy (openapi/proxy.ts, astro/generate.ts, core/server-features.ts) on
+// main. Ran Blume's own parser, extractor, and example generators over the
+// schema below (page routes, generated examples, "Used by" links, the curl
+// sample), and ran the sample server with graphql-yoga 5.24.1 and graphql
+// 17.0.2 on Node 24: sandbox and key modes, the CORS preflight for a listed and
+// an unlisted origin, the 406 on a POSTed subscription, and the SSE
+// subscription with curl. Not yet run end to end: no blume dev or build on a
+// clean project, and the Try it panel wasn't clicked in a browser.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("graphql-documentation-website")}>
+  <p>
+    To publish GraphQL documentation outside an IDE, generate it from your
+    schema file. Blume's <code>graphql()</code> reference reads a schema as SDL
+    or as an introspection result and writes a static page for every query,
+    mutation, subscription, and named type. Each page lists arguments, defaults,
+    and deprecations, links every type to its own page, and gets its own URL,
+    search entry, and Markdown copy for agents.
+  </p>
+  <p>
+    By the end of this guide, you have docs for a fictional Acme Messages API:
+    a small GraphQL server with a sandbox mode, a reference built from its
+    schema, a Try it panel that queries the sandbox, and a quickstart page for
+    authentication and subscriptions.
+  </p>
+  <p>
+    If only your own developers need to explore the API, and they can reach it,
+    the GraphiQL your server already ships may be enough. For a REST API,{" "}
+    <a href="/guides/openapi-documentation-website">generate docs from an OpenAPI spec</a>{" "}
+    instead.
+  </p>
+
+  <h2>Reference pages or GraphiQL</h2>
+  <p>
+    GraphiQL and schema docs do different jobs, and many APIs ship both:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col"></th>
+        <th scope="col">GraphiQL</th>
+        <th scope="col">Blume reference</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Where it runs</td>
+        <td>Served by your API, as one app in the browser</td>
+        <td>Static pages on your docs site</td>
+      </tr>
+      <tr>
+        <td>Where the schema comes from</td>
+        <td>By default, an introspection query to the live endpoint</td>
+        <td>A schema file, read at build time</td>
+      </tr>
+      <tr>
+        <td>With introspection turned off</td>
+        <td>Needs the schema passed to it another way</td>
+        <td>Unaffected</td>
+      </tr>
+      <tr>
+        <td>Pages</td>
+        <td>No URL per type</td>
+        <td>A URL per operation and type, in search, the sitemap, and <code>llms.txt</code></td>
+      </tr>
+      <tr>
+        <td>Writing queries</td>
+        <td>An editor with autocomplete and validation</td>
+        <td>A JSON body editor, prefilled with a generated example</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Use the reference for people who don't have access yet, and keep GraphiQL
+    on a sandbox for people who want to explore.
+  </p>
+
+  <h2>Write the schema</h2>
+  <p>
+    Blume reads the schema from a file. Descriptions become page text, rendered
+    as Markdown. The schema's own description, written above an explicit{" "}
+    <code>schema</code> block, becomes the introduction on the reference's
+    overview page.
+  </p>
+  <CodeBlock
+    code={`"""
+Send transactional email and SMS, and manage the templates they use.
+"""
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}
+
+type Query {
+  "Returns a message and its delivery status, or null when no message has that ID."
+  message("The message ID, from the response to sendMessage." id: ID!): Message
+  "Returns the workspace's templates, oldest first."
+  templates("How many templates to return." first: Int = 20): [Template!]!
+}
+
+type Mutation {
+  "Queues an email or SMS for delivery and returns the message right away."
+  sendMessage(input: SendMessageInput!): Message!
+  "Queues an email for delivery."
+  sendEmail(to: String!, template: ID!): Message!
+    @deprecated(reason: "Use sendMessage with channel: EMAIL.")
+}
+
+type Subscription {
+  "Emits the message each time its delivery status changes."
+  messageStatusChanged("The message to follow." id: ID!): Message!
+}
+
+"An object with a stable, unique ID."
+interface Node {
+  id: ID!
+}
+
+"An email or SMS, and where it is in delivery."
+type Message implements Node {
+  id: ID!
+  channel: Channel!
+  "An email address, or a phone number in E.164 format."
+  to: String!
+  status: MessageStatus!
+  "The template the message was rendered from."
+  template: Template!
+  subject: String
+    @deprecated(reason: "Subjects live on the template now. Read template.subject.")
+  createdAt: DateTime!
+}
+
+"A reusable message body with variables."
+type Template implements Node {
+  id: ID!
+  name: String!
+  channel: Channel!
+  "The email subject line. Null for SMS templates."
+  subject: String
+}
+
+"What to send, and to whom."
+input SendMessageInput {
+  channel: Channel!
+  "An email address, or a phone number in E.164 format."
+  to: String!
+  "The ID of the template to send."
+  template: ID!
+}
+
+"How a message is delivered."
+enum Channel {
+  EMAIL
+  SMS
+}
+
+"Where a message is in delivery."
+enum MessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  BOUNCED @deprecated(reason: "Bounced messages are reported as FAILED.")
+}
+
+"A date and time in UTC, like 2026-09-27T14:03:00Z."
+scalar DateTime
+  @specifiedBy(url: "https://scalars.graphql.org/chillicream/date-time.html")`}
+    lang="graphql"
+    title="acme-api/schema.graphql"
+  />
+  <p>
+    It has an interface, an object that links to another, two deprecations,
+    and a custom scalar, so you can see how each one renders.
+  </p>
+  <p>
+    If your server builds its schema in code, print it to a file as part of
+    your build, with <code>./src/schema.js</code> standing for the module that
+    exports your <code>GraphQLSchema</code>:
+  </p>
+  <CodeBlock
+    code={`import { writeFileSync } from "node:fs";
+import { printSchema } from "graphql";
+import { schema } from "./src/schema.js";
+
+writeFileSync("schema.graphql", printSchema(schema));`}
+    lang="js"
+    title="print-schema.js"
+  />
+  <p>
+    An introspection result works too, as the raw{" "}
+    <code>{"{ \"__schema\": … }"}</code> JSON or a full{" "}
+    <code>{"{ \"data\": { \"__schema\": … } }"}</code> response. Directives your
+    server defines out of band, like Apollo Federation's <code>@key</code>, are
+    ignored rather than rejected, so a Federation subgraph schema loads as it
+    is. Blume takes one file per schema,
+    so combine a schema that's split across several files first.
+  </p>
+
+  <h2>Run a sandbox endpoint</h2>
+  <p>
+    The Try it panel needs an endpoint to call. Here's a small server for the
+    schema, built with GraphQL Yoga. It keeps everything in memory and sends
+    nothing: each message moves to <code>SENT</code>, then{" "}
+    <code>DELIVERED</code>, on a timer. It requires an API key unless you start
+    it in sandbox mode, so you can see both cases from the docs.
+  </p>
+  <CodeBlock
+    code={`{
+  "name": "acme-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "graphql": "17.0.2",
+    "graphql-yoga": "5.24.1"
+  }
+}`}
+    lang="json"
+    title="acme-api/package.json"
+  />
+  <CodeBlock
+    code={`import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { GraphQLError } from "graphql";
+import { createPubSub, createSchema, createYoga } from "graphql-yoga";
+
+const typeDefs = readFileSync(
+  new URL("./schema.graphql", import.meta.url),
+  "utf8"
+);
+const sandbox = process.env.ACME_SANDBOX === "true";
+const apiKey = process.env.ACME_API_KEY;
+const pubSub = createPubSub();
+
+const templates = [
+  { channel: "EMAIL", id: "welcome", name: "Welcome email", subject: "Welcome to Acme" },
+  { channel: "SMS", id: "login-code", name: "Login code", subject: null },
+];
+const messages = new Map();
+const templateOf = (message) =>
+  templates.find((template) => template.id === message.templateId);
+
+// Nothing is really sent: each message moves to SENT, then DELIVERED.
+const send = ({ channel, template, to }) => {
+  if (!templates.some(({ id }) => id === template)) {
+    throw new GraphQLError(\`No template has the ID "\${template}".\`, {
+      extensions: { code: "BAD_USER_INPUT" },
+    });
+  }
+  const message = {
+    channel,
+    createdAt: new Date().toISOString(),
+    id: \`msg_\${messages.size + 1}\`,
+    status: "QUEUED",
+    templateId: template,
+    to,
+  };
+  messages.set(message.id, message);
+  for (const [delay, status] of [
+    [2000, "SENT"],
+    [4000, "DELIVERED"],
+  ]) {
+    setTimeout(() => {
+      message.status = status;
+      pubSub.publish("status", message.id, message);
+    }, delay);
+  }
+  return message;
+};
+
+const resolvers = {
+  Message: {
+    subject: (message) => templateOf(message).subject,
+    template: templateOf,
+  },
+  Mutation: {
+    sendEmail: (_, { template, to }) => send({ channel: "EMAIL", template, to }),
+    sendMessage: (_, { input }) => send(input),
+  },
+  Node: {
+    __resolveType: (node) => ("templateId" in node ? "Message" : "Template"),
+  },
+  Query: {
+    message: (_, { id }) => messages.get(id) ?? null,
+    templates: (_, { first }) => templates.slice(0, first),
+  },
+  Subscription: {
+    messageStatusChanged: {
+      resolve: (message) => message,
+      subscribe: (_, { id }) => pubSub.subscribe("status", id),
+    },
+  },
+};
+
+const yoga = createYoga({
+  context: ({ request }) => {
+    const authorization = request.headers.get("authorization");
+    if (!sandbox && authorization !== \`Bearer \${apiKey}\`) {
+      throw new GraphQLError("Send your API key as a bearer token.", {
+        extensions: { code: "UNAUTHENTICATED", http: { status: 401 } },
+      });
+    }
+    return {};
+  },
+  cors: {
+    origin: ["http://localhost:4321", "https://docs.acme.example"],
+  },
+  graphiql: sandbox,
+  schema: createSchema({ resolvers, typeDefs }),
+});
+
+createServer(yoga).listen(4000, () => {
+  console.log("Acme Messages API on http://localhost:4000/graphql");
+});`}
+    lang="js"
+    title="acme-api/server.js"
+  />
+  <p>Install it and start it in sandbox mode:</p>
+  <CodeBlock
+    code={`cd acme-api
+npm install
+ACME_SANDBOX=true npm start`}
+    lang="bash"
+  />
+  <p>From another terminal, check that it answers without a key:</p>
+  <CodeBlock
+    code={`curl http://localhost:4000/graphql \\
+  -H "Content-Type: application/json" \\
+  -d '{"query":"{ templates { id name } }"}'`}
+    lang="bash"
+  />
+  <p>
+    It returns both templates. <code>cors.origin</code> lists the origins a
+    browser may call the API from: the local docs server and the production
+    docs site. GraphiQL is served at the same URL, in sandbox mode only.
+  </p>
+
+  <h2>Create the docs project</h2>
+  <p>In the folder beside <code>acme-api</code>, scaffold a Blume project:</p>
+  <CodeBlock
+    code={`npx blume init acme-docs --template docs
+cd acme-docs
+cp ../acme-api/schema.graphql .`}
+    lang="bash"
+  />
+  <p>
+    Keep the default <code>docs</code> content folder when it asks. If both
+    projects live in one repository, skip the copy and point <code>spec</code>{" "}
+    at <code>../acme-api/schema.graphql</code>, so the docs always build from
+    the server's schema. Then replace <code>blume.config.ts</code>:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { graphql } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  navigation: {
+    tabs: [
+      { label: "Docs", path: "/" },
+      { label: "GraphQL API", path: "/graphql" },
+    ],
+  },
+  reference: [
+    graphql({
+      endpoint: "https://sandbox.acme.example/graphql",
+      sources: [{ label: "Acme Messages API", spec: "./schema.graphql" }],
+    }),
+  ],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The <code>graphql()</code> adapter mounts the reference at{" "}
+    <code>/graphql</code>. It never adds a header tab, so the tab pointing at
+    that route is what makes it reachable, and it scopes the sidebar too. The
+    source's <code>label</code> titles the overview page, otherwise called
+    "GraphQL". A schema names no server, so <code>endpoint</code> is where the
+    Try it panel and code samples send requests. Replace it with your sandbox's
+    real URL: <code>.example</code> domains don't resolve.
+  </p>
+  <p>Start the dev server:</p>
+  <CodeBlock code="npm run dev" lang="bash" />
+
+  <h2>What gets generated</h2>
+  <p>
+    The GraphQL API tab opens an overview at <code>/graphql</code> with the
+    schema's description, the endpoint, and a section per group. The sidebar
+    groups pages into Queries, Mutations, Subscriptions, Objects, Input
+    Objects, Enums, Interfaces, and Scalars, plus Unions when a schema has
+    them:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In the schema</th>
+        <th scope="col">Page</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>message</code> query</td>
+        <td><code>/graphql/queries/message</code></td>
+      </tr>
+      <tr>
+        <td><code>templates</code> query</td>
+        <td><code>/graphql/queries/templates</code></td>
+      </tr>
+      <tr>
+        <td><code>sendMessage</code> mutation</td>
+        <td><code>/graphql/mutations/send-message</code></td>
+      </tr>
+      <tr>
+        <td><code>sendEmail</code> mutation (deprecated)</td>
+        <td><code>/graphql/mutations/send-email</code></td>
+      </tr>
+      <tr>
+        <td><code>messageStatusChanged</code> subscription</td>
+        <td><code>/graphql/subscriptions/message-status-changed</code></td>
+      </tr>
+      <tr>
+        <td><code>Message</code> type</td>
+        <td><code>/graphql/objects/message</code></td>
+      </tr>
+      <tr>
+        <td><code>Template</code> type</td>
+        <td><code>/graphql/objects/template</code></td>
+      </tr>
+      <tr>
+        <td><code>SendMessageInput</code></td>
+        <td><code>/graphql/input-objects/send-message-input</code></td>
+      </tr>
+      <tr>
+        <td><code>Channel</code>, <code>MessageStatus</code></td>
+        <td>
+          <code>/graphql/enums/channel</code>,{" "}
+          <code>/graphql/enums/message-status</code>
+        </td>
+      </tr>
+      <tr>
+        <td><code>Node</code></td>
+        <td><code>/graphql/interfaces/node</code></td>
+      </tr>
+      <tr>
+        <td><code>DateTime</code></td>
+        <td><code>/graphql/scalars/date-time</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Names are split at their capitals, so <code>sendMessage</code> becomes{" "}
+    <code>send-message</code>. A page's URL only has to be unique within its
+    group, so the <code>message</code> query and the <code>Message</code> type
+    both end in <code>message</code>, one under <code>queries</code> and one
+    under <code>objects</code>. Built-in scalars like <code>String</code> and
+    the root types themselves get no page.
+  </p>
+  <p>
+    An operation page lists its arguments, marking required ones and showing
+    defaults, and links its return type. Beside them are request samples in
+    curl, JavaScript, and Python, each sending a generated example operation
+    and its variables, and an example response. Set <code>codeSamples</code>{" "}
+    to choose other languages, or <code>false</code> for none.
+  </p>
+
+  <h2>Type relationships and deprecations</h2>
+  <p>
+    Every type name on a page links to that type's page, so a reader can walk
+    from <code>sendMessage</code> to <code>SendMessageInput</code> to{" "}
+    <code>Channel</code> without searching. Type pages also show how types
+    connect:
+  </p>
+  <ul>
+    <li>
+      <strong>Implements and Implemented by.</strong> The{" "}
+      <code>Message</code> page says it implements <code>Node</code>, and the{" "}
+      <code>Node</code> page lists <code>Message</code> and{" "}
+      <code>Template</code>. A union's page lists its member types the same way.
+    </li>
+    <li>
+      <strong>Used by.</strong> The operations that return or accept the type,
+      and the types that reference it. <code>Template</code> is used by the{" "}
+      <code>templates</code> query and the <code>Message</code> type, and{" "}
+      <code>Channel</code> by <code>Message</code>, <code>Template</code>, and{" "}
+      <code>SendMessageInput</code>.
+    </li>
+    <li>
+      <strong>Specified by.</strong> A custom scalar with{" "}
+      <code>@specifiedBy</code> links to its specification, as{" "}
+      <code>DateTime</code> does.
+    </li>
+  </ul>
+  <p>
+    <code>@deprecated</code> works on fields, arguments, input fields, and enum
+    values. Blume labels each one deprecated and prints its reason. A
+    deprecated operation like <code>sendEmail</code> also gets a pill in the
+    sidebar and a marker in its Markdown copy, so agents see it too. Reasons
+    render as plain text and descriptions as Markdown, so name the replacement
+    in the reason and put links in the description.
+  </p>
+  <p>
+    Generated examples leave deprecated fields out, so the example for{" "}
+    <code>message</code> doesn't ask for <code>subject</code>. Clients written
+    before the deprecation still do, so keep deprecated fields working until
+    you remove them.
+  </p>
+
+  <h2>Try a query from the docs</h2>
+  <p>
+    Open <code>http://localhost:4321/graphql/queries/templates</code> and
+    expand Try it. Its Base URL is the <code>endpoint</code> from your config.
+    To call your local server instead, type{" "}
+    <code>http://localhost:4000/graphql</code> into Custom base URL, which
+    overrides it.
+  </p>
+  <p>
+    The request body is the JSON the API receives, a <code>query</code> and its{" "}
+    <code>variables</code>, prefilled from the generated example. A variable
+    whose argument has a default starts at it, so <code>first</code> is{" "}
+    <code>20</code>, and the rest are placeholders. Select Send, and the panel
+    shows both templates. The code samples follow your edits, so a copied curl
+    command matches what Send did. On <code>sendMessage</code>, replace{" "}
+    <code>"id"</code> and <code>"string"</code> with <code>"welcome"</code> and
+    an email address, or the server rejects the template ID.
+  </p>
+
+  <h3>Send a key from the panel</h3>
+  <p>
+    Stop the server and start it the way production would run it, with a key:
+  </p>
+  <CodeBlock code="ACME_API_KEY=test_key npm start" lang="bash" />
+  <p>
+    Send again, and the response is a 401 with an <code>UNAUTHENTICATED</code>{" "}
+    error. The panel sends <code>Content-Type: application/json</code> and the
+    body, nothing else, until the reference says how the API authenticates. A
+    schema can't, so tell <code>graphql()</code> with <code>auth</code>:
+  </p>
+  <CodeBlock
+    code={`graphql({
+  endpoint: "https://sandbox.acme.example/graphql",
+  auth: { method: "bearer" },
+  sources: [{ label: "Acme Messages API", spec: "./schema.graphql" }],
+}),`}
+    lang="ts"
+  />
+  <p>
+    <code>auth</code> takes the same methods as <code>api.auth</code> for
+    hand-written endpoint pages: <code>bearer</code>, <code>basic</code>, or{" "}
+    <code>key</code>, with <code>name</code> for the API key header. Every
+    operation page then gets an Authorization section, the panel a Bearer
+    token field, and the code samples an{" "}
+    <code>Authorization: Bearer YOUR_TOKEN</code> header. Paste{" "}
+    <code>test_key</code> into the field and Send works again. The samples
+    keep the placeholder unless you check Include my values in samples.
+  </p>
+  <p>
+    A reader who pastes a production key sends real requests, so still point{" "}
+    <code>endpoint</code> at a controlled endpoint: a sandbox that holds only
+    sample data and sends nothing. If you can't run a sandbox, set{" "}
+    <code>playground: false</code> and keep the examples.
+  </p>
+
+  <h3>CORS</h3>
+  <p>
+    The panel calls the API from the reader's browser. A JSON POST triggers a
+    CORS preflight, so the API has to answer it for the docs origin. Check the
+    sample server's answer without a browser:
+  </p>
+  <CodeBlock
+    code={`curl -i -X OPTIONS http://localhost:4000/graphql \\
+  -H "Origin: http://localhost:4321" \\
+  -H "Access-Control-Request-Method: POST" \\
+  -H "Access-Control-Request-Headers: content-type"`}
+    lang="bash"
+  />
+  <p>
+    A listed origin gets <code>access-control-allow-origin: http://localhost:4321</code>{" "}
+    back. Any other origin gets <code>null</code>, and the browser blocks the
+    send. That includes preview deployments on their own URLs, and a dev server
+    that moved off port 4321.
+  </p>
+  <p>
+    If you can't change the API's CORS settings, route sends through Blume's
+    built-in proxy. It runs as a server route, so it needs a host adapter from{" "}
+    <code>blume/deploy</code>, or the build fails with{" "}
+    <code>BLUME_SERVER_FEATURE_REQUIRED</code>.
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { vercel } from "blume/deploy";
+import { graphql } from "blume/reference";
+
+export default defineConfig({
+  // ...title and navigation as before
+  deployment: vercel(),
+  reference: [
+    graphql({
+      endpoint: "https://sandbox.acme.example/graphql",
+      playground: { proxy: true },
+      sources: [{ label: "Acme Messages API", spec: "./schema.graphql" }],
+    }),
+  ],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The proxy only forwards to the origins of your documented APIs, here the
+    origin of <code>endpoint</code>, and only the headers the panel set. A
+    Custom base URL isn't one of them, so with the proxy on, local sends get a
+    403. See{" "}
+    <a href="/guides/api-documentation-cors-errors">Fix CORS errors in an API documentation playground</a>{" "}
+    for more.
+  </p>
+
+  <h2>Subscriptions need a page you write</h2>
+  <p>
+    The <code>messageStatusChanged</code> page shows the generated subscription,
+    its variables, and an example event, but no Try it panel or HTTP samples: a
+    subscription doesn't run over a single POST. Send the sample server one as
+    a JSON POST and it answers <code>406 Not Acceptable</code>. GraphQL Yoga
+    streams subscriptions as server-sent events over a GET that accepts{" "}
+    <code>text/event-stream</code>. Other servers use a WebSocket protocol,
+    like graphql-ws, which needs a different client.
+  </p>
+  <p>
+    The schema can't say which transport your API uses, so write it down. A
+    page in a folder named after the reference route joins the GraphQL API
+    tab's sidebar:
+  </p>
+  <CodeBlock
+    code={`---
+title: Quickstart
+description: Authenticate, send your first message, and follow its delivery status with the Acme Messages GraphQL API.
+---
+
+Send every request to \`https://api.acme.example/graphql\`, with your API key
+as a bearer token.
+
+## Send a message
+
+\`\`\`bash
+curl https://api.acme.example/graphql \\
+  -H "Authorization: Bearer $ACME_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"query":"mutation { sendMessage(input: { channel: EMAIL, to: \\"ada@example.com\\", template: \\"welcome\\" }) { id status } }"}'
+\`\`\`
+
+The response holds the message ID, like \`msg_1\`.
+
+## Follow its delivery status
+
+[messageStatusChanged](/graphql/subscriptions/message-status-changed) streams
+over server-sent events, not WebSockets. Send it as a GET request that accepts
+\`text/event-stream\`:
+
+\`\`\`bash
+curl -N -G https://api.acme.example/graphql \\
+  -H "Accept: text/event-stream" \\
+  -H "Authorization: Bearer $ACME_API_KEY" \\
+  --data-urlencode 'query=subscription { messageStatusChanged(id: "msg_1") { id status } }'
+\`\`\`
+
+Each status change after you subscribe arrives as an event:
+
+\`\`\`text
+event: next
+data: {"data":{"messageStatusChanged":{"id":"msg_1","status":"SENT"}}}
+\`\`\`
+
+The sandbox at \`https://sandbox.acme.example/graphql\` takes the same requests
+without a key, and sends nothing.`}
+    lang="mdx"
+    title="docs/graphql/quickstart.mdx"
+  />
+  <p>
+    The page lives at <code>/graphql/quickstart</code>. Try its commands
+    against your local server first, with{" "}
+    <code>http://localhost:4000/graphql</code> in place of the API URL and{" "}
+    <code>export ACME_API_KEY=test_key</code> in both terminals. On a freshly
+    started server the first message is <code>msg_1</code>, so start the
+    subscription in one terminal, then send the message from another. The
+    stream prints a <code>SENT</code> event, then a <code>DELIVERED</code>{" "}
+    one.
+  </p>
+
+  <h2>Build and check</h2>
+  <p>Build the site, serve the build locally, and check its links:</p>
+  <CodeBlock
+    code={`npm run build
+npx blume preview
+npx blume validate`}
+    lang="bash"
+  />
+  <p>
+    In the preview, check that <code>/graphql/objects/message</code>{" "}
+    loads on its own, that site search finds <code>sendMessage</code>, and that{" "}
+    <code>/graphql/mutations/send-email.md</code> returns the page as Markdown,
+    with <code>mutation sendEmail</code> and its deprecation marker.{" "}
+    <code>blume validate</code> checks every internal link, including the
+    quickstart's link to the subscription page.
+  </p>
+
+  <h2>Deploy and keep it current</h2>
+  <p>
+    Without the proxy, the site is static files in <code>dist/</code> for any
+    static host. With it, deploy to the host your adapter names. The{" "}
+    <a href="/docs/deployment">deployment docs</a> cover both, including
+    setting the site URL where Blume can't detect it.
+  </p>
+  <p>
+    The reference rebuilds from the schema on every build, so a schema change
+    ships with a commit and a deploy. The dev server watches a local schema
+    file and updates the reference when you save it.
+  </p>
+  <p>
+    Renaming a field or type moves its page. Deprecate first, and when you
+    remove a member, redirect its page to the replacement:
+  </p>
+  <CodeBlock
+    code={`redirects: [
+  { from: "/graphql/mutations/send-email", to: "/graphql/mutations/send-message" },
+],`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+
+  <h2>Troubleshooting</h2>
+  <h3>The build fails with BLUME_GRAPHQL_UNAVAILABLE</h3>
+  <p>
+    Blume couldn't read or parse the schema, and the message says why: a wrong
+    path, a failed download, or invalid SDL. <code>Unknown type "Template"</code>{" "}
+    usually means the schema is split across files and <code>spec</code>{" "}
+    points at one of them. In <code>blume dev</code> this is only a warning and
+    the reference is skipped, so a working dev server can hide it.
+  </p>
+  <h3>The reference has types but no queries</h3>
+  <p>
+    The file declares no <code>Query</code>, <code>Mutation</code>, or{" "}
+    <code>Subscription</code> type. Point <code>spec</code> at the full schema,
+    not a file of shared types.
+  </p>
+  <h3>Send says the browser blocked the request</h3>
+  <p>
+    That's CORS: allow the docs origin in your API, or turn on the proxy. The
+    message tells you to set <code>playground: {"{ proxy: true }"}</code> on
+    the <code>graphql()</code> reference, which needs an absolute{" "}
+    <code>endpoint</code> and a host adapter, as shown in{" "}
+    <a href="#try-a-query-from-the-docs">Try a query from the docs</a>.
+  </p>
+  <h3>Send returns UNAUTHENTICATED</h3>
+  <p>
+    The panel sends a key only when <code>graphql()</code> sets{" "}
+    <code>auth</code> and the key field is filled in. See{" "}
+    <a href="#try-a-query-from-the-docs">Try a query from the docs</a>.
+  </p>
+  <h3>Send returns a 403 with the proxy on</h3>
+  <p>
+    The target isn't an origin the proxy allows: either a Custom base URL is
+    set, or the reference has no absolute <code>endpoint</code>, which the
+    build also warns about.
+  </p>
+  <h3>Try it returns null or an empty list</h3>
+  <p>
+    Variables without a default are placeholders like <code>"id"</code> and{" "}
+    <code>0</code>. Replace them with real values before you send.
+  </p>
+</GuidePage>

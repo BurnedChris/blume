@@ -6,6 +6,7 @@ import { join } from "pathe";
 
 import {
   createAskContext,
+  excerptHeading,
   parsePage,
   relevantExcerpt,
   sectionExcerpt,
@@ -15,9 +16,13 @@ import { buildAskData } from "../src/ai/ask-data.ts";
 import { resolveAskBackend } from "../src/ai/ask.ts";
 // The factories through the `blume/ai` entry a config imports them from.
 import {
+  anthropic,
   gateway,
+  gemini,
+  grok,
   inkeep,
   llmgateway,
+  openai,
   openaiCompatible,
   openrouter,
 } from "../src/ai/index.ts";
@@ -151,6 +156,7 @@ beforeAll(async () => {
       '---\ntitle: Lifecycle\nstatus: retracted\n---\n# F\n\n<Callout type="warning" title={frontmatter.status}>Withdrawn.</Callout>\n',
     "t.md":
       '---\ntitle: Table\n---\n# Table\n\n<Callout type="warning">Mind the gap.</Callout>\n',
+    "u.md": "# Install `blume`\n\nBody U.\n",
     "v.md": [
       "---",
       "title: Vis",
@@ -170,6 +176,8 @@ beforeAll(async () => {
       "```",
       "",
     ].join("\n"),
+    "w.md": "Wiki page\n=========\n\nBody W.\n\n# Wiki page\n",
+    "x.md": "# Overview\n\nBody X.\n",
   };
   await Promise.all(
     Object.entries(files).map(async ([rel, content]) => {
@@ -229,6 +237,24 @@ describe("buildLlmsFiles — index", () => {
     const { index } = await buildLlmsFiles(project());
     expect(index.startsWith("# Docs\n\n> Desc\n\n## Docs\n")).toBe(true);
   });
+
+  it("summarizes each page with its meta description", async () => {
+    const { index } = await buildLlmsFiles(
+      makeProject([
+        // A generated reference page often sets only `seo.description`.
+        makePage("a.md", "/ref", "Ref", {
+          meta: pageMetaSchema.parse({ seo: { description: "From seo" } }),
+        }),
+        // `seo.description` wins, as in the page's <meta name="description">.
+        makePage("b.md", "/both", "Both", {
+          description: "Subtitle",
+          meta: pageMetaSchema.parse({ seo: { description: "Meta" } }),
+        }),
+      ])
+    );
+    expect(index).toContain("- [Ref](https://example.com/ref): From seo");
+    expect(index).toContain("- [Both](https://example.com/both): Meta");
+  });
 });
 
 /** The lines of an llms.txt index's trailing "Agent resources" section. */
@@ -242,6 +268,8 @@ describe("buildLlmsFiles — agent resources", () => {
       "- [llms-full.txt](https://example.com/llms-full.txt): The full Markdown of every page in one file.",
       "- [Page Markdown](https://example.com/index.md): Append `.md` to any page URL to fetch that page as raw Markdown.",
       "- [JSON API](https://example.com/api/docs/pages.json): Page index of the JSON docs API; each entry links the page's JSON and Markdown forms. Described by the OpenAPI document at https://example.com/openapi.json.",
+      // The generated site skill (`agents.skillMd`).
+      "- [Agent skills](https://example.com/.well-known/agent-skills/index.json): Agent Skills discovery index of the skills this site publishes.",
       "- [API catalog](https://example.com/.well-known/api-catalog): RFC 9727 linkset of the APIs documented here.",
       "- [AI catalog](https://example.com/.well-known/ai-catalog.json): ARD manifest of the agent-facing resources on this site (MCP server, skills, APIs).",
       "- [agent-readability.json](https://example.com/agent-readability.json): Manifest of every agent-facing artifact on this site.",
@@ -502,14 +530,14 @@ describe("buildLlmsFiles — navigation structure", () => {
   });
 });
 
-describe("buildLlmsFiles — agents.llmsTxt.openapi", () => {
-  const apiPage = (): PageRecord =>
-    makePage("openapi:reference/get-pet.mdx", "/reference/get-pet", "Get Pet", {
-      body: { format: "mdx", text: "API operation body." },
-      navPath: "reference/get-pet.mdx",
-      source: { name: "openapi", ref: "reference/get-pet.mdx" },
-    });
+const apiPage = (): PageRecord =>
+  makePage("openapi:reference/get-pet.mdx", "/reference/get-pet", "Get Pet", {
+    body: { format: "mdx", text: "API operation body." },
+    navPath: "reference/get-pet.mdx",
+    source: { name: "openapi", ref: "reference/get-pet.mdx" },
+  });
 
+describe("buildLlmsFiles — agents.llmsTxt.openapi", () => {
   it("includes generated API reference pages by default", async () => {
     const { full, index } = await buildLlmsFiles(
       makeProject([makePage("a.md", "/a", "Alpha"), apiPage()])
@@ -632,6 +660,28 @@ describe("buildLlmsFiles — full", () => {
     expect(full).toContain("\n---\n");
     expect(full).not.toContain("Draft body.");
   });
+
+  it("drops the opening heading a page's title came from, which the section already opens with", async () => {
+    const { full } = await buildLlmsFiles(
+      makeProject([
+        makePage("u.md", "/u", "Install blume"),
+        makePage("w.md", "/w", "Wiki page"),
+        makePage("x.md", "/x", "Getting started"),
+      ])
+    );
+    expect(full).toContain(
+      "# Install blume\nSource: https://example.com/u\n\nBody U."
+    );
+    expect(full).not.toContain("# Install `blume`");
+    // A setext heading goes the same way; a later one with the same text stays.
+    expect(full).toContain(
+      "# Wiki page\nSource: https://example.com/w\n\nBody W.\n\n# Wiki page"
+    );
+    // A heading that isn't the title stays.
+    expect(full).toContain(
+      "# Getting started\nSource: https://example.com/x\n\n# Overview\n\nBody X."
+    );
+  });
 });
 
 describe("buildLlmsFiles — visibility and encoding", () => {
@@ -742,10 +792,10 @@ describe("markdownRoutePaths", () => {
   });
 });
 
-describe("component downleveling in agent surfaces", () => {
-  const tableProject = (): BlumeProject =>
-    makeProject([makePage("t.md", "/t", "Table")]);
+const tableProject = (): BlumeProject =>
+  makeProject([makePage("t.md", "/t", "Table")]);
 
+describe("component downleveling in agent surfaces", () => {
   it("stores a downleveled md variant beside the verbatim source", async () => {
     const raw = await buildRawMarkdown(tableProject());
     expect(raw["/t"]?.mdx).toContain('<Callout type="warning">');
@@ -823,10 +873,10 @@ describe("component downleveling in agent surfaces", () => {
   });
 });
 
-describe("agent-facing markdown honors <Visibility>", () => {
-  const visProject = (): BlumeProject =>
-    makeProject([makePage("v.md", "/v", "Vis")]);
+const visProject = (): BlumeProject =>
+  makeProject([makePage("v.md", "/v", "Vis")]);
 
+describe("agent-facing markdown honors <Visibility>", () => {
   it("filters llms-full.txt: web removed, agents unwrapped, fences kept", async () => {
     const { full } = await buildLlmsFiles(visProject());
     expect(full).not.toContain("Web-only body.");
@@ -1205,7 +1255,7 @@ const conversationCorpus = [
   ),
 ];
 const cited = (system: string | undefined): string[] =>
-  [...(system ?? "").matchAll(/^## .*\((?<route>\/[^)]*)\)/gmu)].map(
+  [...(system ?? "").matchAll(/^## \[.*\]\((?<route>\/[^)]*)\)/gmu)].map(
     (match) => match.groups?.route ?? ""
   );
 
@@ -1315,10 +1365,13 @@ describe("createAskContext", () => {
       { content: "how do I install the dev server", role: "user" },
     ]);
     expect(system).toContain("<docs>");
-    expect(system).toContain("Installation (/guides/install)");
+    expect(system).toContain("## [Installation](/guides/install)");
     expect(system).toContain("run the dev server");
-    expect(system).toContain("Markdown link");
+    expect(system).toContain("opens with a heading that links to its page");
     expect(system).toContain("[Page Title](/route)");
+    expect(system).toContain(
+      "with the link in the heading that opens their excerpt"
+    );
   });
 
   it("appends custom instructions after the base grounding contract", async () => {
@@ -1378,7 +1431,7 @@ describe("createAskContext", () => {
     const injected = docsBlock(
       await ground([{ content: "install guide", role: "user" }])
     );
-    // 300 characters of body, plus the `## Title (/route)` heading and the
+    // 300 characters of body, plus the `## [Title](/route)` heading and the
     // ellipses marking the trimmed edges.
     expect(injected.length).toBeLessThan(400);
     expect(injected).toContain("install");
@@ -1478,7 +1531,7 @@ describe("createAskContext", () => {
       path: "/guides/install/",
     });
     expect(system).toContain("the page the user is currently viewing");
-    expect(system).toContain("Installation (/guides/install)");
+    expect(system).toContain("## [Installation](/guides/install)");
   });
 
   it("filters retrieval to the current page's locale", async () => {
@@ -1508,6 +1561,34 @@ describe("createAskContext", () => {
     expect(system).not.toContain("Install EN");
   });
 
+  it("keeps a question from outside the docs to one locale", async () => {
+    const documents = ["en", "fr", "de"].map((locale) => ({
+      content: `single sign-on setup (${locale})`,
+      description: "",
+      locale,
+      route: `/${locale}/sso`,
+      title: `SSO ${locale.toUpperCase()}`,
+    }));
+    const ground = createAskContext({
+      defaultLocale: "en",
+      documents,
+      site: null,
+    });
+    // The homepage isn't a docs page: every translation used to compete.
+    const home = await ground([{ content: "single sign-on", role: "user" }], {
+      path: "/",
+    });
+    expect(home).toContain("SSO EN");
+    expect(home).not.toContain("SSO FR");
+    expect(home).not.toContain("SSO DE");
+    // A localized landing page keeps to its own locale.
+    const french = await ground([{ content: "single sign-on", role: "user" }], {
+      path: "/fr",
+    });
+    expect(french).toContain("SSO FR");
+    expect(french).not.toContain("SSO EN");
+  });
+
   it("grounds a CJK question when the snapshot carries a default locale", async () => {
     const documents = [
       {
@@ -1518,8 +1599,12 @@ describe("createAskContext", () => {
         title: "ポイントの扱い",
       },
     ];
-    // Without the locale, the default tokenizer finds nothing to ground on.
-    const unsegmented = createAskContext({ documents, site: null });
+    // Without a locale, the default tokenizer finds nothing to ground on: a
+    // site that never declared its language tags every page `en`.
+    const unsegmented = createAskContext({
+      documents: documents.map((page) => ({ ...page, locale: "en" })),
+      site: null,
+    });
     expect(
       await unsegmented([{ content: "ポイント", role: "user" }])
     ).toBeUndefined();
@@ -1530,7 +1615,19 @@ describe("createAskContext", () => {
       site: null,
     });
     const system = await ground([{ content: "ポイント", role: "user" }]);
-    expect(system).toContain("ポイントの扱い (/ja/points)");
+    expect(system).toContain("## [ポイントの扱い](/ja/points)");
+
+    // A Japanese translation of an English-default site grounds it too,
+    // asked from a Japanese page (a question from nowhere keeps to English).
+    const translated = createAskContext({
+      defaultLocale: "en",
+      documents,
+      site: null,
+    });
+    const answer = await translated([{ content: "ポイント", role: "user" }], {
+      path: "/ja",
+    });
+    expect(answer).toContain("## [ポイントの扱い](/ja/points)");
   });
 
   it("truncates long excerpts and returns undefined for an empty corpus", async () => {
@@ -1658,6 +1755,11 @@ describe("relevantExcerpt", () => {
     expect(excerpt).toContain("café latte");
   });
 
+  it("centers on a match the index found by folding accents", () => {
+    const content = `${"x ".repeat(300)}Die Straße ist lang ${"y ".repeat(200)}`;
+    expect(relevantExcerpt(content, "strasse", 60)).toContain("Die Straße");
+  });
+
   it("falls back to regex term extraction without Intl.Segmenter", () => {
     const original = Intl.Segmenter;
     // SAFETY: deliberately unsetting the readonly global to exercise the
@@ -1698,6 +1800,29 @@ describe("parsePage", () => {
   });
 });
 
+describe("excerptHeading", () => {
+  it("is the link to cite the page with", () => {
+    expect(
+      excerptHeading({ route: "/guides/install", title: "Installation" })
+    ).toBe("## [Installation](/guides/install)");
+    expect(excerptHeading({ route: "/ja/ポイント", title: "ポイント" })).toBe(
+      "## [ポイント](/ja/ポイント)"
+    );
+  });
+
+  it("escapes what would break the link", () => {
+    expect(
+      excerptHeading({ route: "/api", title: String.raw`API [beta] \ v2` })
+    ).toBe(String.raw`## [API \[beta\] \\ v2](/api)`);
+    expect(
+      excerptHeading({ route: "/guides/setup (beta) now", title: "Setup" })
+    ).toBe("## [Setup](/guides/setup%20%28beta%29%20now)");
+    expect(excerptHeading({ route: "/pricing/100%", title: "Pricing" })).toBe(
+      "## [Pricing](/pricing/100%25)"
+    );
+  });
+});
+
 describe("sectionExcerpt", () => {
   it("returns short content unchanged", () => {
     expect(sectionExcerpt("Short page", "page", 100)).toBe("Short page");
@@ -1720,6 +1845,20 @@ describe("sectionExcerpt", () => {
     expect(excerpt).not.toContain("## Cleanup");
     expect(excerpt.startsWith("…")).toBe(true);
     expect(excerpt.endsWith("…")).toBe(true);
+  });
+
+  it("picks the section a folded query names", () => {
+    // `prufung` retrieves the page through the index's accent folding, so the
+    // excerpt must find Prüfung too rather than fall back to the intro.
+    const content = [
+      "## Einleitung",
+      "Lorem ipsum dolor sit amet. ".repeat(20),
+      "## Prüfung",
+      "Die Prüfung findet jährlich statt.",
+    ].join("\n");
+    expect(sectionExcerpt(content, "prufung", 120)).toBe(
+      "…\n\n## Prüfung\nDie Prüfung findet jährlich statt."
+    );
   });
 
   it("orders multiple selected sections by their source position", () => {
@@ -1969,25 +2108,65 @@ describe("ask adapter factories", () => {
       requiredSecrets: ["INKEEP_API_KEY"],
       runtimeDeps: ["@ai-sdk/openai-compatible"],
     });
-    expect(openaiCompatible(COMPATIBLE)).toStrictEqual({
-      kind: "openai-compatible",
+    // OpenAI itself through its own SDK; a custom endpoint through the
+    // OpenAI-compatible one.
+    expect(openai({ model: "gpt-5.5" })).toStrictEqual({
+      kind: "openai",
+      options: { model: "gpt-5.5" },
+      requiredSecrets: ["OPENAI_API_KEY"],
+      runtimeDeps: ["@ai-sdk/openai"],
+    });
+    expect(openai(COMPATIBLE)).toStrictEqual({
+      kind: "openai",
       options: COMPATIBLE,
       requiredSecrets: ["GW_KEY"],
       runtimeDeps: ["@ai-sdk/openai-compatible"],
+    });
+    // The deprecated name is the same adapter.
+    expect(openaiCompatible(COMPATIBLE)).toStrictEqual(openai(COMPATIBLE));
+    expect(anthropic({ model: "claude-sonnet-5" })).toStrictEqual({
+      kind: "anthropic",
+      options: { model: "claude-sonnet-5" },
+      requiredSecrets: ["ANTHROPIC_API_KEY"],
+      runtimeDeps: ["@ai-sdk/anthropic"],
+    });
+    expect(gemini({ model: "gemini-3.5-flash" })).toStrictEqual({
+      kind: "gemini",
+      options: { model: "gemini-3.5-flash" },
+      requiredSecrets: ["GEMINI_API_KEY"],
+      runtimeDeps: ["@ai-sdk/google"],
+    });
+    expect(grok({ model: "grok-4.7" })).toStrictEqual({
+      kind: "grok",
+      options: { model: "grok-4.7" },
+      requiredSecrets: ["XAI_API_KEY"],
+      runtimeDeps: ["@ai-sdk/xai"],
     });
     // A renamed key env var is what the descriptor declares.
     expect(
       openrouter({ apiKeyEnv: "OR_KEY", model: "x/y" }).requiredSecrets
     ).toStrictEqual(["OR_KEY"]);
     expect(gateway({ apiKeyEnv: "GW" }).requiredSecrets).toStrictEqual(["GW"]);
+    for (const provider of [
+      openai({ apiKeyEnv: "K", model: "m" }),
+      anthropic({ apiKeyEnv: "K", model: "m" }),
+      gemini({ apiKeyEnv: "K", model: "m" }),
+      grok({ apiKeyEnv: "K", model: "m" }),
+    ]) {
+      expect(provider.requiredSecrets).toStrictEqual(["K"]);
+    }
     // Plain data: the generated and ejected routes inline the descriptor, so
     // it must survive a JSON round trip, and the schema must take it as-is.
     for (const provider of [
       gateway(),
+      openai({ model: "m" }),
+      openai(COMPATIBLE),
+      anthropic({ model: "m" }),
+      gemini({ model: "m" }),
+      grok({ model: "m" }),
       openrouter({ model: "x/y" }),
       llmgateway({ model: "m" }),
       inkeep({ model: "m" }),
-      openaiCompatible(COMPATIBLE),
     ]) {
       // A JSON round trip on purpose (not structuredClone): the route is
       // written with JSON.stringify, which would drop anything non-JSON.
@@ -2056,17 +2235,53 @@ describe("resolveAskBackend", () => {
 
     const compatible = backendFor({
       enabled: true,
-      provider: openaiCompatible(COMPATIBLE),
+      provider: openai(COMPATIBLE),
     });
     expect(compatible).toMatchObject({
       grounded: true,
-      kind: "openai-compatible",
+      kind: "openai",
       label: "OpenAI-compatible",
+      // A self-hosted model may not call tools.
+      toolsByDefault: false,
     });
     expect(compatible.template.setup).toContain(
       'baseURL: "https://gw.example/v1"'
     );
     expect(compatible.template.setup).toContain('name: "openai-compatible"');
+  });
+
+  it("calls OpenAI, Anthropic, Gemini, and Grok directly through their own SDKs", () => {
+    for (const [provider, label, factory, env] of [
+      [openai({ model: "m" }), "OpenAI", "createOpenAI", "OPENAI_API_KEY"],
+      [
+        anthropic({ model: "m" }),
+        "Anthropic",
+        "createAnthropic",
+        "ANTHROPIC_API_KEY",
+      ],
+      [gemini({ model: "m" }), "Gemini", "createGoogle", "GEMINI_API_KEY"],
+      [grok({ model: "m" }), "Grok", "createXai", "XAI_API_KEY"],
+    ] as const) {
+      const backend = backendFor({ enabled: true, provider });
+      expect(backend).toMatchObject({
+        grounded: true,
+        kind: provider.kind,
+        label,
+        toolsByDefault: true,
+      });
+      expect(backend.template.imports[1]).toBe(
+        `import { ${factory} } from "${provider.runtimeDeps[0]}";`
+      );
+      // No base URL or provider name: the SDK's own endpoint and name.
+      expect(backend.template.setup).toBe(
+        `\nconst provider = ${factory}({\n  apiKey: getSecret("${env}"),\n});\n`
+      );
+      expect(backend.template.model).toBe('provider("m")');
+      expect(backend.template.keyCheck).toContain(
+        `The assistant is not configured: set ${env}.`
+      );
+      expect(backend.template.fields).toStrictEqual([]);
+    }
   });
 
   it("honors apiKeyEnv, baseUrl, and name overrides", () => {
@@ -2088,9 +2303,24 @@ describe("resolveAskBackend", () => {
 
     const named = backendFor({
       enabled: true,
-      provider: openaiCompatible({ ...COMPATIBLE, name: "acme" }),
+      provider: openai({ ...COMPATIBLE, name: "acme" }),
     });
     expect(named.template.setup).toContain('name: "acme"');
+    // OpenAI's own SDK takes the name too.
+    expect(
+      backendFor({
+        enabled: true,
+        provider: openai({ model: "m", name: "acme" }),
+      }).template.setup
+    ).toBe(
+      '\nconst provider = createOpenAI({\n  apiKey: getSecret("OPENAI_API_KEY"),\n  name: "acme",\n});\n'
+    );
+    const claude = backendFor({
+      enabled: true,
+      provider: anthropic({ apiKeyEnv: "CLAUDE_KEY", model: "m" }),
+    });
+    expect(claude.template.setup).toContain('apiKey: getSecret("CLAUDE_KEY")');
+    expect(claude.template.keyCheck).toContain('if (!getSecret("CLAUDE_KEY"))');
 
     // The gateway keeps its OIDC alternative around a renamed key.
     const gw = backendFor({
@@ -2123,10 +2353,17 @@ describe("resolveAskBackend", () => {
       backendFor({ enabled: true, provider: inkeep({ headers, model: "m" }) })
         .template.setup
     ).toContain(expected);
+    expect(
+      backendFor({ enabled: true, provider: grok({ headers, model: "m" }) })
+        .template.setup
+    ).toBe(
+      `\nconst provider = createXai({\n  apiKey: getSecret("XAI_API_KEY"),\n${expected}\n});\n`
+    );
     for (const provider of [
       gateway({ headers: {} }),
       openrouter({ headers: {}, model: "x/y" }),
       inkeep({ headers: {}, model: "m" }),
+      anthropic({ headers: {}, model: "m" }),
     ]) {
       expect(
         backendFor({ enabled: true, provider }).template.setup
@@ -2154,9 +2391,22 @@ describe("resolveAskBackend", () => {
     expect(
       backendFor({
         enabled: true,
-        provider: openaiCompatible({ ...COMPATIBLE, reasoning: "low" }),
+        provider: openai({ ...COMPATIBLE, reasoning: "low" }),
       }).template.fields
     ).toStrictEqual(['reasoning: "low"']);
+    // The direct providers: the same call option, which each provider's SDK
+    // maps to the model's own control (OpenAI's `reasoning_effort`,
+    // Anthropic's thinking, Gemini's thinking level, xAI's effort).
+    for (const provider of [
+      openai({ model: "m", reasoning: "minimal" }),
+      anthropic({ model: "m", reasoning: "minimal" }),
+      gemini({ model: "m", reasoning: "minimal" }),
+      grok({ model: "m", reasoning: "minimal" }),
+    ]) {
+      expect(
+        backendFor({ enabled: true, provider }).template.fields
+      ).toStrictEqual(['reasoning: "minimal"']);
+    }
     // OpenRouter: on the model as `reasoning.effort`, because its provider
     // ignores the call option — and nowhere else.
     expect(
@@ -2245,14 +2495,31 @@ describe("ai.assistant schema", () => {
       runtimeDeps: ["@ai-sdk/openai-compatible"],
     });
     expect(
-      askConfig({ enabled: true, provider: openaiCompatible(COMPATIBLE) })
-        .provider
+      askConfig({ enabled: true, provider: openai(COMPATIBLE) }).provider
     ).toStrictEqual({
-      kind: "openai-compatible",
-      options: { ...COMPATIBLE, name: "openai-compatible" },
+      kind: "openai",
+      options: COMPATIBLE,
       requiredSecrets: ["GW_KEY"],
       runtimeDeps: ["@ai-sdk/openai-compatible"],
     });
+    expect(
+      askConfig({ enabled: true, provider: openai({ model: "m" }) }).provider
+    ).toStrictEqual({
+      kind: "openai",
+      options: { apiKeyEnv: "OPENAI_API_KEY", model: "m" },
+      requiredSecrets: ["OPENAI_API_KEY"],
+      runtimeDeps: ["@ai-sdk/openai"],
+    });
+    for (const [provider, apiKeyEnv] of [
+      [anthropic({ model: "m" }), "ANTHROPIC_API_KEY"],
+      [gemini({ model: "m" }), "GEMINI_API_KEY"],
+      [grok({ model: "m" }), "XAI_API_KEY"],
+    ] as const) {
+      expect(askConfig({ enabled: true, provider }).provider).toStrictEqual({
+        ...provider,
+        options: { apiKeyEnv, model: "m" },
+      });
+    }
   });
 
   it("requires what an adapter has no default for", () => {
@@ -2260,18 +2527,17 @@ describe("ai.assistant schema", () => {
       { ...BARE, kind: "openrouter", options: {} },
       { ...BARE, kind: "llmgateway", options: {} },
       { ...BARE, kind: "inkeep", options: {} },
-      // The generic endpoint has no preset URL or key env var.
-      { ...BARE, kind: "openai-compatible", options: { model: "m" } },
+      { ...BARE, kind: "openai", options: {} },
+      { ...BARE, kind: "anthropic", options: {} },
+      { ...BARE, kind: "gemini", options: {} },
+      { ...BARE, kind: "grok", options: {} },
       {
         ...BARE,
-        kind: "openai-compatible",
+        kind: "openai",
         options: { apiKeyEnv: "K", baseUrl: "not a url", model: "m" },
       },
-      {
-        ...BARE,
-        kind: "openai-compatible",
-        options: { ...COMPATIBLE, model: "" },
-      },
+      { ...BARE, kind: "openai", options: { ...COMPATIBLE, model: "" } },
+      { ...BARE, kind: "openai", options: { model: "m", name: "" } },
       // The descriptor contract itself: a bare `{ kind, options }` is not one.
       { kind: "gateway", options: {} },
     ]) {
@@ -2630,8 +2896,14 @@ describe("ask adapter runtime dependency", () => {
       runtimeDeps({ enabled: true, provider: openrouter({ model: "x/y" }) })
     ).toContain("@openrouter/ai-sdk-provider");
     expect(
-      runtimeDeps({ enabled: true, provider: openaiCompatible(COMPATIBLE) })
+      runtimeDeps({ enabled: true, provider: openai(COMPATIBLE) })
     ).toContain("@ai-sdk/openai-compatible");
+    expect(
+      runtimeDeps({ enabled: true, provider: openai({ model: "m" }) })
+    ).toContain("@ai-sdk/openai");
+    expect(
+      runtimeDeps({ enabled: true, provider: gemini({ model: "m" }) })
+    ).toContain("@ai-sdk/google");
   });
 
   it("declares nothing when the assistant is disabled or external", () => {

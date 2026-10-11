@@ -1,0 +1,769 @@
+---
+// Document Kafka events with AsyncAPI: checked against the AsyncAPI,
+// OpenAPI, and includes docs, and on main against the AsyncAPI pipeline
+// (openapi/asyncapi.ts, parse.ts, source.ts, signature.ts), the event page
+// components (components/openapi/AsyncApiOperation.astro, async.ts,
+// async-snippets.ts, message.ts, message-model.ts, MessageComposer.astro,
+// security.ts), the agent Markdown serializer (ai/openapi-components.ts), and
+// core/includes.ts. What ran: the spec below validates with @asyncapi/cli
+// 6.2.0; Blume's parser, extractor, message model, and kcat sample builder
+// were run on it with Bun to get the routes, security label, and samples
+// shown; the three Node clients ran against a local Kafka-compatible broker
+// (Tansu 0.6.0, not Apache Kafka) with @confluentinc/kafka-javascript 1.10.1.
+// The Docker and kcat commands weren't run (neither is installed here), and
+// the Blume site itself wasn't built. Not yet run end to end.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("asyncapi-kafka-documentation")}>
+  <p>
+    To document Kafka events, write an AsyncAPI 3 document for the service that
+    owns them. Each Kafka topic is a channel whose <code>address</code> is the
+    topic name, each event is a message with a payload schema and a key, and
+    each operation says whether the service sends to that topic or receives
+    from it. Blume's <code>asyncapi()</code> adapter turns the file into
+    event-driven API documentation with a page per operation, and a page you
+    write beside it shows producer and consumer code you've run against a real
+    broker.
+  </p>
+  <p>
+    The example is a fictional Acme Orders service: it publishes an{" "}
+    <code>orders.created</code> event, consumes cancellation requests from{" "}
+    <code>orders.cancel-requests</code>, and runs on a production cluster that
+    requires SASL. You need a Blume project to add it to; the{" "}
+    <a href="/guides/openapi-documentation-website">OpenAPI guide</a> covers
+    starting one.
+  </p>
+  <p>
+    Two limits up front. A browser can't open a Kafka connection, so Kafka
+    pages get a message composer and copyable <code>kcat</code> commands, not a
+    Send button. And payloads described in Avro or Protobuf show a note instead
+    of field tables. If all you need is one standalone HTML page of the
+    contract, AsyncAPI's own <code>@asyncapi/html-template</code> generator
+    covers that without a docs site.
+  </p>
+
+  <h2>Decide what the document describes</h2>
+  <p>
+    An AsyncAPI 3 document describes one application, and each operation's{" "}
+    <code>action</code> is written from that application's side:{" "}
+    <code>send</code> means it produces to the channel, and{" "}
+    <code>receive</code> means it consumes from it. The people reading your
+    reference are on the other side of every operation:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Topic</th>
+        <th scope="col">The Orders service</th>
+        <th scope="col">An integrator</th>
+        <th scope="col">Badge on the page</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>orders.created</code></td>
+        <td>Produces (<code>send</code>)</td>
+        <td>Consumes</td>
+        <td>SEND</td>
+      </tr>
+      <tr>
+        <td><code>orders.cancel-requests</code></td>
+        <td>Consumes (<code>receive</code>)</td>
+        <td>Produces</td>
+        <td>RECEIVE</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Blume's generated samples follow the reader's side: a <code>send</code>{" "}
+    page shows a command that consumes, and a <code>receive</code> page shows
+    one that produces. Coming from AsyncAPI 2, note that the words flipped. A
+    2.x <code>publish</code> meant other applications publish to yours, so it
+    becomes <code>receive</code>, and <code>subscribe</code> becomes{" "}
+    <code>send</code>.
+  </p>
+
+  <h2>Write the AsyncAPI document</h2>
+  <p>
+    Save this as <code>asyncapi.yaml</code> at the project root, beside{" "}
+    <code>blume.config.ts</code>:
+  </p>
+  <CodeBlock
+    code={`asyncapi: 3.1.0
+info:
+  title: Acme Orders events
+  version: 1.0.0
+  description: |
+    The Kafka topics the Acme Orders service writes to and reads from. Every
+    message value is JSON, and every message is keyed by order ID, so all
+    events for one order land on the same partition, in order.
+  tags:
+    - name: Orders
+      description: Events the Orders service publishes when an order changes.
+    - name: Commands
+      description: Requests the Orders service consumes from other services.
+defaultContentType: application/json
+
+servers:
+  production:
+    host: kafka.acme.example:9093
+    protocol: kafka-secure
+    description: Production cluster. Clients connect over TLS and authenticate with SASL/SCRAM-SHA-512.
+    security:
+      - $ref: "#/components/securitySchemes/scram"
+  local:
+    host: localhost:9092
+    protocol: kafka
+    description: A broker on your own machine, for trying the samples. No authentication.
+
+channels:
+  ordersCreated:
+    address: orders.created
+    title: Orders created
+    description: One message per order, written after the order is committed to the database.
+    messages:
+      OrderCreated:
+        $ref: "#/components/messages/OrderCreated"
+    bindings:
+      kafka:
+        partitions: 12
+        replicas: 3
+        topicConfiguration:
+          cleanup.policy: ["delete"]
+          retention.ms: 604800000
+        bindingVersion: "0.5.0"
+  cancelRequests:
+    address: orders.cancel-requests
+    title: Cancel requests
+    description: Requests from other services to cancel an order that hasn't shipped.
+    messages:
+      CancelOrder:
+        $ref: "#/components/messages/CancelOrder"
+    bindings:
+      kafka:
+        partitions: 3
+        replicas: 3
+        bindingVersion: "0.5.0"
+
+operations:
+  orderCreated:
+    action: send
+    channel:
+      $ref: "#/channels/ordersCreated"
+    title: Order created
+    description: |
+      The Orders service publishes this event once per order, after the order
+      is saved. Delivery is at least once, so a consumer can see the same
+      event twice: deduplicate on \`eventId\`. Ignore fields you don't
+      recognize, because new optional fields can appear without a new topic.
+    tags:
+      - name: Orders
+    messages:
+      - $ref: "#/channels/ordersCreated/messages/OrderCreated"
+  cancelOrder:
+    action: receive
+    channel:
+      $ref: "#/channels/cancelRequests"
+    title: Cancel an order
+    description: |
+      The Orders service consumes this topic in the \`orders-service\` consumer
+      group. Produce one message per request, keyed by the order ID. An order
+      that has already shipped isn't canceled, and the request is dropped.
+    tags:
+      - name: Commands
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          enum: ["orders-service"]
+        bindingVersion: "0.5.0"
+    messages:
+      - $ref: "#/channels/cancelRequests/messages/CancelOrder"
+
+components:
+  securitySchemes:
+    scram:
+      type: scramSha512
+      description: SASL/SCRAM-SHA-512 over TLS. Each service gets its own username and password from the platform team.
+  messages:
+    OrderCreated:
+      name: OrderCreated
+      title: Order created
+      summary: A new order was placed and saved.
+      contentType: application/json
+      headers:
+        type: object
+        required: [eventType]
+        properties:
+          eventType:
+            type: string
+            enum: ["order.created"]
+            description: Lets a consumer that reads several topics route a message without parsing its value.
+      payload:
+        $ref: "#/components/schemas/OrderCreatedPayload"
+      examples:
+        - name: cardOrder
+          summary: A two-item order
+          headers:
+            eventType: order.created
+          payload:
+            eventId: evt_01J9ZK3Q8X
+            orderId: ord_7Hq2
+            customerId: cus_19f
+            createdAt: "2026-09-27T10:15:00Z"
+            currency: USD
+            total: 4800
+            items:
+              - sku: MUG-BLUE
+                quantity: 2
+                unitPrice: 1400
+              - sku: TEE-M
+                quantity: 1
+                unitPrice: 2000
+      bindings:
+        kafka:
+          key:
+            type: string
+            description: The order ID, the same value as \`orderId\` in the payload.
+            examples: [ord_7Hq2]
+          bindingVersion: "0.5.0"
+    CancelOrder:
+      name: CancelOrder
+      title: Cancel order
+      summary: Ask the Orders service to cancel an order.
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/CancelOrderPayload"
+      examples:
+        - name: customerRequest
+          summary: A customer asked support to cancel
+          payload:
+            orderId: ord_7Hq2
+            reason: customer_request
+            requestedBy: support-desk
+      bindings:
+        kafka:
+          key:
+            type: string
+            description: The order ID, the same value as \`orderId\` in the payload.
+            examples: [ord_7Hq2]
+          bindingVersion: "0.5.0"
+  schemas:
+    OrderCreatedPayload:
+      type: object
+      required: [eventId, orderId, customerId, createdAt, currency, total, items]
+      properties:
+        eventId:
+          type: string
+          description: Unique per event. Deduplicate on it.
+        orderId:
+          type: string
+          description: The order's ID. Also the message key.
+        customerId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+          description: When the order was saved, in UTC.
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+          description: ISO 4217 currency code.
+        total:
+          type: integer
+          minimum: 0
+          description: Order total in the currency's minor unit, like cents.
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/LineItem"
+    LineItem:
+      type: object
+      required: [sku, quantity, unitPrice]
+      properties:
+        sku:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+        unitPrice:
+          type: integer
+          minimum: 0
+          description: Price of one unit in the currency's minor unit.
+    CancelOrderPayload:
+      type: object
+      required: [orderId, reason, requestedBy]
+      properties:
+        orderId:
+          type: string
+        reason:
+          type: string
+          enum: [customer_request, payment_failed, out_of_stock]
+        requestedBy:
+          type: string
+          description: The service or team asking, for the audit log.`}
+    lang="yaml"
+    title="asyncapi.yaml"
+  />
+  <p>The <code>.example</code> hosts don't exist. Point them at your brokers.</p>
+
+  <h3>Servers and security</h3>
+  <p>
+    <code>production</code> uses the <code>kafka-secure</code> protocol and
+    lists a <code>scramSha512</code> security scheme, so every operation page
+    gets an Authorization section showing <code>scram</code> as
+    SASL/SCRAM-SHA-512, with the scheme's description. Blume labels the other
+    Kafka schemes too (<code>plain</code>, <code>scramSha256</code>,{" "}
+    <code>gssapi</code>, <code>X509</code>). It documents them only: the
+    reference never asks readers for broker credentials. The{" "}
+    <code>local</code> server gives readers a second target in Try it.
+  </p>
+
+  <h3>Channels are topics</h3>
+  <p>
+    A channel's <code>address</code> is the topic name. It's what the page
+    heading shows and what the samples connect to. Partition count, replicas,
+    and retention go in the channel's <code>kafka</code> binding, which the page
+    lists under Channel bindings. Set the binding's own <code>topic</code>{" "}
+    only when the topic name differs from the address: the samples then use
+    it instead.
+  </p>
+
+  <h3>Messages carry the contract</h3>
+  <p>
+    Each message has a payload schema, a <code>headers</code> schema, and a{" "}
+    <code>kafka</code> binding whose <code>key</code> documents the message
+    key. The key's <code>examples</code> entry is the key the samples send.
+    The message's first entry under <code>examples</code> becomes the example
+    payload on the page and the starting value in Try it. Without one, Blume
+    samples a value from the schema, which is valid but tells readers less.
+  </p>
+
+  <h3>Operations say who does what</h3>
+  <p>
+    An operation's <code>title</code> is its page title and sidebar label, its
+    first tag picks the sidebar group, and its <code>description</code> opens
+    the page. Put the rules a client must follow in the description:
+    deduplicate on <code>eventId</code>, key by order ID, which consumer group
+    reads the topic. The description is also what agents get. An operation's
+    Markdown copy, the same text <code>llms-full.txt</code> and the MCP server
+    serve, carries the description and the signature,{" "}
+    <code>SEND orders.created</code>, but not the schema tables. The{" "}
+    <code>groupId</code> in <code>cancelOrder</code>'s binding records the
+    Orders service's consumer group, and the page shows it under Operation
+    bindings.
+  </p>
+
+  <h2>Validate the document</h2>
+  <p>
+    Blume reads the document leniently: it skips what it can't place and warns
+    about it, but it doesn't check the document against the AsyncAPI schema.
+    The AsyncAPI CLI does:
+  </p>
+  <CodeBlock code="npx @asyncapi/cli@6.2.0 validate asyncapi.yaml" lang="bash" />
+  <p>
+    On the document above, it reports the file as valid with no governance
+    issues. Its linter notes when a document isn't on the latest version,
+    3.1.0, which is why the example uses it. Blume reads any 3.x document as
+    it is. A 2.x document also works, but Blume converts it to 3.0 at build
+    time with <code>@asyncapi/converter</code>, which you install yourself.
+  </p>
+
+  <h2>Mount the event reference</h2>
+  <p>
+    Import <code>asyncapi()</code> from <code>blume/reference</code>, list it
+    under <code>reference</code>, and add a header tab for it:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { asyncapi } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  navigation: {
+    tabs: [
+      { label: "Docs", path: "/" },
+      { label: "Events", path: "/events" },
+    ],
+  },
+  reference: [asyncapi({ spec: "./asyncapi.yaml" })],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The reference mounts at <code>/events</code> unless you pass{" "}
+    <code>route</code>. It never adds a tab on its own, so the Events tab is
+    what makes it reachable, and it also scopes the sidebar to the event pages.
+    Start the dev server with <code>npm run dev</code>. It watches{" "}
+    <code>asyncapi.yaml</code>, so the pages update when you save the spec.
+  </p>
+  <p>Each operation gets its own URL:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Operation</th>
+        <th scope="col">Page</th>
+        <th scope="col">Sidebar group</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>orderCreated</code></td>
+        <td><code>/events/orders/order-created</code></td>
+        <td>Orders</td>
+      </tr>
+      <tr>
+        <td><code>cancelOrder</code></td>
+        <td><code>/events/commands/cancel-order</code></td>
+        <td>Commands</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The path is the first tag, then the operation's key under{" "}
+    <code>operations</code>, split at camelCase boundaries. An untagged
+    operation is grouped under its channel address instead. Renaming a tag or
+    an operation key moves the page, so add a redirect when you do.
+  </p>
+
+  <h2>Read the rendered reference</h2>
+  <p>
+    <code>/events</code> is an overview: the title and description from{" "}
+    <code>info</code>, the version, both servers as{" "}
+    <code>kafka-secure://kafka.acme.example:9093</code> and{" "}
+    <code>kafka://localhost:9092</code>, and a section per tag listing its
+    operations. The Order created page has these parts:
+  </p>
+  <ol>
+    <li>
+      <strong>Title and description.</strong> Order created, the operation's
+      description, then a SEND badge beside <code>orders.created</code>.
+    </li>
+    <li>
+      <strong>Authorization.</strong> <code>scram</code>, labeled
+      SASL/SCRAM-SHA-512 and required on <code>production</code>, with the
+      scheme's description, and a note that <code>local</code> needs no
+      authorization.
+    </li>
+    <li>
+      <strong>Message.</strong> The <code>application/json</code> content type,
+      a payload table with each field's type, whether it's required, its
+      description, and constraints like the currency pattern, then a headers
+      table.
+    </li>
+    <li>
+      <strong>Message bindings.</strong> The key schema from the message's{" "}
+      <code>kafka</code> binding.
+    </li>
+    <li>
+      <strong>Channel bindings.</strong> <code>partitions</code>,{" "}
+      <code>replicas</code>, and <code>topicConfiguration</code>.
+    </li>
+    <li>
+      <strong>Side panel.</strong> A collapsed Try it composer, a kcat tab under
+      Example, and the example payload under Message.
+    </li>
+  </ol>
+  <p>
+    Cancel an order has the same parts under a RECEIVE badge, plus Operation
+    bindings with the <code>orders-service</code> group ID.
+  </p>
+
+  <h3>The generated samples</h3>
+  <p>
+    The kcat sample comes from the operation's action and the channel's first
+    server. It keys each message, since the messages declare a key, and passes
+    the SASL settings the <code>production</code> server's security needs,
+    reading the credentials from <code>KAFKA_USERNAME</code> and{" "}
+    <code>KAFKA_PASSWORD</code>. For the two operations above, it's:
+  </p>
+  <CodeBlock
+    code={`# Order created (SEND): watch the topic, each key before its message
+kcat -b 'kafka.acme.example:9093' -t 'orders.created' -C -K '|' \\
+  -X security.protocol=SASL_SSL \\
+  -X sasl.mechanisms=SCRAM-SHA-512 \\
+  -X sasl.username="$KAFKA_USERNAME" \\
+  -X sasl.password="$KAFKA_PASSWORD"
+
+# Cancel an order (RECEIVE): produce a request keyed by order ID
+echo 'ord_7Hq2|{"orderId":"ord_7Hq2","reason":"customer_request","requestedBy":"support-desk"}' | kcat -b 'kafka.acme.example:9093' -t 'orders.cancel-requests' -P -K '|' \\
+  -X security.protocol=SASL_SSL \\
+  -X sasl.mechanisms=SCRAM-SHA-512 \\
+  -X sasl.username="$KAFKA_USERNAME" \\
+  -X sasl.password="$KAFKA_PASSWORD"`}
+    lang="bash"
+  />
+  <p>
+    Open Try it to change them. Pick the local server and the broker becomes{" "}
+    <code>localhost:9092</code>, without the SASL settings. Edit the payload
+    and the <code>echo</code> line follows, while the editor checks your JSON
+    against the payload schema as you type. What Try it doesn't do on a Kafka
+    page is connect: the panel says live sending isn't possible from a browser
+    and leaves the command to you. Only WebSocket operations get a live
+    connection.
+  </p>
+
+  <h2>Add a producer and consumer page</h2>
+  <p>
+    The reference answers "what's on this topic?" Integrators also need "how do
+    I connect, and what must my code do?" A page in the <code>events</code>{" "}
+    folder of your content answers that, and it joins the Events tab beside the
+    generated pages. Keep the client code in files next to it and embed them,
+    so the page shows code you run rather than code you retyped.
+  </p>
+  <p>
+    The clients use Confluent's Node.js client. Add it to the docs project as a
+    dev dependency, since only the examples use it:
+  </p>
+  <CodeBlock
+    code="npm install --save-dev @confluentinc/kafka-javascript@1.10.1"
+    lang="bash"
+  />
+  <p>
+    Put the three files in <code>docs/events/_examples/</code>. The underscore
+    keeps that folder out of routing, search, and the sidebar. The first file
+    holds the connection settings: a local broker by default, and SASL over
+    TLS once credentials are set.
+  </p>
+  <CodeBlock
+    code={`// Local broker by default. Set KAFKA_USERNAME and KAFKA_PASSWORD to use
+// SASL/SCRAM-SHA-512 over TLS, as the production cluster requires.
+export const config = {
+  "bootstrap.servers": process.env.KAFKA_BROKERS ?? "localhost:9092",
+  ...(process.env.KAFKA_USERNAME && {
+    "security.protocol": "SASL_SSL",
+    "sasl.mechanisms": "SCRAM-SHA-512",
+    "sasl.username": process.env.KAFKA_USERNAME,
+    "sasl.password": process.env.KAFKA_PASSWORD,
+  }),
+};`}
+    lang="js"
+    title="docs/events/_examples/kafka-config.mjs"
+  />
+  <p>
+    The consumer reads <code>orders.created</code> in its own consumer group,
+    so it gets every event no matter who else consumes the topic, and it skips
+    any <code>eventId</code> it has already processed:
+  </p>
+  <CodeBlock
+    code={`import { KafkaJS } from "@confluentinc/kafka-javascript";
+import { config } from "./kafka-config.mjs";
+
+const consumer = new KafkaJS.Kafka().consumer({
+  ...config,
+  "group.id": "fulfillment",
+  "auto.offset.reset": "earliest",
+});
+
+// Delivery is at least once. Keep processed IDs in your database in
+// production; a Set is enough to show the idea.
+const processed = new Set();
+
+await consumer.connect();
+await consumer.subscribe({ topics: ["orders.created"] });
+await consumer.run({
+  eachMessage: async ({ message }) => {
+    const event = JSON.parse(message.value.toString());
+    if (processed.has(event.eventId)) return;
+    processed.add(event.eventId);
+    console.log(
+      \`Fulfill \${event.orderId} (key \${message.key}): \${event.items.length} line items\`
+    );
+  },
+});`}
+    lang="js"
+    title="docs/events/_examples/consume-orders.mjs"
+  />
+  <p>
+    The producer sends one cancel request, keyed by the order ID, so every
+    request for one order lands on the same partition, in order:
+  </p>
+  <CodeBlock
+    code={`import { KafkaJS } from "@confluentinc/kafka-javascript";
+import { config } from "./kafka-config.mjs";
+
+const [orderId, reason = "customer_request"] = process.argv.slice(2);
+const producer = new KafkaJS.Kafka().producer(config);
+
+await producer.connect();
+await producer.send({
+  topic: "orders.cancel-requests",
+  messages: [
+    {
+      key: orderId,
+      value: JSON.stringify({ orderId, reason, requestedBy: "support-desk" }),
+    },
+  ],
+});
+await producer.disconnect();
+console.log(\`Requested cancellation of \${orderId}\`);`}
+    lang="js"
+    title="docs/events/_examples/request-cancel.mjs"
+  />
+  <p>
+    The page itself is short. Each <code>&lt;include&gt;</code> embeds a file
+    as a code block, and <code>meta</code> gives it a title:
+  </p>
+  <CodeBlock
+    code={`---
+title: Consume and produce order events
+description: Connect to the Acme Kafka cluster from Node.js, consume Order created events, and request cancellations.
+---
+
+Locally, the clients connect to \`localhost:9092\` with no credentials. In
+production, set \`KAFKA_BROKERS\` to \`kafka.acme.example:9093\`, and set
+\`KAFKA_USERNAME\` and \`KAFKA_PASSWORD\` to your service's credentials.
+
+<include meta='title="kafka-config.mjs"'>./_examples/kafka-config.mjs</include>
+
+## Consume Order created
+
+The Orders service publishes [Order created](/events/orders/order-created).
+Consume it in your own consumer group. Delivery is at least once, so
+deduplicate on \`eventId\`.
+
+<include meta='title="consume-orders.mjs"'>./_examples/consume-orders.mjs</include>
+
+## Request a cancellation
+
+The Orders service consumes [Cancel an order](/events/commands/cancel-order).
+Send one message per request, keyed by the order ID.
+
+<include meta='title="request-cancel.mjs"'>./_examples/request-cancel.mjs</include>`}
+    lang="mdx"
+    title="docs/events/integrate.mdx"
+  />
+  <p>
+    The page lives at <code>/events/integrate</code>. Its links to operation
+    pages are ordinary links, so <code>blume validate</code> checks them like
+    any other.
+  </p>
+
+  <h2>Run the clients against a local broker</h2>
+  <p>
+    Before the page tells anyone the code works, run it. Kafka's official image
+    starts a single-node broker on <code>localhost:9092</code>; create both
+    topics in it:
+  </p>
+  <CodeBlock
+    code={`docker run -d --name kafka -p 9092:9092 apache/kafka:4.3.1
+docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic orders.created --partitions 12
+docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic orders.cancel-requests --partitions 3`}
+    lang="bash"
+  />
+  <p>Start the consumer and leave it running:</p>
+  <CodeBlock code="node docs/events/_examples/consume-orders.mjs" lang="bash" />
+  <p>
+    In a second terminal, stand in for the Orders service: publish the spec's
+    example event twice, keyed by order ID.
+  </p>
+  <CodeBlock
+    code={`event='{"eventId":"evt_01J9ZK3Q8X","orderId":"ord_7Hq2","customerId":"cus_19f","createdAt":"2026-09-27T10:15:00Z","currency":"USD","total":4800,"items":[{"sku":"MUG-BLUE","quantity":2,"unitPrice":1400},{"sku":"TEE-M","quantity":1,"unitPrice":2000}]}'
+printf 'ord_7Hq2|%s\\nord_7Hq2|%s\\n' "$event" "$event" \\
+  | kcat -b localhost:9092 -t orders.created -P -K '|'`}
+    lang="bash"
+  />
+  <p>
+    Among the client's own connection logs, the consumer prints one line, not
+    two, because the second copy has an <code>eventId</code> it has already
+    seen:
+  </p>
+  <CodeBlock code="Fulfill ord_7Hq2 (key ord_7Hq2): 2 line items" lang="text" />
+  <p>Then send a cancel request and read it back:</p>
+  <CodeBlock
+    code={`node docs/events/_examples/request-cancel.mjs ord_7Hq2
+kcat -b localhost:9092 -t orders.cancel-requests -C -e -f '%k %s\\n'`}
+    lang="bash"
+  />
+  <p>
+    kcat prints the key, then the payload, in the shape the contract
+    describes. Run the same steps in CI to catch a client upgrade or topic
+    change that breaks the embedded files.
+  </p>
+
+  <h2>Build and check</h2>
+  <p>Build the site and serve the production build:</p>
+  <CodeBlock
+    code={`npm run build
+npx blume preview`}
+    lang="bash"
+  />
+  <p>Open the URL it prints and check:</p>
+  <ul>
+    <li>
+      <strong>Operation URLs.</strong> <code>/events/orders/order-created</code>{" "}
+      loads on its own, not only from the sidebar.
+    </li>
+    <li>
+      <strong>Search.</strong> Searching "order created" finds the
+      operation. Search matches an operation's title, description, tag, and
+      signature, not the fields in its tables, so name the fields readers look
+      for in the description.
+    </li>
+    <li>
+      <strong>The Markdown copy.</strong>{" "}
+      <code>/events/orders/order-created.md</code> returns the description and{" "}
+      <code>SEND orders.created</code>.
+    </li>
+  </ul>
+  <p>
+    Then run <code>npx blume validate</code> to check every internal link,
+    including the ones from <code>integrate.mdx</code> to the operation pages.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The build fails with BLUME_ASYNCAPI_UNAVAILABLE</h3>
+  <p>
+    Blume couldn't load the spec, and the message says why: a wrong path, a
+    file with no <code>asyncapi</code> version field, or a 2.x document without{" "}
+    <code>@asyncapi/converter</code> installed, in which case the diagnostic
+    suggests the install command. <code>blume dev</code> only warns and leaves
+    the reference out, so a working dev server can hide it.
+  </p>
+  <h3>An operation is missing</h3>
+  <p>
+    Look for <code>BLUME_ASYNCAPI_SKIPPED_OPERATION</code> in the output. It
+    names the operation and the reason: its <code>action</code> isn't{" "}
+    <code>send</code> or <code>receive</code> (a leftover 2.x{" "}
+    <code>publish</code>, say), or its <code>channel</code> points at a channel
+    that isn't declared under <code>channels</code>.
+  </p>
+  <h3>The reference is empty</h3>
+  <p>
+    <code>BLUME_ASYNCAPI_EMPTY</code> means the file parsed but has no
+    operations. Pages come from <code>operations</code>, not{" "}
+    <code>channels</code>, so a document that only declares channels renders
+    nothing. Add an operation per topic your service sends to or receives
+    from.
+  </p>
+  <h3>SEND and RECEIVE look backwards</h3>
+  <p>
+    The badges describe your service, not the reader. If the page for a topic
+    you produce says RECEIVE, the action is flipped in the spec, often from a
+    hand-converted 2.x <code>publish</code>. Change it to <code>send</code>,
+    and the sample switches from a produce command to a consume command too.
+  </p>
+  <h3>The payload shows a note instead of a table</h3>
+  <p>
+    The payload is a multi-format schema, <code>{"{ schemaFormat, schema }"}</code>,
+    whose <code>schemaFormat</code> is Avro or Protobuf. Blume renders
+    AsyncAPI, JSON Schema, and OpenAPI schemas as tables, and shows a note for
+    other formats. The example payload still appears if the message has{" "}
+    <code>examples</code>, so add one, and describe the key fields in the
+    message's <code>description</code>.
+  </p>
+  <h3>The sample uses the wrong broker or topic</h3>
+  <p>
+    The sample uses the first server the channel is available on, and the
+    channel's <code>bindings.kafka.topic</code> as the topic, or its{" "}
+    <code>address</code> when the binding sets none. List the server readers
+    should see by default first, or give the channel its own{" "}
+    <code>servers</code> list. If the topic is still wrong, check whether an
+    old <code>topic</code> in the binding overrides the address.
+  </p>
+</GuidePage>

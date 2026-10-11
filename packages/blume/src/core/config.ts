@@ -4,6 +4,7 @@ import { basename } from "pathe";
 import { z } from "zod";
 
 import { c15t } from "../consent/c15t.ts";
+import { ACCENTS, invalidColorSettings } from "../theme/palette.ts";
 import type { BlumeConfig } from "./config-input.ts";
 import { applyDeploymentEnv } from "./deployment-env.ts";
 import {
@@ -262,6 +263,69 @@ const configIssues = (
     );
 };
 
+const COLOR_FORMS =
+  "a hex value like #6340ac, rgb(), hsl(), oklch(), or a color name like rebeccapurple";
+
+/**
+ * A warning for each configured color that isn't a CSS color, at the line
+ * that sets it. The schema has always taken any string, so this warns rather
+ * than failing a build that used to pass.
+ */
+const colorDiagnostics = (
+  config: ResolvedConfig,
+  configFile: string | null
+): Diagnostic[] => {
+  const invalid = invalidColorSettings(config);
+  if (invalid.length === 0) {
+    return [];
+  }
+  const source =
+    configFile && existsSync(configFile)
+      ? readFileSync(configFile, "utf-8")
+      : undefined;
+  const located = diagnosticsFromIssues(
+    invalid.map((setting) => ({
+      message: `${JSON.stringify(setting.value)} isn't a CSS color, so ${
+        setting.path[0] === "seo"
+          ? "the social card renderer rejects it"
+          : "browsers ignore the styles that use it"
+      }.`,
+      path: setting.path,
+    })),
+    {
+      code: "BLUME_THEME_COLOR_INVALID",
+      file: configFile ?? undefined,
+      source,
+    }
+  );
+  return located.map((diagnostic, index) => ({
+    ...diagnostic,
+    severity: "warning",
+    suggestion: invalid[index]?.presets
+      ? `Use a preset (${Object.keys(ACCENTS).join(", ")}) or a CSS color: ${COLOR_FORMS}.`
+      : `Use a CSS color: ${COLOR_FORMS}.`,
+  }));
+};
+
+/** A deprecation warning while `analytics` still lists adapters. */
+const analyticsDiagnostics = (
+  config: ResolvedConfig,
+  configFile: string | null
+): Diagnostic[] =>
+  config.analytics.length > 0
+    ? [
+        {
+          code: "BLUME_ANALYTICS_DEPRECATED",
+          file: configFile ?? undefined,
+          message:
+            "blume/analytics is deprecated and will be removed in the next major release. Existing adapters remain supported in this release but will receive no new integrations.",
+          severity: "warning",
+          suggestion:
+            "Move integrations to blume/integrations/* in consent.ts. See https://useblume.dev/docs/configuration/analytics-migration.",
+        },
+      ]
+    : [];
+
 /**
  * Load and validate the project config. When no config file exists, schema
  * defaults produce a fully resolved config so the zero-boilerplate path works.
@@ -360,8 +424,11 @@ export const loadConfig = async (
   const site = config.deployment.options.site ?? options.devServerUrl;
 
   // OG images need an absolute `og:image`, so they default on once a site URL
-  // is known and off otherwise. An explicit `seo.og.enabled` always wins.
-  const ogEnabled = config.seo.og.enabled ?? Boolean(site);
+  // is known and off otherwise — and off beside a default `seo.og.image`,
+  // which every page shows instead of its card. An explicit `seo.og.enabled`
+  // always wins.
+  const ogEnabled =
+    config.seo.og.enabled ?? (Boolean(site) && !config.seo.og.image);
 
   return {
     config: {
@@ -376,20 +443,10 @@ export const loadConfig = async (
       seo: { ...config.seo, og: { ...config.seo.og, enabled: ogEnabled } },
     },
     configFile,
-    diagnostics:
-      config.analytics.length > 0
-        ? [
-            {
-              code: "BLUME_ANALYTICS_DEPRECATED",
-              file: configFile ?? undefined,
-              message:
-                "blume/analytics is deprecated and will be removed in the next major release. Existing adapters remain supported in this release but will receive no new integrations.",
-              severity: "warning",
-              suggestion:
-                "Move integrations to blume/integrations/* in consent.ts. See https://useblume.dev/docs/configuration/analytics-migration.",
-            },
-          ]
-        : [],
+    diagnostics: [
+      ...analyticsDiagnostics(config, configFile),
+      ...colorDiagnostics(config, configFile),
+    ],
     themeFontsConfigured,
   };
 };

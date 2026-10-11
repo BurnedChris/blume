@@ -1,0 +1,513 @@
+---
+// Strapi as a docs CMS: checked against the Strapi source docs, the content
+// sources overview (caching, sync, preview), the configuration (images),
+// folder meta, and deployment docs, the strapi() adapter, its Blocks
+// lowering, and the shared REST helpers (core/sources/strapi.ts,
+// strapi-blocks.ts, remote.ts, lower.ts), folder meta discovery
+// (core/meta.ts), and the init scaffold on main. Strapi steps ran against a
+// Strapi 5.55.1 project made with create-strapi (SQLite, Node 24): the Doc
+// type below, seeded through the REST and admin APIs; the response shown is
+// that project's, trimmed. Also confirmed there: a Read-only token and the
+// Public role (once granted find) both read drafts with status=draft,
+// populate on a Blocks field is a 400, a Blocks image keeps the alt text it
+// was inserted with, and a webhook POSTs JSON on publish and unpublish.
+// Blume's strapiSource ran against it under bun, published and preview.
+// Admin labels from the 5.55.1 admin translations; deploy hooks against
+// Vercel's docs (September 2026). Not yet run end to end: no blume dev or
+// blume build was run, so the sidebar order from meta.ts and remote image
+// optimization for CMS pages are untested. Review: aligned the preview,
+// deploy, and rebuild steps with the other CMS guides (Vercel deploy hooks,
+// VERCEL_ENV, and Deployment Protection checked against Vercel's docs), and
+// corrected the missing-token claim against cli/prepare.ts and
+// core/sources/cache.ts. Rechecked fields.order (sources/shared.ts,
+// core/sources/remote.ts) and init's .gitignore (cli/commands/init.ts).
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("strapi-documentation-website")}>
+  <p>
+    Point Blume's <code>strapi()</code> source at a Strapi content type.
+    Editors write and publish in Strapi, and Blume reads the published
+    entries through Strapi's REST API when the site builds, turning each one
+    into a static page with its own URL, sidebar entry, and search entry. The
+    docs site is plain HTML: it doesn't call Strapi when someone reads a page.
+    A Strapi webhook starts a new build whenever an editor publishes, so a
+    change reaches readers when that build finishes, not the moment they
+    click Publish.
+  </p>
+  <p>
+    By the end of this guide you have a Doc content type in Strapi 5, a Blume
+    site that serves those entries under <code>/guides</code> beside local
+    Markdown pages, drafts kept off production but reviewable on a protected
+    preview, and a rebuild on every publish. The steps were checked against Strapi 5.55.1. Blume also reads
+    Strapi 4's response shape, but the admin steps here are Strapi 5's.
+  </p>
+  <p>
+    Skip the CMS if only developers write your docs: Blume's default is a
+    folder of Markdown in Git. If your writers already live in Notion,{" "}
+    <a href="/guides/notion-documentation-website">publish from a Notion database</a>{" "}
+    instead. And if content must change the instant it's
+    published, or differ per reader, you need a frontend that queries Strapi
+    on every request, which Blume doesn't do.
+  </p>
+
+  <h2>Define a docs content type</h2>
+  <p>
+    If you don't have a Strapi project yet, create one with its default SQLite
+    database and start it:
+  </p>
+  <CodeBlock
+    code={`npx create-strapi@5.55.1 acme-cms --non-interactive --skip-cloud
+cd acme-cms
+npm run develop`}
+    lang="bash"
+  />
+  <p>
+    Open <code>http://localhost:1337/admin</code> and create the first
+    administrator. In the <strong>Content-Type Builder</strong>, choose{" "}
+    <strong>Create new collection type</strong>, name it Doc, and add four
+    fields:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Field</th>
+        <th scope="col">Type</th>
+        <th scope="col">What Blume does with it</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>title</code></td>
+        <td>Text (Short text), required</td>
+        <td>The page title and sidebar label</td>
+      </tr>
+      <tr>
+        <td><code>description</code></td>
+        <td>Text (Long text)</td>
+        <td>The description under the title, and for search engines</td>
+      </tr>
+      <tr>
+        <td><code>slug</code></td>
+        <td>UID, with <strong>Attached field</strong> set to title</td>
+        <td>The page's path under the prefix</td>
+      </tr>
+      <tr>
+        <td><code>content</code></td>
+        <td>Rich text (Blocks)</td>
+        <td>The page body</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Those are the names Blume looks for by default, so nothing needs mapping.
+    Leave Draft &amp; Publish on: it's what keeps unfinished pages off the
+    site. The builder saves the type as a schema file. Commit it, because the
+    Content-Type Builder only edits types while Strapi runs with{" "}
+    <code>strapi develop</code>, so this file is how the type reaches your
+    production Strapi:
+  </p>
+  <CodeBlock
+    code={`{
+  "kind": "collectionType",
+  "collectionName": "docs",
+  "info": {
+    "singularName": "doc",
+    "pluralName": "docs",
+    "displayName": "Doc"
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "attributes": {
+    "title": { "type": "string", "required": true },
+    "description": { "type": "text" },
+    "slug": { "type": "uid", "targetField": "title", "required": true },
+    "content": { "type": "blocks" }
+  }
+}`}
+    lang="json"
+    title="src/api/doc/content-types/doc/schema.json"
+  />
+
+  <h2>Add content and a read-only token</h2>
+  <p>
+    In the Content Manager, create a Doc titled Authenticate with an API key,
+    with the slug <code>authentication</code>. In its content, add a
+    paragraph, a Heading 2 called Create a key, an image from the Media
+    Library with alternative text, and a code block. Publish it. Then create a
+    second Doc, Send your first message, with the slug{" "}
+    <code>send-your-first-message</code>, and save it without publishing.
+  </p>
+  <p>
+    Blume authenticates with an API token. Go to{" "}
+    <strong>Settings</strong>, then <strong>Global Settings</strong>, then{" "}
+    <strong>API Tokens</strong>, and choose{" "}
+    <strong>Create new API Token</strong>. Set <strong>Token type</strong> to
+    Read-only, pick a <strong>Token duration</strong>, save, and copy the
+    token. Check what Strapi returns:
+  </p>
+  <CodeBlock
+    code={`export STRAPI_API_TOKEN=paste-your-token-here
+curl -H "Authorization: Bearer $STRAPI_API_TOKEN" http://localhost:1337/api/docs`}
+    lang="bash"
+  />
+  <p>Strapi 5.55.1 answers with this, trimmed to the parts that matter:</p>
+  <CodeBlock
+    code={`{
+  "data": [
+    {
+      "id": 2,
+      "documentId": "zlm1bcbg70ln4rr8sa05ms78",
+      "title": "Authenticate with an API key",
+      "description": "Create an API key and send it with every request.",
+      "slug": "authentication",
+      "content": [
+        {
+          "type": "heading",
+          "level": 2,
+          "children": [{ "type": "text", "text": "Create a key" }]
+        },
+        {
+          "type": "image",
+          "image": {
+            "name": "api-key-settings.png",
+            "alternativeText": "The API keys page in Acme settings",
+            "url": "/uploads/api_key_settings_15ff683d25.png",
+            "mime": "image/png",
+            "provider": "local"
+          },
+          "children": [{ "type": "text", "text": "" }]
+        }
+      ],
+      "createdAt": "2026-09-27T23:48:03.735Z",
+      "updatedAt": "2026-09-27T23:48:03.735Z",
+      "publishedAt": "2026-09-27T23:48:03.738Z"
+    }
+  ],
+  "meta": {
+    "pagination": { "page": 1, "pageSize": 25, "pageCount": 1, "total": 1 }
+  }
+}`}
+    lang="json"
+  />
+  <p>
+    Three things to notice. Only the published Doc is there, because the REST
+    API returns published versions unless asked for drafts. The fields sit at
+    the top level beside <code>documentId</code>; Strapi 4 wraps them in{" "}
+    <code>attributes</code>, which Blume flattens. And the image block carries
+    its file's URL and alt text inside the content field, so there's nothing
+    to populate for it.
+  </p>
+  <Callout type="warning">
+    Don't give the Public role find access instead of using a token. On
+    Strapi 5.55.1, any caller allowed to find Docs can request drafts by
+    adding <code>?status=draft</code>, and with find granted to Public, that's
+    anyone. A Read-only token can read drafts too, which Blume's preview relies
+    on, so keep the token in environment variables and out of your repository.
+  </Callout>
+
+  <h2>Add the Strapi source</h2>
+  <p>In a new folder, start a Blume project:</p>
+  <CodeBlock code="npx blume init acme-docs" lang="bash" />
+  <p>
+    When it asks where your content lives, pick both <code>filesystem</code>{" "}
+    and <code>strapi</code>. That keeps a local <code>docs/</code> folder for
+    pages you'd rather write in Markdown, like the home page. The Strapi source
+    needs no extra package. Point it at your content type:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { filesystem, strapi } from "blume/sources";
+
+export default defineConfig({
+  title: "Acme Docs",
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      strapi({
+        url: process.env.STRAPI_URL ?? "http://localhost:1337",
+        contentType: "docs",
+        prefix: "guides",
+      }),
+    ],
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>url</code> is Strapi's origin: Blume adds <code>/api</code> itself.{" "}
+    <code>contentType</code> is the plural API ID, and every entry is served
+    under <code>prefix</code>. If your fields have other names, or you used a
+    Rich text (Markdown) field instead of Blocks, map them with{" "}
+    <code>fields</code>, for example{" "}
+    <code>{'fields: { body: "markdown" }'}</code>. The keys are{" "}
+    <code>title</code>, <code>description</code>, <code>slug</code>,{" "}
+    <code>body</code>, <code>lastModified</code> (which defaults to{" "}
+    <code>updatedAt</code>), and <code>order</code> (which has no default).
+  </p>
+  <p>
+    The source reads its token from <code>STRAPI_API_TOKEN</code>. Blume loads{" "}
+    <code>.env.local</code> for you, and <code>blume init</code> already
+    listed it in <code>.gitignore</code>, so put it there:
+  </p>
+  <CodeBlock
+    code={`echo "STRAPI_API_TOKEN=paste-your-token-here" >> .env.local`}
+    lang="bash"
+  />
+
+  <h2>Check the imported pages</h2>
+  <p>
+    Run <code>npx blume dev</code> and open{" "}
+    <code>/guides/authentication</code>. Blume turned the entry into a
+    Markdown page like this, trimmed here:
+  </p>
+  <CodeBlock
+    code={`---
+title: Authenticate with an API key
+description: Create an API key and send it with every request.
+---
+Every request to the Acme API needs an **API key**. Create one in [your settings](https://app.acme.example/settings/api-keys).
+
+## Create a key
+
+![The API keys page in Acme settings](http://localhost:1337/uploads/api_key_settings_15ff683d25.png)`}
+    lang="md"
+  />
+  <p>
+    Paragraphs, headings, nested lists, quotes, code blocks with their
+    language, links, images, and bold, italic, strikethrough, and inline code
+    all carry over. Underline doesn't: the text stays, plain. The title is
+    already the page's top heading, so write sections with Heading 2 and
+    Heading 3. The Blocks editor has no tables, callouts, or tabs, and
+    Strapi pages render as plain Markdown, so a page that needs components
+    belongs in an MDX file in <code>docs/</code>.
+  </p>
+  <p>
+    Strapi pages sit in a Guides group in the sidebar, sorted by title. To
+    set the order, add a Number field to Doc and name it in{" "}
+    <code>fields.order</code>, so editors control it in Strapi. Or keep the
+    order in the repository with{" "}
+    <a href="/docs/content/meta">folder meta</a> for the prefix, listing
+    slugs:
+  </p>
+  <CodeBlock
+    code={`import { defineMeta } from "blume";
+
+export default defineMeta({
+  pages: ["authentication", "send-your-first-message"],
+});`}
+    lang="ts"
+    title="docs/guides/meta.ts"
+  />
+  <p>
+    The dev server fetches Strapi once and then serves that{" "}
+    <a href="/docs/content/sources#caching-and-offline-builds">snapshot</a>,
+    even across restarts. After an edit in Strapi, run <code>npx blume sync</code>{" "}
+    and the running server reloads. To pick up edits on their own while you
+    work, set <code>pollInterval</code> (in seconds) on the source. It only
+    affects the dev server.
+  </p>
+
+  <h2>Make images work on a static site</h2>
+  <p>
+    With Strapi's default local upload provider, an image's URL is a path like{" "}
+    <code>/uploads/api_key_settings_15ff683d25.png</code>. Blume resolves it
+    against <code>url</code>, as you saw above, so the published page loads
+    the image from your Strapi server. That's the one part of the page that
+    still depends on Strapi, and readers' browsers must be able to reach it.
+    You have two ways to remove that dependency:
+  </p>
+  <ul>
+    <li>
+      <strong>An upload provider.</strong> Store media in a bucket or CDN with
+      a Strapi upload provider. Its URLs are already absolute, and Blume passes
+      them through.
+    </li>
+    <li>
+      <strong>Build-time optimization.</strong> Authorize Strapi's host with{" "}
+      <code>{'image: { domains: ["cms.acme.example"] }'}</code> in{" "}
+      <code>blume.config.ts</code>, and Blume downloads and{" "}
+      <a href="/docs/configuration#images">optimizes those images</a> when it
+      builds, like local ones.
+    </li>
+  </ul>
+  <p>
+    An image block is a copy of the file's details from when it was inserted.
+    Changing the alt text in the Media Library later doesn't change the page:
+    insert the image again in the entry and republish.
+  </p>
+  <p>
+    Markdown fields work differently. Blume passes their text through as
+    written and doesn't resolve relative <code>/uploads/</code> paths in them,
+    so those images break. Strapi's Markdown editor inserts media as absolute
+    URLs on the server the admin talks to, so an image added while you work on
+    a local Strapi points at <code>localhost</code>. Check image URLs in
+    Markdown fields before you publish.
+  </p>
+  <p>
+    You don't need to set <code>populate</code> for any of this. Blume sends{" "}
+    <code>populate=*</code> by default, which fills media and relation fields,
+    and a Blocks field needs none. Strapi 5 rejects a Blocks field's name as a{" "}
+    <code>populate</code> value with a 400.
+  </p>
+
+  <h2>Preview drafts</h2>
+  <p>Start the dev server in preview mode:</p>
+  <CodeBlock code="npx blume dev --preview" lang="bash" />
+  <p>
+    Blume now asks Strapi 5 for drafts too, so Send your first message
+    appears, and a published Doc with unpublished edits shows its latest
+    draft. Without the flag, Blume requests only published entries, so drafts
+    never reach a production build. After more edits in Strapi, run{" "}
+    <code>npx blume sync --preview</code>. Keep the flag: a plain{" "}
+    <code>blume sync</code> regenerates the site from published content.
+    Preview and published content are cached separately, so a production
+    build never falls back to drafts.
+  </p>
+
+  <h2>Deploy with protected previews</h2>
+  <p>
+    The site builds to static files. This guide uses Vercel, where production
+    can run the normal build and preview deployments can run the preview
+    build behind a sign-in, so editors review drafts without running Blume
+    themselves. Add a script that picks between them using Vercel's{" "}
+    <code>VERCEL_ENV</code> variable:
+  </p>
+  <CodeBlock
+    code={`{
+  "scripts": {
+    "dev": "blume dev",
+    "build": "blume build",
+    "build:vercel": "if [ \\"$VERCEL_ENV\\" = \\"preview\\" ]; then blume build --preview; else blume build; fi"
+  }
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <ol>
+    <li>Push the Blume project to a GitHub repository and import it in Vercel.</li>
+    <li>
+      Set the build command to <code>npm run build:vercel</code>, the output
+      directory to <code>dist</code>, and Node.js to 22 or later.
+    </li>
+    <li>
+      Under <strong>Environment Variables</strong>, add{" "}
+      <code>STRAPI_API_TOKEN</code>, and <code>STRAPI_URL</code> set to your
+      production Strapi, like <code>https://cms.acme.example</code>, for
+      Production and Preview.
+    </li>
+    <li>
+      Under <strong>Deployment Protection</strong>, turn on Vercel
+      Authentication with <strong>Standard Protection</strong>, which protects
+      every deployment except your production domains.
+    </li>
+  </ol>
+  <p>
+    The build, not the reader, calls Strapi, so the token never reaches the
+    browser. It also means Vercel's build machines must reach your Strapi: one
+    on <code>localhost</code> or a private network can't be read from there.
+    In that case, build inside your network and upload <code>dist/</code>.
+  </p>
+  <p>
+    To give editors a review copy with a fixed address, push a branch named{" "}
+    <code>preview</code>. Vercel deploys it as a preview deployment, and its
+    branch URL stays the same from one build to the next. For other hosts,
+    the <a href="/docs/deployment#private-docs">private docs</a> section lists
+    their protection options.
+  </p>
+  <Callout type="warning">
+    A preview build is an ordinary static site. Drafts land in its pages,
+    search index, Markdown copies, and <code>llms.txt</code>, and Blume adds no
+    password or <code>noindex</code>. Deploy it only behind access protection,
+    never to your public domain.
+  </Callout>
+
+  <h2>Rebuild when an editor publishes</h2>
+  <p>
+    Production only changes when it rebuilds. In your Vercel project's
+    settings, open <strong>Git</strong>, and under{" "}
+    <strong>Deploy Hooks</strong> create a hook for your production branch.
+    Vercel gives you a URL that starts a build when it receives a{" "}
+    <code>POST</code> request. Anyone with its URL can start a build, so treat
+    it like a password.
+  </p>
+  <p>
+    In Strapi, go to <strong>Settings</strong>, then{" "}
+    <strong>Global Settings</strong>, then <strong>Webhooks</strong>, and
+    choose <strong>Create new webhook</strong>:
+  </p>
+  <ol>
+    <li>Name it Rebuild docs, and paste the deploy hook as its URL.</li>
+    <li>
+      Under <strong>Events</strong>, in the Entry row, check Publish,
+      Unpublish, and Delete.
+    </li>
+    <li>
+      Save, then choose <strong>Trigger</strong> to send a test request. A new
+      deployment should start in Vercel.
+    </li>
+  </ol>
+  <p>
+    Strapi sends a <code>POST</code> with a JSON description of the entry, and
+    Vercel ignores the body. Publishing, unpublishing, or deleting now starts
+    a build, and saving a draft doesn't: leave Update unchecked, since every
+    draft save fires it. Webhooks can't be limited to one content type, so a
+    publish anywhere in Strapi starts a docs build. The site keeps serving the
+    previous deployment until the build finishes, and a failed build leaves it
+    in place.
+  </p>
+  <p>
+    A preview deployment shows drafts as they were when it built. To refresh
+    it, create a second deploy hook for the <code>preview</code> branch and
+    call it when a draft is ready for review, with{" "}
+    <code>curl -X POST "$PREVIEW_DEPLOY_HOOK"</code>. Calling it on every
+    draft save would start a build per edit, and Vercel accepts at most 60
+    hook calls an hour per project.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The build fails with 401 Unauthorized or 403 Forbidden</h3>
+  <p>
+    <code>BLUME_SOURCE_FETCH_FAILED</code> quotes Strapi's status. The token
+    isn't set where the build runs, has expired, or is a Custom token without
+    find on Doc. An unset token also gets a{" "}
+    <code>BLUME_MISSING_SECRET</code> warning, printed before the fetch. A
+    changed variable only applies to new builds, so redeploy.
+  </p>
+  <h3>The build fails with 404 Not Found</h3>
+  <p>
+    Check <code>contentType</code> is the plural API ID (<code>docs</code>,
+    not <code>doc</code>), and that <code>url</code> doesn't end in{" "}
+    <code>/api</code>, since Blume adds it.
+  </p>
+  <h3>No Strapi pages show up</h3>
+  <p>
+    Nothing is published. Production builds only read published entries, so
+    run the <code>curl</code> command above: if <code>data</code> is empty,
+    publish in Strapi. In dev, run <code>npx blume sync</code> too.
+  </p>
+  <h3>Images are broken</h3>
+  <p>
+    Open the image URL on its own. A relative <code>/uploads/</code> path from
+    a Markdown field, a <code>localhost</code> URL, or a Strapi that isn't
+    publicly reachable each breaks it. Fix the URL in Strapi, or move media to
+    an upload provider.
+  </p>
+  <h3>A published change isn't on the site</h3>
+  <p>
+    Check the webhook has the Publish event and that its Trigger test starts a
+    Vercel deployment. If the deployment ran, look at its build log for a
+    Strapi error.
+  </p>
+  <h3>The site shows old content with a warning</h3>
+  <p>
+    <code>BLUME_SOURCE_OFFLINE</code> means the fetch failed and Blume served
+    the last snapshot it had. A fresh build machine has no snapshot, so there
+    the same failure stops the build and your last deployment stays live.
+  </p>
+</GuidePage>

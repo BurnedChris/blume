@@ -14,7 +14,7 @@ agents: {
 
 有効になっている場合、`blume build` はサイトのルートに 2 つのファイルを書き出します:
 
-- **`/llms.txt`** — コンパクトなインデックス。サイトのタイトルと説明に続いて、各ページのリンクとその要約の一覧が、サイドバーの構成を反映したセクションに整理されて並びます。フォルダやグループは見出しになるため、エージェントはドキュメントを 1 つのフラットな塊としてではなく、構造として認識できます。
+- **`/llms.txt`** — コンパクトなインデックス。サイトのタイトルと説明に続いて、各ページのリンクとその要約（ページのメタディスクリプション。ページで `seo.description` が設定されていればそれを、設定されていなければ `description` を使用します）の一覧が、サイドバーの構成を反映したセクションに整理されて並びます。フォルダやグループは見出しになるため、エージェントはドキュメントを 1 つのフラットな塊としてではなく、構造として認識できます。
 - **`/llms-full.txt`** — コーパス全体。各ページの Markdown 本文がソース URL とともに 1 つのファイルにまとめられます。
 
 下書きページ、サイドバーから非表示にされたページ（`sidebar.hidden`、またはトップレベルの `hidden` 省略形）、および `noindex` ページは除外されます。ただし、生成された API リファレンスのページは例外で、両方のファイルに含めるかどうかは `noindex` ではなく、後述の `openapi` によって決まります。リンクとソース URL が絶対アドレスとして解決されるように、[`deployment.site`](/docs/deployment) を設定してください。
@@ -45,7 +45,7 @@ agents: {
 
 ## 生成されるセクション [#generated-sections]
 
-`llms.txt` の末尾には、設定不要で生成される 2 つのセクションが置かれます。**Agent skills** には、[`agents.skills`](/docs/discoverability/agent-discovery#skills-discovery) を通じて公開された各スキルが、その説明（スキル自身がいつ使うべきかを示している箇所）とともに一覧表示されます。**Agent resources** には、ビルドが出力するすべての機械可読なアーティファクトへのリンクが並びます — `llms-full.txt`、ページごとの[生の Markdown](/docs/discoverability/markdown) ミラー、[MCP サーバー](/docs/discoverability/mcp)とそのディスカバリードキュメント、スキルのインデックス、[API カタログ](/docs/discoverability/agent-discovery#api-catalog)、[AI カタログ](/docs/discoverability/agent-discovery#ai-catalog)、[`agent-readability.json`](/docs/discoverability/agent-discovery#agent-readability)、そして[サイトマップ](/docs/discoverability/sitemap-and-robots#sitemap)です。いずれも存在する場合にのみ掲載されるため、`llms.txt` しか読まないエージェントであっても、全体像を把握できます。
+`llms.txt` の末尾には、設定不要で生成される 2 つのセクションが置かれます。**Agent skills** には、[サイト独自のスキル](/docs/discoverability/agent-discovery#your-sites-skill)と、[`agents.skills`](/docs/discoverability/agent-discovery#skills-discovery) を通じて公開された各スキルが、その説明（スキル自身がいつ使うべきかを示している箇所）とともに一覧表示されます。**Agent resources** には、ビルドが出力するすべての機械可読なアーティファクトへのリンクが並びます — `llms-full.txt`、ページごとの[生の Markdown](/docs/discoverability/markdown) ミラー、[MCP サーバー](/docs/discoverability/mcp)とそのディスカバリードキュメント、スキルのインデックス、[API カタログ](/docs/discoverability/agent-discovery#api-catalog)、[AI カタログ](/docs/discoverability/agent-discovery#ai-catalog)、[`agent-readability.json`](/docs/discoverability/agent-discovery#agent-readability)、そして[サイトマップ](/docs/discoverability/sitemap-and-robots#sitemap)です。いずれも存在する場合にのみ掲載されるため、`llms.txt` しか読まないエージェントであっても、全体像を把握できます。
 
 ## ページの除外 [#excluding-a-page]
 
@@ -59,7 +59,7 @@ ai:
 ---
 ```
 
-そのページは引き続きレンダリングされ、検索にも残り、サイトマップ内の位置も保持されます。スキップされるのは `llms.txt` 系のファイルだけです。
+そのページは引き続きレンダリングされ、検索にも残り、サイトマップ内の位置も保持されます。スキップされるのは `llms.txt` 系のファイルと、[サイト独自のスキル](/docs/discoverability/agent-discovery#your-sites-skill)内のページマップだけです。
 
 ## 独自のファイルを使う [#bringing-your-own]
 

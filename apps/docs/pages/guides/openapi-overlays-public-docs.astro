@@ -1,0 +1,423 @@
+---
+// Remove internal endpoints with an overlay: checked against the OpenAPI docs
+// (Overlays), the JSON API docs, and openapi/overlay.ts, parse.ts, source.ts,
+// and scalar.ts on main. Every overlay target here was run through Blume's own
+// applyOverlay against the fixture spec. Not yet run end to end as a site.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("openapi-overlays-public-docs")}>
+  <p>
+    By the end of this guide, your public API reference is built from the spec
+    your code generates, with every internal operation stripped out on every
+    build by a separate overlay file. The spec itself stays untouched, so your
+    generator can keep overwriting it, and a one-line check proves nothing
+    internal reached the published site.
+  </p>
+  <p>
+    It builds on{" "}
+    <a href="/guides/openapi-documentation-website"
+      >Generate API docs from an OpenAPI spec</a
+    >, which sets up a reference for the Acme Messages API at <code>/api</code>.
+    If you already have an OpenAPI reference in Blume, you can follow along with
+    your own spec.
+  </p>
+
+  <h2>The spec you can't edit</h2>
+  <p>
+    Acme's <code>openapi.yaml</code> is generated from the API's code on every
+    release. Along with the public operations, it includes one the support team
+    uses to resend a failed message. The generator marks it with an{" "}
+    <code>x-internal</code> flag:
+  </p>
+  <CodeBlock
+    code={`openapi: 3.1.0
+info:
+  title: Acme Messages API
+  version: 1.0.0
+servers:
+  - url: https://api.acme.example/v1
+tags:
+  - name: Messages
+  - name: Templates
+  - name: Internal
+    description: Operations the support team uses.
+paths:
+  /messages:
+    post:
+      operationId: sendMessage
+      tags: [Messages]
+      summary: Send a message
+      # ...
+  /messages/{id}:
+    get:
+      operationId: getMessage
+      tags: [Messages]
+      summary: Get a message
+      description: >-
+        Returns a message and its delivery status. Replay a failed
+        message with POST /internal/messages/replay.
+      # ...
+  /templates:
+    get:
+      operationId: listTemplates
+      tags: [Templates]
+      summary: List templates
+      # ...
+  /internal/messages/replay:
+    post:
+      operationId: replayMessage
+      tags: [Internal]
+      summary: Replay a failed message
+      x-internal: true
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayRequest"
+      responses:
+        "202":
+          description: Replay queued.
+components:
+  schemas:
+    ReplayRequest:
+      type: object
+      properties:
+        messageId:
+          type: string`}
+    lang="yaml"
+    title="openapi.yaml"
+  />
+  <p>
+    Blume doesn't treat <code>x-internal</code> specially. Left alone, the
+    replay operation publishes like any other: a page at{" "}
+    <code>/api/internal/replay-message</code>, a section on the overview, a
+    search result, a Markdown copy, and an entry in <code>llms.txt</code>.
+    Editing the spec by hand doesn't help, because the next release overwrites
+    it.
+  </p>
+
+  <h2>What an overlay is</h2>
+  <p>
+    An <a href="https://spec.openapis.org/overlay/latest.html">OpenAPI Overlay</a
+    > is a separate YAML or JSON file that lists changes to make to a spec. Each
+    change is an action with a <code>target</code>, a{" "}
+    <a href="https://www.rfc-editor.org/rfc/rfc9535">JSONPath</a> expression
+    that selects nodes in the spec, and one of three operations:
+  </p>
+  <ul>
+    <li>
+      <code>remove: true</code> deletes every node the target selects.
+    </li>
+    <li>
+      <code>update</code> merges a value into every node it selects. Objects
+      merge key by key, arrays gain the new items, and strings, numbers, and
+      booleans are replaced.
+    </li>
+    <li>
+      <code>copy</code> merges in a node from elsewhere in the spec. It's new in
+      Overlay 1.1.
+    </li>
+  </ul>
+  <p>
+    Blume supports Overlay 1.0 and 1.1. It applies each overlay to the spec as
+    you wrote it, before upgrading the spec to OpenAPI 3.1, so your targets
+    follow the version your spec is in. The spec file on disk never changes.
+  </p>
+
+  <h2>Write the overlay</h2>
+  <p>
+    Create <code>overlays/public.yaml</code> beside your spec, with one action
+    that removes every internal operation and one that fixes a description:
+  </p>
+  <CodeBlock
+    code={`overlay: 1.1.0
+info:
+  title: Public Acme Messages docs
+  version: 1.0.0
+actions:
+  - target: $.paths.*[?@['x-internal'] == true]
+    description: Remove every operation marked internal.
+    remove: true
+  - target: $.paths['/messages/{id}'].get
+    description: Stop pointing readers at the replay endpoint.
+    update:
+      description: Returns a message and its delivery status.`}
+    lang="yaml"
+    title="overlays/public.yaml"
+  />
+  <p>Read the first target from left to right:</p>
+  <ul>
+    <li><code>$.paths</code> is the spec's paths object.</li>
+    <li>
+      <code>.*</code> selects every path item in it, like{" "}
+      <code>/internal/messages/replay</code>.
+    </li>
+    <li>
+      <code>[?@['x-internal'] == true]</code> keeps the children of each path
+      item whose <code>x-internal</code> is <code>true</code>. Those children
+      are the operations, so the action removes the <code>post</code> under the
+      replay path and nothing else.
+    </li>
+  </ul>
+  <p>
+    The key uses bracket notation because <code>x-internal</code> contains a
+    hyphen. The second action rewrites one description: the generated text for{" "}
+    <code>getMessage</code> sends public readers to an endpoint they can no
+    longer see, and since a description is a string, <code>update</code>{" "}
+    replaces it.
+  </p>
+
+  <h2>Apply it</h2>
+  <p>List the overlay beside the spec in your reference's config:</p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  reference: [
+    openapi({
+      spec: "./openapi.yaml",
+      route: "/api",
+      overlays: ["./overlays/public.yaml"],
+    }),
+  ],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Each overlay is a local path, resolved from your project root like the
+    spec, or an <code>http(s)</code> URL. With more than one, Blume applies
+    them in the order you list them, and each sees the result of the one
+    before. If you publish several specs through <code>sources</code>, give
+    each source its own <code>overlays</code> instead.
+  </p>
+  <p>
+    Run <code>npx blume dev</code> and open <code>/api</code>. The Internal
+    section is gone from the overview, since a tag with no operations left
+    gets no section, and <code>/api/internal/replay-message</code> is a 404.
+    The Get a message page shows the new description. The dev server watches
+    local overlay files like it watches the spec, so later edits to the
+    overlay show up without a restart.
+  </p>
+
+  <h2>Check what you published</h2>
+  <p>
+    Everything Blume builds from the spec sees the overlaid version: the
+    operation pages, the sidebar, search, the Markdown copies,{" "}
+    <code>llms.txt</code> and <code>llms-full.txt</code>, the JSON documents
+    under <code>/api/docs/</code>, and the{" "}
+    <a href="/docs/discoverability/mcp">MCP server</a> if it's on. Blume never
+    serves your spec file itself. The <code>/openapi.json</code> Blume
+    publishes by default describes its own JSON docs API, not your API.
+  </p>
+  <p>
+    You don't have to check each surface by hand. Build the site and search the
+    output for anything internal:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+grep -rli "/internal/" dist/`}
+    lang="bash"
+  />
+  <p>
+    An empty result means no page, Markdown copy, search index, or text file
+    mentions an internal path. This works because every internal operation
+    here shares the <code>/internal/</code> prefix, and so does the page route
+    Blume would have given it. Search for whatever your internal operations
+    have in common. On a server build, search <code>dist/client/</code>, which
+    is the part your host serves.
+  </p>
+  <p>
+    To keep it that way, run the same check in CI after every build, so a leak
+    fails the build instead of shipping:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+if grep -rqi "/internal/" dist/; then
+  echo "An internal endpoint reached the public docs." >&2
+  exit 1
+fi`}
+    lang="bash"
+  />
+
+  <h2>Catch the next internal endpoint</h2>
+  <p>
+    A month later, the generator adds an operation for purging a template. It
+    carries the same flag:
+  </p>
+  <CodeBlock
+    code={`  /internal/templates/{id}:
+    delete:
+      operationId: purgeTemplate
+      tags: [Internal]
+      summary: Purge a template
+      x-internal: true`}
+    lang="yaml"
+    title="openapi.yaml"
+  />
+  <p>
+    Rebuild, and it's gone from the docs without a change to the overlay. That's
+    the point of targeting the flag rather than the path. A target like{" "}
+    <code>{"$.paths['/internal/messages/replay'].post"}</code> removes exactly
+    one operation, and the new one would have published.
+  </p>
+  <p>
+    You might want a rule like "anything under <code>/internal/</code>" instead.
+    JSONPath can't express that: its filters test the values inside a node, not
+    the names of the keys that hold them, so no target can match a path by its
+    URL. Agree on a marker inside the operation with whoever owns the
+    generator. A flag like <code>x-internal</code> works, and so does a tag:
+  </p>
+  <CodeBlock
+    code={`  - target: $.paths.*[?@.tags[?@ == 'Internal']]
+    description: Remove every operation tagged Internal.
+    remove: true`}
+    lang="yaml"
+  />
+
+  <h2>Clean up what's left behind</h2>
+  <p>
+    An overlay removes exactly what its targets select and nothing more. After
+    the first action runs, these are still in the spec:
+  </p>
+  <ul>
+    <li>
+      The path items themselves, now empty:{" "}
+      <code>{"/internal/messages/replay: {}"}</code>.
+    </li>
+    <li>The Internal tag and its description in the top-level tags list.</li>
+    <li>
+      Schemas only the internal operations used, like{" "}
+      <code>ReplayRequest</code>.
+    </li>
+    <li>
+      Prose in public operations that mentions an internal one, which the
+      second action already fixed for <code>getMessage</code>.
+    </li>
+  </ul>
+  <p>
+    Blume's own reference shows none of the first three: a path with no
+    operations gets no page, a tag with no operations gets no section, and a
+    schema only renders where an operation uses it. They're still in the
+    document Blume builds from, though, and a{" "}
+    <a href="/docs/references/scalar">Scalar embed</a> puts that whole document
+    in the page. Remove them too:
+  </p>
+  <CodeBlock
+    code={`overlay: 1.1.0
+info:
+  title: Public Acme Messages docs
+  version: 1.0.0
+actions:
+  - target: $.paths.*[?@['x-internal'] == true]
+    description: Remove every operation marked internal.
+    remove: true
+  - target: $.paths[?length(@) == 0]
+    description: Remove paths left with no operations.
+    remove: true
+  - target: $.tags[?@.name == 'Internal']
+    description: Remove the Internal tag.
+    remove: true
+  - target: $.components.schemas.ReplayRequest
+    description: Remove the schema only the replay operation used.
+    remove: true
+  - target: $.paths['/messages/{id}'].get
+    description: Stop pointing readers at the replay endpoint.
+    update:
+      description: Returns a message and its delivery status.`}
+    lang="yaml"
+    title="overlays/public.yaml"
+  />
+  <p>
+    Order matters here: the empty-path action only finds paths the first action
+    emptied. A path item that also declares shared <code>parameters</code>{" "}
+    isn't empty after its operations go, so target it by name. Schemas have no
+    flag to filter on, so list each one an internal operation adds.
+  </p>
+
+  <h2>Keep the full spec private</h2>
+  <p>
+    An overlay changes what the docs show, not who can read the spec or call
+    the API.
+  </p>
+  <ul>
+    <li>
+      <strong>Keep the spec out of <code>public/</code>.</strong> Blume serves
+      every file there as it is, at the site root, so{" "}
+      <code>public/openapi.yaml</code> would publish the full spec at{" "}
+      <code>/openapi.yaml</code> with every internal operation in it. A{" "}
+      <code>public/openapi.json</code> also takes over the{" "}
+      <code>/openapi.json</code> route from Blume's docs API description. Keep
+      the spec at the project root or in a folder like <code>specs/</code>.
+    </li>
+    <li>
+      <strong>A spec at a public URL is already public.</strong> If{" "}
+      <code>spec</code> points at an <code>https://</code> URL anyone can
+      fetch, the overlay hides operations from the docs, but the spec still
+      lists them at that URL.
+    </li>
+    <li>
+      <strong>Docs aren't access control.</strong> Removing an operation from
+      the docs doesn't stop anyone from calling it. Protect internal endpoints
+      in the API itself, with authentication or network rules.
+    </li>
+  </ul>
+
+  <h2>Troubleshooting</h2>
+  <h3>The internal operation still shows</h3>
+  <p>
+    A target that matches nothing changes nothing, silently, so the overlay
+    applied but skipped the operation. Check three things in the spec: that{" "}
+    <code>x-internal</code> sits on the operation and not on the path item
+    above it, that it's the boolean <code>true</code> and not the string{" "}
+    <code>"true"</code>, and that the key is spelled the way your target spells
+    it.
+  </p>
+  <h3>Targets that work on one spec miss on another</h3>
+  <p>
+    Overlays apply before Blume upgrades a spec to OpenAPI 3.1, so a target has
+    to follow the spec as written. A Swagger 2.0 spec keeps its schemas under{" "}
+    <code>definitions</code>, not <code>components.schemas</code>.
+  </p>
+  <h3>The whole reference disappeared</h3>
+  <p>
+    If an overlay can't be applied, Blume skips the reference rather than
+    publish it without the overlay, since the overlay is often what hides the
+    internal operations. <code>blume build</code> fails with{" "}
+    <code>BLUME_OPENAPI_UNAVAILABLE</code>, and <code>blume dev</code> shows
+    the same message as a warning. It names the overlay file and the action
+    that failed. Common causes:
+  </p>
+  <ul>
+    <li>
+      <code>overlay</code> must be an Overlay Specification version, 1.0.x or
+      1.1.x: the file is missing its version line, or uses another version.
+    </li>
+    <li>
+      An overlay also needs <code>info</code> with a <code>title</code> and{" "}
+      <code>version</code>, and at least one action.
+    </li>
+    <li>
+      <code>can't merge an object into a primitive value</code>: an{" "}
+      <code>update</code> targets a string, like a description, with an object.
+      Target the node that holds the string instead, as the second action does.
+    </li>
+  </ul>
+  <h3>The config rejects overlays</h3>
+  <p>
+    <code>overlays</code> sits beside <code>spec</code>. With{" "}
+    <code>sources</code>, Blume stops with "<code>overlays</code> belongs to
+    the <code>spec</code> shorthand; with <code>sources</code>, give each
+    source its own <code>overlays</code>." Move the list into each source.
+  </p>
+  <Callout type="tip">
+    Keep one overlay per audience. If you also publish a partner reference, a
+    second <code>openapi()</code> entry can point at the same spec with a
+    different overlay and route.
+  </Callout>
+</GuidePage>

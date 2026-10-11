@@ -8,20 +8,28 @@
 // cornflower panel: a frosted white fill, white text, and a gradient white border
 // drawn by a masked pseudo-element (so the border itself fades from bright at
 // the top-left to faint at the bottom-right rather than being a flat line).
-// The default variant is the opaque box for the page background.
+// The default variant is the opaque box for the page background. `command`
+// swaps in another command (a guide's next step); it defaults to the install.
+// `class` sets the box's width, `max-w-xs` unless a longer command needs more.
 import Icon from "blume/components/Icon.astro";
 import { installCommand } from "./shared.ts";
 
 interface Props {
+  class?: string;
+  command?: string;
   variant?: "default" | "glass";
 }
 
-const { variant = "default" } = Astro.props;
+const {
+  class: width = "max-w-xs",
+  command: text = installCommand,
+  variant = "default",
+} = Astro.props;
 const glass = variant === "glass";
 
 const box = glass
-  ? "install-glass relative isolate flex w-full max-w-xs items-center gap-3 rounded-blume bg-white/10 py-2 pr-2 pl-4 text-white shadow-[0_1px_2px_rgb(0_0_0/0.08),inset_0_1px_0_rgb(255_255_255/0.12)] backdrop-blur-md"
-  : "flex w-full max-w-xs items-center gap-3 rounded-blume border border-border bg-background py-2 pr-2 pl-4";
+  ? "install-glass relative isolate flex w-full items-center gap-3 rounded-blume bg-white/10 py-2 pr-2 pl-4 text-white shadow-[0_1px_2px_rgb(0_0_0/0.08),inset_0_1px_0_rgb(255_255_255/0.12)] backdrop-blur-md"
+  : "flex w-full items-center gap-3 rounded-blume border border-border bg-background py-2 pr-2 pl-4";
 const prompt = glass
   ? "select-none font-mono text-sm text-white/60"
   : "select-none font-mono text-muted-foreground text-sm";
@@ -33,14 +41,14 @@ const button = glass
   : "inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
 ---
 
-<div class={box}>
+<div class:list={[box, width]}>
   <span aria-hidden="true" class={prompt}>$</span>
-  <code class={command}>{installCommand}</code>
+  <code class={command}>{text}</code>
   <button
-    aria-label="Copy install command"
+    aria-label={text === installCommand ? "Copy install command" : "Copy command"}
     class={button}
     data-blume-copy-install
-    data-command={installCommand}
+    data-command={text}
     type="button"
   >
     <Icon class="size-4" name="copy" size={16} />

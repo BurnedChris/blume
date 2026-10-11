@@ -2,6 +2,6 @@
 // and rerun the translation instead of editing this copy.
 export default {
   order: 7,
-  pages: ["openapi", "asyncapi", "graphql", "scalar"],
+  pages: ["openapi", "asyncapi", "graphql", "scalar", "api-pages"],
   title: "リファレンス",
 };

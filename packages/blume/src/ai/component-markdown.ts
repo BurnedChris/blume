@@ -2,7 +2,10 @@ import { markdownTable } from "markdown-table";
 import { mdxToMdast } from "satteri";
 
 import { PARAM_LOCATIONS } from "../components/content/api-field.ts";
-import { parseYouTubeId } from "../components/content/youtube.ts";
+import {
+  parseYouTubeId,
+  parseYouTubePlaylist,
+} from "../components/content/youtube.ts";
 import type { ExampleLookup } from "../core/types.ts";
 import { MDX_FEATURES } from "../markdown/features.ts";
 import { readStaticExpression } from "./static-expression.ts";
@@ -399,6 +402,18 @@ const tabs: ComponentMarkdown = ({ childComponents, children }) => {
     .join("\n\n");
 };
 
+/**
+ * A `<View>` block: its content under its view's name, so an agent reading
+ * the Markdown sees every view and which one each part belongs to.
+ */
+const view: ComponentMarkdown = ({ children, props }) => {
+  const title = isString(props.title) && props.title !== "" ? props.title : "";
+  if (!title) {
+    return children;
+  }
+  return children ? `**${title}**\n\n${children}` : `**${title}**`;
+};
+
 /** Escape the brackets that would end a link's text early. */
 const linkText = (value: string): string =>
   value.replaceAll(/[[\]]/gu, String.raw`\$&`);
@@ -541,18 +556,21 @@ const youtube: ComponentMarkdown = ({ props }) => {
   } else if (isString(props.url)) {
     input = props.url;
   }
+  const title =
+    isString(props.title) && props.title !== ""
+      ? props.title
+      : "Watch on YouTube";
   const videoId = parseYouTubeId(input);
   if (!videoId) {
-    return null;
+    const list = parseYouTubePlaylist(input);
+    return list
+      ? `[${title}](https://www.youtube.com/playlist?list=${list})`
+      : null;
   }
   const start =
     isNumber(props.start) && props.start > 0
       ? `&t=${Math.floor(props.start)}s`
       : "";
-  const title =
-    isString(props.title) && props.title !== ""
-      ? props.title
-      : "Watch on YouTube";
   return `[${title}](https://www.youtube.com/watch?v=${videoId}${start})`;
 };
 
@@ -572,7 +590,7 @@ export const inlineCode = (text: string): string => {
 };
 
 /** Fence `code` so its opening/closing run outlengths any backticks inside. */
-const fencedBlock = (lang: string, code: string): string => {
+export const fencedBlock = (lang: string, code: string): string => {
   const trimmed = code.replace(/(?<!\n)\n+$/u, "");
   const runs = trimmed.match(/`+/gu);
   const longest = runs ? Math.max(...runs.map((run) => run.length)) : 0;
@@ -720,10 +738,17 @@ const githubInfo: ComponentMarkdown = ({ lossy, props }) => {
   return `[${linkText(`${owner}/${repo}`)}](${linkDestination(`${host}/${owner}/${repo}`)})`;
 };
 
-/** `CodeBlock` is a fenced block, its title kept in the fence's meta. */
-const codeBlock: ComponentMarkdown = ({ lossy, props }) => {
-  if (lossy || !isString(props.code)) {
+/**
+ * `CodeBlock` is a fenced block, its title kept in the fence's meta. Without
+ * `code` it renders its children (a fence wrapped in `<CodeBlock>`), so those
+ * are its Markdown.
+ */
+const codeBlock: ComponentMarkdown = ({ children, lossy, props }) => {
+  if (lossy) {
     return null;
+  }
+  if (!isString(props.code)) {
+    return props.code === undefined && children !== "" ? children : null;
   }
   const lang = textProp(props.lang) || "txt";
   const title = textProp(props.title);
@@ -894,6 +919,7 @@ const SERIALIZERS = {
   "Tree.Folder": treeFolder,
   TypeTable: typeTable,
   Update: update,
+  View: view,
   YouTube: youtube,
 } satisfies Record<string, ComponentMarkdown>;
 

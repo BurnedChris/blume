@@ -1,5 +1,3 @@
-import { existsSync } from "node:fs";
-
 import { defineCommand } from "citty";
 import { join } from "pathe";
 
@@ -8,11 +6,16 @@ import {
   discoverPages,
   hasGeneratedChangelog,
 } from "../../astro/pages.ts";
+import { normalizeBasePath } from "../../core/base-path.ts";
 import { BlumeError } from "../../core/diagnostics.ts";
 import { validateLinks } from "../../core/links.ts";
 import { buildManifest } from "../../core/manifest.ts";
 import { scanProject } from "../../core/project-graph.ts";
+import { resolveDocsCollection } from "../../core/sources/collection.ts";
 import type { Diagnostic } from "../../core/types.ts";
+import { generatedFilePaths } from "../../deploy/generated-files.ts";
+import { referenceRoutes } from "../../openapi/references.ts";
+import { parseIgnoreFlag } from "../args.ts";
 import { commandMeta } from "../command-meta.ts";
 import { reportInternalError } from "../internal-error.ts";
 import {
@@ -28,6 +31,12 @@ export const validateCommand = defineCommand({
       description: "Check external (HTTP) links over the network.",
       type: "boolean",
     },
+    ignore: {
+      description:
+        'With --external, skip external links whose URL matches this glob (e.g. "https://example.com/**"). Repeat it for more; internal links are always checked.',
+      type: "string",
+      valueHint: "glob",
+    },
     json: {
       description: "Emit diagnostics as JSON on stdout (for CI/editors).",
       type: "boolean",
@@ -38,8 +47,9 @@ export const validateCommand = defineCommand({
     },
   },
   meta: commandMeta.validate,
-  async run({ args }) {
+  async run({ args, rawArgs }) {
     const root = process.cwd();
+    const ignore = parseIgnoreFlag(rawArgs);
     const diagnostics: Diagnostic[] = [];
 
     try {
@@ -48,13 +58,17 @@ export const validateCommand = defineCommand({
       // link-validation blind spot, so silently passing would be misleading.
       diagnostics.push(...project.diagnostics);
 
-      // Custom `.astro` pages and the generated changelog index are servable
-      // routes the content graph can't see — without them, a docs link to e.g.
-      // a custom landing page fails as BLUME_BROKEN_LINK.
+      // Custom `.astro` pages, reference routes (a `scalar()` page), and the
+      // generated changelog index are servable routes the content graph can't
+      // see — without them, a docs link to e.g. a custom landing page fails as
+      // BLUME_BROKEN_LINK.
       const userPages = project.context.pagesRoot
         ? await discoverPages(project.context.pagesRoot)
         : [];
-      const extraRoutes = customStaticRoutes(userPages);
+      const extraRoutes = [
+        ...customStaticRoutes(userPages),
+        ...referenceRoutes(project.config),
+      ];
       if (hasGeneratedChangelog(project, userPages)) {
         extraRoutes.push("/changelog");
       }
@@ -76,14 +90,21 @@ export const validateCommand = defineCommand({
         );
       }
 
-      const publicDir = join(root, "public");
+      // Links to `public/` files and to the files the build generates
+      // (`/llms.txt`, `/sitemap.xml`) resolve too. With no `public/` folder,
+      // the site ships no public files, so links to one are reported.
       diagnostics.push(
         ...(await validateLinks(project.graph, {
           basePath: project.config.basePath,
           checkExternal: Boolean(args.external),
+          configFile: project.context.configFile ?? undefined,
+          contentRoot: resolveDocsCollection(project.config, root).base,
+          deployBase: normalizeBasePath(project.config.deployment.options.base),
           extraRoutes,
+          generatedFiles: generatedFilePaths(project),
           i18n: project.config.i18n,
-          publicDir: existsSync(publicDir) ? publicDir : null,
+          ignore,
+          publicDir: join(root, "public"),
           redirects: project.config.redirects,
         }))
       );
@@ -96,8 +117,8 @@ export const validateCommand = defineCommand({
       }
     }
 
-    // `--strict` escalates warnings to failures; info-level notes (e.g.
-    // BLUME_ASSETS_UNCHECKED when there is no public/ dir) stay advisory.
+    // `--strict` escalates warnings to failures; info-level notes stay
+    // advisory.
     const strictFailure =
       Boolean(args.strict) &&
       diagnostics.some((diagnostic) => diagnostic.severity !== "info");

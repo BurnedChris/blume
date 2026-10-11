@@ -2,9 +2,9 @@
  * Code-fence meta. A Shiki transformer reads the tokens after the language and
  * promotes them to attributes on the rendered `<pre>`:
  *
- * - a title — the first bare token (```ts blume.config.ts) or `title="..."` —
- *   becomes `data-title`; the theme's code header shows it, falling back to the
- *   language label.
+ * - a title — the bare words (```ts blume.config.ts, ```js Install the
+ *   client) or `title="..."` — becomes `data-title`; the theme's code header
+ *   shows it, falling back to the language label.
  * - the `lineNumbers` keyword (```ts file.ts lineNumbers) becomes
  *   `data-line-numbers`; the theme renders a counter-driven line-number gutter.
  * - the `wrap` keyword becomes `data-wrap`: this block's long lines wrap
@@ -16,6 +16,7 @@
  */
 
 import {
+  isForeignKeyword,
   isLineRange,
   metaTokens,
   QUOTED_ATTR,
@@ -33,7 +34,7 @@ export const EXPANDABLE_MIN_LINES = 16;
 
 /** The slice of Shiki's transformer `this` context Blume reads. */
 interface CodeMetaContext {
-  options: { meta?: { __raw?: string } };
+  options: { lang?: string; meta?: { __raw?: string } };
   /** The block's code, as highlighted. */
   source?: string;
 }
@@ -51,17 +52,29 @@ export interface CodeTitleTransformer {
 
 const TITLE_ATTR = /(?:^|\s)title=(?:"(?<dq>[^"]*)"|'(?<sq>[^']*)')/u;
 
-// The first bare token is the title (```ts blume.config.ts): a non-empty token
-// that isn't a Shiki line range (`{1,3-5}`), a `key=value` attr, or a reserved
-// keyword.
-const isTitleToken = (token: string): boolean =>
+// The bare words are the title (```ts blume.config.ts, ```js Install the
+// client): every token that isn't a Shiki line range (`{1,3-5}`), a
+// `key=value` attr, a reserved keyword, or another tool's keyword for a
+// fence in `lang` (```rust ignore).
+const isTitleToken = (token: string, lang: string | undefined): boolean =>
   token.length > 0 &&
   !isLineRange(token) &&
   !token.includes("=") &&
-  !RESERVED_META_KEYWORDS.has(token);
+  !RESERVED_META_KEYWORDS.has(token) &&
+  !isForeignKeyword(token, lang);
 
-/** The title a fence's meta string promotes to `data-title`, if any. */
-export const parseCodeTitle = (raw: string | undefined): string | undefined => {
+// A title wrapped in one pair of brackets (```ts [file.ts], the Docus and
+// VitePress code-group spelling) shows without them.
+const BRACKETED_TITLE = /^\[(?<inner>[^\]]+)\]$/u;
+
+/**
+ * The title a fence's meta string promotes to `data-title`, if any. `lang` is
+ * the fence's language, which decides the other tools' keywords it drops.
+ */
+export const parseCodeTitle = (
+  raw: string | undefined,
+  lang?: string
+): string | undefined => {
   if (!raw) {
     return undefined;
   }
@@ -79,7 +92,10 @@ export const parseCodeTitle = (raw: string | undefined): string | undefined => {
   // The shared tokenizer keeps a quoted attr (rejected below by its `=`) and
   // a spaced line range (`{1, 3-5}`) whole, so neither can shed a fragment
   // that reads as a bare title.
-  return metaTokens(raw).find(isTitleToken);
+  const title = metaTokens(raw)
+    .filter((token) => isTitleToken(token, lang))
+    .join(" ");
+  return BRACKETED_TITLE.exec(title)?.groups?.inner ?? (title || undefined);
 };
 
 // The shared tokenizer keeps a quoted attr whole, so a keyword inside a
@@ -96,7 +112,7 @@ export const codeTitleTransformer = (): CodeTitleTransformer => ({
   name: "blume:code-meta",
   pre(node) {
     const raw = this.options.meta?.__raw;
-    const title = parseCodeTitle(raw);
+    const title = parseCodeTitle(raw, this.options.lang);
     if (title) {
       node.properties.dataTitle = title;
     }

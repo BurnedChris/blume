@@ -34,6 +34,8 @@ reference: [
 ],
 ```
 
+[Overlays](/docs/references/openapi#overlays) funktionieren hier ebenfalls: Trag `overlays` neben `spec` ein oder bei jeder einzelnen Quelle. Das Embed bettet die Spec dann mit den angewendeten Overlays inline ein. Eine Remote-Spec mit Overlays wird deshalb zur Build-Zeit geladen und nicht im Browser. Wenn sich ein Overlay nicht anwenden lässt, gibt der Build eine Warnung aus und lässt die Seite weg, statt die Spec ohne das Overlay einzubetten.
+
 Ein Scalar-Embed und native Seiten können in der Liste nebeneinander stehen, solange sich ihre Routen unterscheiden. Du kannst zum Beispiel einen `openapi()`-Adapter für die aktuelle API und einen `scalar()`-Adapter für eine Legacy-API nutzen. Wie jede Referenz fügt das Embed nicht von selbst einen Header-Tab hinzu. Lass einen [Navigations-Tab](/docs/content/navigation#tabs) auf seine Route zeigen, damit es in der Navigation auftaucht.
 
 ## Was das Embed nicht kann [#what-the-embed-doesnt-do]
@@ -44,7 +46,7 @@ Blumes Hell/Dunkel-Umschalter gilt aber auch für das Embed. Beim Mounten übern
 
 ## Scalar-Optionen übergeben [#passing-scalar-options]
 
-`theme` ist die Option, zu der die meisten greifen, aber Scalar unterstützt noch viele weitere. Jeder Key, den du `scalar()` zusätzlich zu `spec`, `sources`, `route` und `theme` übergibst, wird unverändert als [Scalar-Konfiguration](https://github.com/scalar/scalar/blob/main/documentation/configuration.md) an die eingebettete Referenz weitergereicht. Blume filtert die Keys nicht, also kommt alles durch, was Scalar akzeptiert. Erlaubt sind nur JSON-Werte, da die Konfiguration inline in die generierte Seite eingebettet wird:
+`theme` ist die Option, zu der die meisten greifen, aber Scalar unterstützt noch viele weitere. Jeder Key, den du `scalar()` zusätzlich zu `spec`, `overlays`, `sources`, `route` und `theme` übergibst, wird unverändert als [Scalar-Konfiguration](https://github.com/scalar/scalar/blob/main/documentation/configuration.md) an die eingebettete Referenz weitergereicht. Blume filtert die Keys nicht, also kommt alles durch, was Scalar akzeptiert. Erlaubt sind nur JSON-Werte, da die Konfiguration inline in die generierte Seite eingebettet wird:
 
 ```ts blume.config.ts lineNumbers
 reference: [

@@ -1,0 +1,418 @@
+---
+// Version your docs for a breaking release: checked against the versioning,
+// blume version, search, sitemap, and redirects docs, and against
+// core/version-cut.ts, core/schema.ts, deploy/sitemap.ts, astro/templates.ts
+// (canonical), search/adapters/version-scope.ts, ai/mcp/tools.ts, and
+// ai/llms.ts on main. Pattern redirects are not in the current npm release
+// (checked against the blume@2.0.3 tag). Not yet run end to end on a sample
+// project.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("version-markdown-documentation")}>
+  <p>
+    By the end of this guide, your docs describe two major versions of an SDK
+    at once. The new version lives at your usual URLs, the old one is a frozen
+    copy under <code>/v1/</code>, and readers move between them with a version
+    switcher. Search stays inside the version being read, and old pages tell
+    search engines which page is current.
+  </p>
+  <p>
+    The example is a fictional Acme SDK, a client for sending email and SMS,
+    whose setup changes in v2. Swap in your own pages as you go.
+  </p>
+
+  <h2>Decide whether you need a snapshot</h2>
+  <p>
+    A snapshot is a full copy of your docs. Every page, every search index
+    entry, and the navigation data exist once per version, so it's worth
+    cutting one only when readers will stay on the old version for a while and
+    the instructions really differ.
+  </p>
+  <p>
+    Acme's v2 is that case. In v1 you construct a client with{" "}
+    <code>new Acme()</code> and pass callbacks. In v2 you call{" "}
+    <code>createClient()</code> and every method returns a promise. Someone
+    still on v1 needs the v1 quickstart, word for word, for months.
+  </p>
+  <p>
+    For a smaller change, such as one renamed option or a new default, skip the
+    snapshot. A callout on the affected page or an entry in your changelog
+    serves those readers without doubling the site. Cut one snapshot per major
+    version, not one per release.
+  </p>
+
+  <h2>The starting point</h2>
+  <p>Before v2, the Acme docs have four pages:</p>
+  <CodeBlock
+    code={`docs/
+  index.mdx         ->  /
+  quickstart.mdx    ->  /quickstart
+  callbacks.mdx     ->  /callbacks
+  errors.mdx        ->  /errors`}
+    lang="txt"
+  />
+  <p>The v1 quickstart sets up the client like this:</p>
+  <CodeBlock
+    code={`import { Acme } from "@acme/sdk";
+
+const acme = new Acme({ apiKey: process.env.ACME_API_KEY });
+
+acme.messages.send({ to: "+15550100", body: "Hi" }, (error, message) => {
+  if (error) throw error;
+  console.log(message.id);
+});`}
+    lang="ts"
+    title="docs/quickstart.mdx"
+  />
+  <p>
+    In v2, <code>quickstart.mdx</code> will change, <code>callbacks.mdx</code>{" "}
+    will go away because v2 has no callbacks, and <code>errors.mdx</code> stays
+    the same. Those three cases are the ones to watch through the rest of this
+    guide.
+  </p>
+
+  <h2>Cut the snapshot</h2>
+  <p>
+    Cut the snapshot while the docs still describe v1, before any v2 edits land.
+    If your v2 changes are already on a branch, run this on the main branch
+    first. From the project root:
+  </p>
+  <CodeBlock code="npx blume version v1" lang="bash" />
+  <p>
+    The id, <code>v1</code> here, is both the folder name and the URL segment,
+    so pick what you want in your URLs: <code>v1</code> for one snapshot per
+    major version, or <code>v1.4</code> if you want the exact release. It has to
+    start with a letter, and can only contain letters, digits, dots, hyphens,
+    and underscores.
+  </p>
+  <p>The command does three things, then reports what it did:</p>
+  <ol>
+    <li>
+      Copies everything in your content folder into <code>docs/v1/</code>,
+      including images and <code>meta.ts</code> files. It leaves out hidden
+      files and any earlier snapshot folders.
+    </li>
+    <li>
+      Rewrites root-absolute links inside the copy so they stay in the snapshot:
+      a link to <code>/errors</code> in <code>docs/v1/quickstart.mdx</code>{" "}
+      becomes <code>/v1/errors</code>. Relative links need no change, and links
+      inside code are left alone.
+    </li>
+    <li>
+      Turns on versioning in <code>blume.config.ts</code>. On the first cut it
+      adds this block, labeling the live docs "Latest":
+    </li>
+  </ol>
+  <CodeBlock
+    code={`versions: {
+  archived: [{ id: "v1" }],
+  current: { label: "Latest" },
+},`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    If your config is built in a way the command won't edit, it prints the
+    entry to paste instead. Paste it before you go on: until the id is
+    registered, the snapshot builds as ordinary pages and every page ships
+    twice.
+  </p>
+
+  <h2>Inspect the copy</h2>
+  <p>
+    Restart <code>npx blume dev</code> so it picks up the new folder, then look
+    at what changed:
+  </p>
+  <CodeBlock
+    code={`docs/
+  index.mdx            ->  /
+  quickstart.mdx       ->  /quickstart
+  callbacks.mdx        ->  /callbacks
+  errors.mdx           ->  /errors
+  v1/
+    index.mdx          ->  /v1
+    quickstart.mdx     ->  /v1/quickstart
+    callbacks.mdx      ->  /v1/callbacks
+    errors.mdx         ->  /v1/errors`}
+    lang="txt"
+  />
+  <p>
+    Open <code>/v1/quickstart</code>. It has a notice above the page saying
+    you're viewing documentation for v1, with a "Go to latest" link to{" "}
+    <code>/quickstart</code>. The header has a version dropdown listing
+    "Latest" and "v1".
+  </p>
+  <p>
+    Search the copied pages for links that still point at the live docs. The
+    command only rewrites links to pages the snapshot has a copy of, so links
+    to a generated API reference or a changelog from a remote source keep
+    pointing at the current pages. That's usually what you want, since the
+    snapshot has no copy of them. Commit the folder once it looks right:
+  </p>
+  <CodeBlock
+    code={`git add docs/v1 blume.config.ts
+git commit -m "Snapshot the v1 docs"`}
+    lang="bash"
+  />
+
+  <h3>What the snapshot doesn't freeze</h3>
+  <p>
+    Versioning covers your docs content folder. Your blog, your changelog, API
+    references generated from OpenAPI specs, and custom pages always show the
+    current version. <code>blume version</code> doesn't copy an OpenAPI spec
+    either. If your API changed too and v1 readers need the old reference,
+    publish the old spec as a second source with its own route:
+  </p>
+  <CodeBlock
+    code={`reference: [
+  openapi({
+    sources: [
+      { label: "API", spec: "./openapi.yaml" },
+      { label: "API v1", route: "/api-v1", spec: "./openapi-v1.yaml" },
+    ],
+  }),
+],`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    That second reference sits beside the docs rather than inside the version
+    switcher.
+  </p>
+
+  <h2>Update the current docs for v2</h2>
+  <p>
+    Now edit the live pages at the root of <code>docs/</code>. Those are the v2
+    docs from here on. Rewrite the quickstart for the new API:
+  </p>
+  <CodeBlock
+    code={`import { createClient } from "@acme/sdk";
+
+const acme = createClient({ apiKey: process.env.ACME_API_KEY });
+
+const message = await acme.messages.send({ to: "+15550100", body: "Hi" });
+console.log(message.id);`}
+    lang="ts"
+    title="docs/quickstart.mdx"
+  />
+  <p>
+    Delete <code>docs/callbacks.mdx</code>, since v2 has no callbacks, and add
+    an upgrade page, <code>docs/upgrade.mdx</code>, that walks v1 users through
+    the change. Leave <code>errors.mdx</code> alone.
+  </p>
+  <p>
+    Deleting a page breaks every link to its old URL, so send{" "}
+    <code>/callbacks</code> to the archived copy, where the content still
+    exists:
+  </p>
+  <CodeBlock
+    code={`redirects: [{ from: "/callbacks", to: "/v1/callbacks" }],`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>Then give the versions their real names:</p>
+  <CodeBlock
+    code={`versions: {
+  current: { label: "v2", badge: "Latest" },
+  archived: [
+    { id: "v1", banner: "These docs cover the 1.x SDK. Version 2 changed how you create a client." },
+  ],
+},`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>current.label</code> names the live docs in the switcher, and{" "}
+    <code>badge</code> adds a small tag beside it. An archived version is
+    labeled by its id unless you set <code>label</code>. The <code>banner</code>{" "}
+    string replaces the built-in notice text ("You're viewing documentation for
+    v1. It may be out of date.") and the "Go to latest" link stays beside it.
+    Set <code>banner: false</code> to hide the notice for a version.
+  </p>
+  <p>
+    When you add v3 later, list archived versions newest first. That order is
+    the switcher's order.
+  </p>
+
+  <h2>Try the switcher and search</h2>
+  <p>
+    With the dev server running, open <code>/v1/quickstart</code> and switch to
+    v2 in the dropdown. You land on <code>/quickstart</code>, the same page in
+    the other version. Now open <code>/v1/callbacks</code> and switch. There's
+    no <code>/callbacks</code> in v2, so you land on the v2 root instead. If
+    you'd rather every switch go to the root, set{" "}
+    <code>switcher: {"{"} redirect: "root" {"}"}</code> in{" "}
+    <code>versions</code>.
+  </p>
+  <p>
+    Open search on a v1 page and search for "callbacks". Results come from v1
+    only. The "All versions" toggle in the dialog's footer widens the search,
+    and results from another version name it on the row. The reader's choice is
+    remembered.
+  </p>
+  <Callout type="info">
+    Orama (the default), FlexSearch, Algolia, and Typesense scope results by
+    version. Pagefind, Orama Cloud, and Mixedbread don't: their results span
+    every version, and the dialog leaves out the toggle.
+  </Callout>
+
+  <h2>Check canonical URLs and the sitemap</h2>
+  <p>
+    Two copies of a page compete in search results unless one says which is
+    authoritative. By default, each archived page names its equivalent in the
+    current docs as its canonical URL, matched by path. A page that only exists
+    in the archived version keeps its own. The sitemap follows the same rule:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Page</th>
+        <th scope="col">Canonical URL</th>
+        <th scope="col">In the sitemap</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>/quickstart</code></td>
+        <td>Itself</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>/v1/quickstart</code></td>
+        <td><code>/quickstart</code></td>
+        <td>No</td>
+      </tr>
+      <tr>
+        <td><code>/v1/errors</code></td>
+        <td><code>/errors</code></td>
+        <td>No</td>
+      </tr>
+      <tr>
+        <td><code>/v1/callbacks</code></td>
+        <td>Itself</td>
+        <td>Yes</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Archived pages stay indexable either way. The canonical tag tells search
+    engines which copy you consider current. It doesn't decide what they rank.
+    To check, view the source of <code>/v1/quickstart</code> and find the{" "}
+    <code>&lt;link rel="canonical"&gt;</code> tag, then run a build and read
+    the <code>sitemap.xml</code> it writes. Both the canonical tag and the
+    sitemap need your site URL, set in <code>deployment.site</code> or detected
+    on your host.
+  </p>
+  <p>
+    <code>/v1/quickstart</code> is the case to think about. Its content differs
+    from the v2 page, but it still points at it. If a lot of your readers stay
+    on v1 and search for v1 instructions, give that version its own canonical
+    URLs. If you'd rather an old version leave search results altogether, turn
+    indexing off for it:
+  </p>
+  <CodeBlock
+    code={`archived: [
+  { id: "v1", canonical: "self" }, // every v1 page is its own canonical
+  { id: "v0", noindex: true },     // no v0 page is indexed or in the sitemap
+],`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    A page's own <code>seo.canonical</code> frontmatter always wins over the
+    version setting.
+  </p>
+
+  <h2>What agents see</h2>
+  <p>
+    Coding agents get the same split. If you run the{" "}
+    <a href="/guides/mcp-server-for-documentation">MCP server</a>, its search
+    and page-list tools default to the current docs and take a{" "}
+    <code>version</code> argument for v1. <code>llms.txt</code> lists archived
+    versions after the current docs, marked as archived, while{" "}
+    <code>llms-full.txt</code> stays current-only. The assistant answers from
+    the version the reader is viewing.
+  </p>
+
+  <h2>Maintain the old version</h2>
+  <p>
+    Archived means frozen: new work goes in the live tree. But the snapshot is
+    ordinary files, so when a v1 page is wrong, such as a broken command or a
+    security note v1 users need, edit the file in <code>docs/v1/</code>{" "}
+    directly and commit it.
+  </p>
+  <p>
+    Don't try to refresh a snapshot by cutting it again. <code>blume version</code>{" "}
+    refuses an id that's already in <code>versions.archived</code>, so a stray
+    re-run can't overwrite your v1 docs with v2 content. If you translate your
+    docs, snapshots keep the translations they were cut with, and{" "}
+    <a href="/guides/translate-markdown-documentation">blume translate</a> never
+    retranslates them.
+  </p>
+  <p>
+    When v1 reaches end of life, retire it in two steps. First set{" "}
+    <code>noindex: true</code> on it, so it leaves search results while links
+    to it still work. Later, delete <code>docs/v1/</code> and its entry, and
+    redirect its URLs:
+  </p>
+  <CodeBlock
+    code={`redirects: [
+  { from: "/v1/callbacks", to: "/upgrade" },
+  { from: "/v1/:slug*", to: "/:slug*" },
+],`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The pattern sends each v1 page to the same path in the current docs, and{" "}
+    <code>/v1</code> itself to the root. An exact redirect wins over a pattern,
+    so pages with no v2 equivalent, like <code>/v1/callbacks</code>, go wherever
+    you point them. Update the earlier <code>/callbacks</code> redirect too, so
+    it doesn't lead to a page that's gone. Pattern redirects need a host that
+    reads Blume's redirect files or a server build: see{" "}
+    <a href="/docs/deployment#pattern-redirects">Pattern redirects</a>. The{" "}
+    <a href="/guides/documentation-url-migration-redirects">URL migration guide</a>{" "}
+    shows how to test redirects before and after you deploy.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>blume version refuses to run</h3>
+  <p>
+    It exits without changing anything when the id doesn't start with a letter
+    (<code>v1</code>, not <code>1</code>), when the id is already registered,
+    when the snapshot folder exists (pass <code>--force</code> to overwrite a
+    folder that isn't registered), or when the project has errors. A snapshot
+    of a broken site would freeze the breakage, so fix those first:{" "}
+    <code>npx blume doctor</code> lists them.
+  </p>
+  <h3>The snapshot doesn't show up</h3>
+  <p>
+    <code>blume dev</code> only picks up a new snapshot folder when it starts.
+    Stop it and run it again.
+  </p>
+  <h3>Every page appears twice</h3>
+  <p>
+    The snapshot folder exists but its id isn't in <code>versions</code>, so
+    its pages build as a regular section at <code>/v1/…</code>. This happens
+    when the command couldn't edit your config and printed the entry instead.
+    Paste it in. <code>npx blume doctor</code> flags the folder with{" "}
+    <code>BLUME_VERSIONS_UNCONFIGURED_VERSION</code>.
+  </p>
+  <h3>Search shows every version with no toggle</h3>
+  <p>
+    Your search provider doesn't scope by version. Pagefind, Orama Cloud, and
+    Mixedbread search every version at once. Switch to Orama, FlexSearch,
+    Algolia, or Typesense if scoping matters.
+  </p>
+  <h3>The sidebar looks different on archived pages</h3>
+  <p>
+    Header tabs are defined against the current docs, so inside a snapshot the
+    sidebar isn't scoped by tab. An explicit <code>navigation.sidebar</code>{" "}
+    also applies only to the current docs: a snapshot's sidebar always comes
+    from its own files.
+  </p>
+</GuidePage>

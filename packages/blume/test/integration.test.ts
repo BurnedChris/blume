@@ -1,6 +1,9 @@
 import { afterAll, afterEach, describe, expect, it } from "bun:test";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { pathToFileURL } from "node:url";
@@ -73,6 +76,9 @@ const serverSetup = (
   blumeIntegration({
     contentRoutes: [],
     pages: [],
+    // Off unless a test asks for it: its middleware would sit ahead of the
+    // one under test.
+    poweredBy: false,
     ...options,
   }).hooks["astro:server:setup"]?.({
     refreshContent,
@@ -180,7 +186,18 @@ describe("blumeIntegration astro:build:done", () => {
     const log = await buildDone({ buildArtifactsRoot: "." }, root, dist);
     expect(existsSync(join(dist, "sitemap.xml"))).toBe(true);
     expect(existsSync(join(dist, "robots.txt"))).toBe(true);
+    expect(await readFile(join(dist, "_headers"), "utf-8")).toContain(
+      "X-Powered-By: Blume"
+    );
     expect(log.warn).toEqual([]);
+  });
+
+  it("follows the baked poweredBy over the config file in an ejected app", async () => {
+    const { dist, root } = await projectFixture({ "docs/index.md": HOME });
+    await buildDone({ buildArtifactsRoot: ".", poweredBy: false }, root, dist);
+    expect(await readFile(join(dist, "_headers"), "utf-8")).not.toContain(
+      "X-Powered-By"
+    );
   });
 
   it("surfaces scan diagnostics as warnings instead of failing the build", async () => {
@@ -340,11 +357,15 @@ describe("blumeIntegration astro:config:setup", () => {
       injectRoute: (route: InjectedPageRoute) => injected.push(route),
     } as never);
 
-    // The icon-sprite middleware runs innermost, so a project's own
-    // middleware sees the finished HTML.
+    // Both run innermost, so a project's own middleware sees the finished
+    // HTML and can replace the X-Powered-By value.
     expect(middleware).toEqual([
       {
         entrypoint: "blume/components/icon-sprite-middleware.ts",
+        order: "post",
+      },
+      {
+        entrypoint: "blume/components/powered-by-middleware.ts",
         order: "post",
       },
     ]);
@@ -361,6 +382,50 @@ describe("blumeIntegration astro:config:setup", () => {
         prerender: true,
       },
     ]);
+  });
+
+  it("leaves the powered-by middleware out with poweredBy off", () => {
+    const middleware: string[] = [];
+    // SAFETY: as above.
+    blumeIntegration({ pages: [], poweredBy: false }).hooks[
+      "astro:config:setup"
+    ]?.({
+      addMiddleware: (entry: { entrypoint: string }) =>
+        middleware.push(entry.entrypoint),
+      createCodegenDir: () => CODEGEN_DIR,
+      injectRoute: () => {},
+    } as never);
+    expect(middleware).toEqual(["blume/components/icon-sprite-middleware.ts"]);
+  });
+});
+
+describe("blumeIntegration powered-by header in dev", () => {
+  it("names Blume on every response, ahead of the redirects", () => {
+    const stack = serverSetup({
+      poweredBy: undefined,
+      redirects: compileRedirects([{ from: "/old", status: 302, to: "/new" }]),
+    });
+    // X-Powered-By, then the redirects, then Markdown negotiation.
+    expect(stack).toHaveLength(3);
+    const headers: Record<string, string> = {};
+    let passed = false;
+    handleOf(stack)(
+      { headers: {}, method: "GET", url: "/favicon.svg" },
+      {
+        setHeader: (name, value) => {
+          headers[name] = value;
+        },
+      },
+      () => {
+        passed = true;
+      }
+    );
+    expect(headers).toStrictEqual({ "X-Powered-By": "Blume" });
+    expect(passed).toBe(true);
+  });
+
+  it("adds no middleware for it with poweredBy off", () => {
+    expect(serverSetup({ poweredBy: false })).toHaveLength(1);
   });
 });
 
@@ -417,20 +482,20 @@ describe("blumeIntegration markdown negotiation", () => {
     expect(nexted).toBe(true);
   });
 
-  it("does not negotiate when the client does not prefer markdown", () => {
+  it("serves HTML, varying on Accept, when the client does not prefer markdown", () => {
     const handle = markdownHandle(["/guide"]);
     const req: DevRequest = {
       headers: { accept: "text/html" },
       method: "GET",
       url: "/guide",
     };
-    let headerSet = false;
+    const headers: CollectedHeaders = {};
     let nexted = false;
     handle(
       req,
       {
-        setHeader: () => {
-          headerSet = true;
+        setHeader: (key: string, value: string) => {
+          headers[key] = value;
         },
       },
       () => {
@@ -439,7 +504,9 @@ describe("blumeIntegration markdown negotiation", () => {
     );
 
     expect(req.url).toBe("/guide");
-    expect(headerSet).toBe(false);
+    // The HTML answer depends on `Accept` as much as the Markdown one, as
+    // on Vercel and Cloudflare.
+    expect(headers.Vary).toBe("Accept");
     expect(nexted).toBe(true);
   });
 });
@@ -659,6 +726,82 @@ describe("showBlumeErrorOverlay", () => {
       [key]?: { overlay: DevServerStub | null };
     };
     expect(host[key]?.overlay?.hot).toBe(channel);
+  });
+});
+
+/**
+ * Run the config and server hooks against a real HTTP server whose own
+ * handler echoes the URL it was handed, as Vite's middleware would see it.
+ */
+const devServer = async (poweredBy?: boolean) => {
+  const { root } = await projectFixture({
+    "public/demo/index.html": "<p>Demo</p>",
+  });
+  const http = createServer((request, response) => {
+    response.writeHead(200, { "content-type": "text/plain" });
+    response.end(request.url);
+  });
+  http.listen(0, "127.0.0.1");
+  await once(http, "listening");
+  const integration = blumeIntegration({ pages: [], poweredBy });
+  // SAFETY: the done hook reads `root`, `srcDir`, `base`, and `publicDir`
+  // and calls `injectTypes`, all provided by the fixture.
+  integration.hooks["astro:config:done"]?.({
+    config: {
+      base: "/docs/",
+      publicDir: pathToFileURL(`${root}/public/`),
+      root: pathToFileURL(`${root}/`),
+      srcDir: pathToFileURL(`${root}/src/`),
+    },
+    injectTypes: () => pathToFileURL(`${root}/.astro/x.d.ts`),
+  } as never);
+  // SAFETY: the setup hook only touches the fields provided here.
+  integration.hooks["astro:server:setup"]?.({
+    server: {
+      environments: {},
+      httpServer: http,
+      middlewares: { stack: [] },
+      watcher: { on: () => {} },
+    },
+  } as never);
+  // SAFETY: a server listening on a TCP port reports an AddressInfo.
+  const { port } = http.address() as AddressInfo;
+  const get = (path: string) =>
+    fetch(`http://127.0.0.1:${port}${path}`, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(10_000),
+    });
+  return { get, http };
+};
+
+describe("trailing slashes in dev", () => {
+  it("answers a trailing slash ahead of Astro's middleware", async () => {
+    const { get, http } = await devServer();
+    try {
+      const page = await get("/docs/guide/?tab=1");
+      expect(page.status).toBe(301);
+      expect(page.headers.get("location")).toBe("/docs/guide?tab=1");
+      expect(page.headers.get("x-powered-by")).toBe("Blume");
+      const folder = await get("/docs/demo");
+      expect(folder.headers.get("location")).toBe("/docs/demo/");
+      const index = await get("/docs/demo/");
+      expect(await index.text()).toBe("/docs/demo/index.html");
+      const untouched = await get("/docs/guide");
+      expect(await untouched.text()).toBe("/docs/guide");
+    } finally {
+      http.close();
+    }
+  });
+
+  it("leaves Blume's name off the redirect with poweredBy off", async () => {
+    const { get, http } = await devServer(false);
+    try {
+      const page = await get("/docs/guide/");
+      expect(page.status).toBe(301);
+      expect(page.headers.get("x-powered-by")).toBeNull();
+    } finally {
+      http.close();
+    }
   });
 });
 

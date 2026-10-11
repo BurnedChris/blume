@@ -34,6 +34,7 @@ export const nl: UIStringsOverride = {
     error: "Sorry, er is iets misgegaan.",
     explainCode: "Leg deze code uit.",
     label: "Stel een vraag",
+    open: "Assistent openen",
     placeholder: "Stel een vraag…",
     rateLimited:
       "Je hebt veel vragen gesteld. Probeer het over een paar minuten opnieuw.",
@@ -50,6 +51,7 @@ export const nl: UIStringsOverride = {
   banner: { dismiss: "Aankondiging sluiten" },
   changelog: {
     description: "Productupdates en releaseopmerkingen.",
+    empty: "Nog geen items in het wijzigingslogboek.",
     title: "Wijzigingslogboek",
   },
   consent: {
@@ -71,6 +73,7 @@ export const nl: UIStringsOverride = {
     preview: "Voorbeeld",
     prop: "Eigenschap",
     selectTab: "Tabblad kiezen",
+    selectView: "Weergave kiezen",
     showLess: "Minder weergeven",
     showMore: "Meer weergeven",
     stars: "Sterren",

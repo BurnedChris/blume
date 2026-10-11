@@ -1,0 +1,849 @@
+---
+// Publish Spring Boot API documentation with springdoc-openapi: checked
+// against the OpenAPI, deployment, and validate docs, `blume init`
+// (cli/init/scaffold.ts, cli/init/questions.ts), the OpenAPI loader, slug, and
+// diagnostic rules (openapi/source.ts, openapi/parse.ts, openapi/model.ts),
+// and the dev watcher (cli/commands/dev.ts, which watches local spec files
+// through openapi/references.ts referenceSpecFiles) on main; springdoc's v3
+// and v2 docs and FAQ compatibility tables, the springdoc-openapi-maven-plugin and Gradle plugin READMEs, Spring Boot's
+// Maven plugin docs (start goal, profiles, maxAttempts), the springdoc and
+// Spring Boot poms on Maven Central, the Ubuntu 24.04 runner image (Maven,
+// jq), and the workflow's action versions against their latest releases on
+// 2026-09-27. Ran in a scratch fixture with Temurin JDK 21.0.12 and Maven
+// 3.9.16: `mvn verify` on the project below (Spring Boot 4.1.1, springdoc
+// 3.1.1) exported the spec shown; the jq check passed on it and failed on an
+// export without @Server; the packaged jar answered 404 on /v3/api-docs and
+// 202 and 400 on POST /messages; the CORS config answered the preflight;
+// @SecurityRequirements wrote `security: []`; dropping @Tag and @Server
+// exported `message-controller` and `http://localhost:8080`; a missing
+// endpoint failed the build with failOnError true ("response code: 404", app
+// left running) and passed with no file when false; springdoc 2.8.17 on Boot
+// 4.1.1 exported identical bytes; Blume's parseSpec and extractOperations
+// read the export with no warnings and the routes in the table. Not run:
+// `blume dev` or `blume build` on the site, the GitHub Actions workflow, and
+// the Pages deploy. Not yet run end to end.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("spring-boot-api-documentation")}>
+  <p>
+    To publish Spring Boot API documentation outside the running application,
+    let springdoc-openapi generate the OpenAPI document from your controllers,
+    export it to a file while Maven builds the app, and hand that file to a
+    separate docs build. springdoc's Maven plugin starts your app on the build
+    machine, downloads the spec from <code>/v3/api-docs</code>, and stops it
+    again, so the service you deploy never has to serve its own docs.
+  </p>
+  <p>
+    By the end of this guide, you have a small Spring Boot API with annotated
+    controllers and DTOs, a Maven build that exports <code>openapi.json</code>{" "}
+    and checks its auth metadata, and a static Blume site with a page per
+    operation, built from that file in GitHub Actions and deployed to GitHub
+    Pages. Blume reads the spec, never your Java code. Every page comes from
+    what springdoc exports, so the annotations are where your docs get better.
+  </p>
+  <p>
+    If an in-app Swagger UI for your own team is all you need, springdoc's{" "}
+    <code>springdoc-openapi-starter-webmvc-ui</code> starter serves one at{" "}
+    <code>/swagger-ui.html</code>, with no docs site to build. A separate site
+    is worth it when the docs are public, need guides beside the reference, or
+    shouldn't go down when the API does. The example uses Maven and Spring MVC,
+    with notes for Gradle and WebFlux.
+  </p>
+
+  <h2>Pin a compatible springdoc release</h2>
+  <p>
+    Each springdoc-openapi line is built against one Spring Boot line, so choose
+    the two together:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Spring Boot</th>
+        <th scope="col">springdoc-openapi</th>
+        <th scope="col">Checked against</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>4.1.x</td>
+        <td>3.1.x</td>
+        <td>3.1.1 is built on Spring Boot 4.1.0</td>
+      </tr>
+      <tr>
+        <td>4.0.x</td>
+        <td>3.0.x</td>
+        <td>3.0.3 is built on Spring Boot 4.0.5</td>
+      </tr>
+      <tr>
+        <td>3.5.x</td>
+        <td>2.8.x or 2.9.x</td>
+        <td>2.9.1 is built on Spring Boot 3.5.16</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    This guide uses Spring Boot 4.1.1 with springdoc-openapi 3.1.1, and pins
+    both in the <code>pom.xml</code>. A mismatch can go unnoticed: this guide's
+    small API exported the same spec with springdoc 2.8.17 on Spring Boot
+    4.1.1, a pair springdoc doesn't build against. Working isn't the same as
+    supported, so check the table in springdoc's FAQ whenever you upgrade
+    Spring Boot. On Spring Boot 3.5, the Spring MVC starter is{" "}
+    <code>spring-boot-starter-web</code> rather than{" "}
+    <code>spring-boot-starter-webmvc</code>.
+  </p>
+
+  <h2>Set up the two projects</h2>
+  <p>The example keeps the API and its docs in one repository, as two folders:</p>
+  <CodeBlock
+    code={`acme/
+  acme-api/    the Spring Boot API (Java, Maven)
+  docs-site/   the Blume docs (Node.js)`}
+    lang="txt"
+  />
+  <p>Create the folders and scaffold the docs project:</p>
+  <CodeBlock
+    code={`mkdir acme && cd acme
+mkdir -p acme-api/src/main/java/com/acme/messages acme-api/src/main/resources
+npx blume init docs-site --template docs --yes`}
+    lang="bash"
+  />
+  <p>
+    <code>blume init</code> writes <code>docs-site/</code> with a{" "}
+    <code>docs/</code> content folder, a <code>blume.config.ts</code>, and a{" "}
+    <code>package.json</code> whose <code>dev</code> and <code>build</code>{" "}
+    scripts run Blume, then installs its dependencies. The API needs JDK 21 and
+    Maven. If you generated your project on start.spring.io, it has the Maven
+    wrapper, and <code>./mvnw</code> works wherever this guide runs{" "}
+    <code>mvn</code>.
+  </p>
+
+  <h2>Build the API</h2>
+  <p>
+    Here's the whole <code>pom.xml</code>. Beside the web and validation
+    starters, it adds springdoc's API starter, which serves the spec without
+    Swagger UI. The <code>build</code> section is the export, which the next
+    section walks through.
+  </p>
+  <CodeBlock
+    code={`<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.1.1</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>com.acme</groupId>
+  <artifactId>acme-api</artifactId>
+  <version>1.0.0</version>
+
+  <properties>
+    <java.version>21</java.version>
+    <springdoc.version>3.1.1</springdoc.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-webmvc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springdoc</groupId>
+      <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+      <version>\${springdoc.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>pre-integration-test</id>
+            <goals>
+              <goal>start</goal>
+            </goals>
+            <configuration>
+              <profiles>
+                <profile>openapi</profile>
+              </profiles>
+            </configuration>
+          </execution>
+          <execution>
+            <id>post-integration-test</id>
+            <goals>
+              <goal>stop</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.springdoc</groupId>
+        <artifactId>springdoc-openapi-maven-plugin</artifactId>
+        <version>1.5</version>
+        <executions>
+          <execution>
+            <id>integration-test</id>
+            <goals>
+              <goal>generate</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <apiDocsUrl>http://localhost:8080/v3/api-docs</apiDocsUrl>
+          <outputFileName>openapi.json</outputFileName>
+          <failOnError>true</failOnError>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>`}
+    lang="xml"
+    title="acme-api/pom.xml"
+  />
+  <p>
+    For a WebFlux app, use <code>springdoc-openapi-starter-webflux-api</code>{" "}
+    instead. The rest of the guide is the same.
+  </p>
+  <p>
+    Declare the API's metadata once, on a configuration class. The title,
+    public server URL, and security scheme apply to the whole document:
+  </p>
+  <CodeBlock
+    code={`package com.acme.messages;
+
+import io.swagger.v3.oas.annotations.OpenAPIDefinition;
+import io.swagger.v3.oas.annotations.enums.SecuritySchemeType;
+import io.swagger.v3.oas.annotations.info.Info;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.security.SecurityScheme;
+import io.swagger.v3.oas.annotations.servers.Server;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+@OpenAPIDefinition(
+    info = @Info(
+        title = "Acme Messages API",
+        version = "1.0.0",
+        description = "Send transactional email and SMS."),
+    servers = @Server(url = "https://api.acme.example/v1"),
+    security = @SecurityRequirement(name = "bearerAuth"))
+@SecurityScheme(
+    name = "bearerAuth",
+    type = SecuritySchemeType.HTTP,
+    scheme = "bearer",
+    description = "An API key, sent as a bearer token.")
+public class OpenApiConfig {}`}
+    lang="java"
+    title="acme-api/src/main/java/com/acme/messages/OpenApiConfig.java"
+  />
+  <p>
+    The DTOs are records. springdoc reads Jakarta Bean Validation annotations,
+    so <code>@NotBlank</code> marks a field as required in the spec, and{" "}
+    <code>@Schema</code> adds descriptions, examples, and allowed values:
+  </p>
+  <CodeBlock
+    code={`package com.acme.messages;
+
+import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.NotBlank;
+import java.util.Map;
+
+public record SendMessageRequest(
+    @NotBlank
+    @Schema(
+        description = "How to deliver the message.",
+        allowableValues = {"email", "sms"},
+        example = "email")
+    String channel,
+
+    @NotBlank
+    @Schema(
+        description = "An email address, or a phone number in E.164 format.",
+        example = "ada@example.com")
+    String to,
+
+    @NotBlank
+    @Schema(description = "The ID of the template to send.", example = "welcome")
+    String template,
+
+    @Schema(description = "Values for the template's variables.")
+    Map<String, String> variables) {}`}
+    lang="java"
+    title="acme-api/src/main/java/com/acme/messages/SendMessageRequest.java"
+  />
+  <CodeBlock
+    code={`package com.acme.messages;
+
+import io.swagger.v3.oas.annotations.media.Schema;
+
+public record Message(
+    @Schema(example = "msg_8f2k")
+    String id,
+
+    @Schema(allowableValues = {"queued", "sent", "delivered", "failed"})
+    String status,
+
+    @Schema(allowableValues = {"email", "sms"})
+    String channel) {}`}
+    lang="java"
+    title="acme-api/src/main/java/com/acme/messages/Message.java"
+  />
+  <p>
+    The controller keeps messages in memory, which is enough to run the API and
+    see what the spec describes:
+  </p>
+  <CodeBlock
+    code={`package com.acme.messages;
+
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
+
+@RestController
+@RequestMapping("/messages")
+@Tag(name = "Messages", description = "Send a message and check whether it arrived.")
+public class MessageController {
+
+  private final Map<String, Message> messages = new ConcurrentHashMap<>();
+
+  @PostMapping
+  @ResponseStatus(HttpStatus.ACCEPTED)
+  @Operation(
+      summary = "Send a message",
+      description = "Queues an email or SMS for delivery and returns its ID right away.")
+  @ApiResponse(responseCode = "202", description = "The message is queued.")
+  @ApiResponse(
+      responseCode = "400",
+      description = "The request body is invalid.",
+      content = @Content)
+  public Message sendMessage(@Valid @RequestBody SendMessageRequest request) {
+    String id = "msg_" + UUID.randomUUID().toString().substring(0, 8);
+    Message message = new Message(id, "queued", request.channel());
+    messages.put(id, message);
+    return message;
+  }
+
+  @GetMapping("/{id}")
+  @Operation(
+      summary = "Get a message",
+      description = "Returns a message and its delivery status.")
+  @ApiResponse(responseCode = "200", description = "The message.")
+  @ApiResponse(responseCode = "404", description = "No message has that ID.", content = @Content)
+  public Message getMessage(
+      @Parameter(
+              description = "The message ID, from the response to Send a message.",
+              example = "msg_8f2k")
+          @PathVariable
+          String id) {
+    Message message = messages.get(id);
+    if (message == null) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+    }
+    return message;
+  }
+}`}
+    lang="java"
+    title="acme-api/src/main/java/com/acme/messages/MessageController.java"
+  />
+  <CodeBlock
+    code={`package com.acme.messages;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class MessagesApplication {
+  public static void main(String[] args) {
+    SpringApplication.run(MessagesApplication.class, args);
+  }
+}`}
+    lang="java"
+    title="acme-api/src/main/java/com/acme/messages/MessagesApplication.java"
+  />
+
+  <h3>Where each annotation shows up</h3>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In Java</th>
+        <th scope="col">In the spec</th>
+        <th scope="col">On the docs site</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>@Tag(name = "Messages")</code></td>
+        <td>The operation's tag</td>
+        <td>The sidebar group, and the URL segment <code>/api/messages/</code></td>
+      </tr>
+      <tr>
+        <td>The method name, <code>sendMessage</code></td>
+        <td><code>operationId</code></td>
+        <td>The page URL, <code>/api/messages/send-message</code></td>
+      </tr>
+      <tr>
+        <td><code>@Operation</code></td>
+        <td><code>summary</code> and <code>description</code></td>
+        <td>The page title, sidebar label, and introduction</td>
+      </tr>
+      <tr>
+        <td><code>@NotBlank</code>, <code>@Schema</code></td>
+        <td><code>required</code>, descriptions, examples, <code>enum</code></td>
+        <td>The schema tables, and the values Try it starts with</td>
+      </tr>
+      <tr>
+        <td><code>@Server</code></td>
+        <td><code>servers</code></td>
+        <td>Where the Try it panel sends requests</td>
+      </tr>
+      <tr>
+        <td><code>@SecurityScheme</code> and the root requirement</td>
+        <td>
+          <code>components.securitySchemes</code> and <code>security</code>
+        </td>
+        <td>
+          An Authorization section, and a bearer placeholder in every code
+          sample
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Two defaults are worth overriding before you publish. Without{" "}
+    <code>@Tag</code>, springdoc tags operations after the controller class,
+    so the URL segment becomes <code>message-controller</code>. Without{" "}
+    <code>@Server</code>, the spec's only server is{" "}
+    <code>http://localhost:8080</code>, labeled "Generated server url",
+    because that's where the export reached the app. To mark one operation as
+    public, annotate its method with <code>@SecurityRequirements</code> and no
+    value: springdoc writes <code>security: []</code> for it, and Blume leaves
+    out its Authorization section.
+  </p>
+
+  <h2>Export the spec during the build</h2>
+  <p>Add two properties files:</p>
+  <CodeBlock
+    code={`springdoc.api-docs.enabled=false
+springdoc.default-produces-media-type=application/json`}
+    lang="properties"
+    title="acme-api/src/main/resources/application.properties"
+  />
+  <CodeBlock
+    code="springdoc.api-docs.enabled=true"
+    lang="properties"
+    title="acme-api/src/main/resources/application-openapi.properties"
+  />
+  <p>
+    The first file turns <code>/v3/api-docs</code> off in the app you deploy,
+    so a production request to it gets a 404. The <code>openapi</code> profile
+    turns it back on, and only the export runs with that profile. The media
+    type line makes responses <code>application/json</code> in the spec;
+    without it, springdoc writes <code>*/*</code> for any method that doesn't
+    declare what it produces.
+  </p>
+  <p>
+    Now the <code>build</code> section of the <code>pom.xml</code>. When you
+    run <code>mvn verify</code>, Maven runs its goals in phase order:
+  </p>
+  <ol>
+    <li><code>package</code> builds the jar.</li>
+    <li>
+      <code>pre-integration-test</code>: Spring Boot's <code>start</code> goal
+      launches the jar's app in a separate process, with the{" "}
+      <code>openapi</code> profile, and waits until it's ready.
+    </li>
+    <li>
+      <code>integration-test</code>: springdoc's <code>generate</code> goal
+      downloads <code>apiDocsUrl</code> and writes it to{" "}
+      <code>target/openapi.json</code>.
+    </li>
+    <li><code>post-integration-test</code>: <code>stop</code> shuts the app down.</li>
+  </ol>
+  <p>
+    Don't leave out <code>failOnError</code>. It defaults to{" "}
+    <code>false</code>, and then a failed download logs an error while the
+    build still passes, with no spec written. Run the build:
+  </p>
+  <CodeBlock
+    code={`cd acme-api
+mvn verify`}
+    lang="bash"
+  />
+  <p>
+    springdoc 3.x writes OpenAPI 3.1 by default. To see the parts Blume turns
+    into the Authorization section and the Try it server, print them with jq:
+  </p>
+  <CodeBlock
+    code={`jq '{openapi, servers, security, securitySchemes: .components.securitySchemes}' target/openapi.json`}
+    lang="bash"
+  />
+  <CodeBlock
+    code={`{
+  "openapi": "3.1.0",
+  "servers": [
+    {
+      "url": "https://api.acme.example/v1"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "securitySchemes": {
+    "bearerAuth": {
+      "type": "http",
+      "description": "An API key, sent as a bearer token.",
+      "scheme": "bearer"
+    }
+  }
+}`}
+    lang="json"
+  />
+  <p>
+    On Gradle, the <code>org.springdoc.openapi-gradle-plugin</code> plugin
+    (1.9.0) does the same job: <code>./gradlew generateOpenApiDocs</code>{" "}
+    starts the app, downloads the spec, and writes{" "}
+    <code>build/openapi.json</code>. Pass the profile through its{" "}
+    <code>customBootRun</code> arguments.
+  </p>
+
+  <h2>Check the auth metadata without secrets</h2>
+  <p>
+    Nothing in that export needed a credential. The bearer scheme comes from
+    annotations, so springdoc describes it without ever seeing a token, and the
+    export request sends none. Keep it that way: documenting the API should
+    never need a production key, database password, or signing secret. If
+    your app won't start without one, give the <code>openapi</code> profile a
+    local stand-in, not the real value.
+  </p>
+  <p>
+    What an export can do is lose metadata quietly. Drop an annotation in a
+    refactor and the build still succeeds, with less in the spec. Check the
+    file after every export:
+  </p>
+  <CodeBlock
+    code={`jq -e '
+  .components.securitySchemes.bearerAuth.scheme == "bearer"
+  and .security == [{"bearerAuth": []}]
+  and .servers[0].url == "https://api.acme.example/v1"
+' target/openapi.json`}
+    lang="bash"
+  />
+  <p>
+    It prints <code>true</code>. With <code>-e</code>, jq exits with an error
+    when the result is <code>false</code>, so the check fails the build if the
+    scheme, the root requirement, or the public server URL goes missing. jq is
+    preinstalled on GitHub's Ubuntu runners.
+  </p>
+
+  <h2>Build the docs site</h2>
+  <p>Replace the scaffolded config:</p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  deployment: { site: "https://docs.acme.example" },
+  navigation: {
+    tabs: [
+      { label: "Docs", path: "/" },
+      { label: "API reference", path: "/api" },
+    ],
+  },
+  reference: [openapi({ route: "/api", spec: "./openapi.json" })],
+});`}
+    lang="ts"
+    title="docs-site/blume.config.ts"
+  />
+  <p>
+    The reference doesn't add a header tab on its own, so the tab pointing at{" "}
+    <code>/api</code> is what makes it reachable. <code>deployment.site</code>{" "}
+    gives the sitemap and canonical links their origin, since GitHub Pages
+    doesn't tell the build its URL.
+  </p>
+  <p>
+    The spec is a build output, so keep it out of Git in the docs project,
+    then copy in the one you exported and start the dev server:
+  </p>
+  <CodeBlock
+    code={`cd ../docs-site
+echo "openapi.json" >> .gitignore
+cp ../acme-api/target/openapi.json openapi.json
+npm run dev`}
+    lang="bash"
+  />
+  <p>
+    Open <code>http://localhost:4321/api</code>. The overview lists the
+    Messages tag, and each operation has its own page:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Operation</th>
+        <th scope="col">Page</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>POST /messages</code></td>
+        <td><code>/api/messages/send-message</code></td>
+      </tr>
+      <tr>
+        <td><code>GET /messages/&#123;id&#125;</code></td>
+        <td><code>/api/messages/get-message</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Each page has an Authorization section for the bearer token, schema tables
+    with the required fields marked, and a Try it panel aimed at{" "}
+    <code>https://api.acme.example/v1</code>. That host doesn't exist, so Send
+    can't succeed here; with your own API, the panel calls the server you
+    declared in <code>@Server</code>. The dev server watches the spec file, so
+    after a new export, copy the file in again and the pages update without a
+    restart.
+  </p>
+  <p>
+    For more on the reference itself, like code sample languages and a
+    hand-written authentication page beside the operations, see{" "}
+    <a href="/guides/openapi-documentation-website">Generate API docs from an OpenAPI spec</a>.
+  </p>
+
+  <h2>Hand the spec over in CI</h2>
+  <p>
+    In CI, the handoff is a workflow artifact. One job builds the API and
+    uploads <code>openapi.json</code>, the next downloads it into{" "}
+    <code>docs-site</code> and builds the site, and a third deploys it. The
+    docs job never sets up Java, and the API job never sets up Node.js.
+  </p>
+  <CodeBlock
+    code={`name: API docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+          cache-dependency-path: acme-api/pom.xml
+      - name: Build the API and export the spec
+        run: mvn -B verify
+        working-directory: acme-api
+      - name: Check the auth metadata
+        run: |
+          jq -e '
+            .components.securitySchemes.bearerAuth.scheme == "bearer"
+            and .security == [{"bearerAuth": []}]
+            and .servers[0].url == "https://api.acme.example/v1"
+          ' acme-api/target/openapi.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openapi
+          path: acme-api/target/openapi.json
+          if-no-files-found: error
+
+  docs:
+    needs: spec
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs-site
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: openapi
+          path: docs-site
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npx blume validate
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs-site/dist
+          include-hidden-files: true
+
+  deploy:
+    needs: docs
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: \${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5`}
+    lang="yaml"
+    title=".github/workflows/api-docs.yml"
+  />
+  <ul>
+    <li>
+      <strong>spec</strong> installs Temurin JDK 21 with a Maven cache keyed on
+      the API's <code>pom.xml</code>, runs the export and the jq check, and
+      uploads the file. <code>if-no-files-found: error</code> stops the run
+      here if the spec is missing, instead of in the docs build.
+    </li>
+    <li>
+      <strong>docs</strong> downloads the artifact into{" "}
+      <code>docs-site/</code>, where <code>spec</code> points, then checks every
+      internal link with <code>blume validate</code> and builds the site into{" "}
+      <code>dist/</code>. <code>include-hidden-files</code> keeps the{" "}
+      <code>.well-known/</code> folder Blume writes for agent discovery.
+    </li>
+    <li>
+      <strong>deploy</strong> publishes the build to GitHub Pages. The{" "}
+      <code>pages</code> and <code>id-token</code> permissions are what a
+      Pages deployment needs, and the workflow references no secrets.
+    </li>
+  </ul>
+  <p>
+    Before the first run, set <strong>Source</strong> to{" "}
+    <strong>GitHub Actions</strong> in the repository's Pages settings, and add{" "}
+    <code>docs.acme.example</code> under <strong>Custom domain</strong>.{" "}
+    <a href="/guides/markdown-docs-github-pages">Deploy Markdown docs to GitHub Pages</a>{" "}
+    covers both settings and the DNS record. To deploy somewhere else, replace
+    the last job with your host's deploy step for <code>docs-site/dist</code>;
+    the <a href="/docs/deployment">deployment docs</a> cover each host.
+  </p>
+  <Callout type="info">
+    Keep the docs build reading a local file rather than pointing{" "}
+    <code>spec</code> at a running app's <code>/v3/api-docs</code>. That
+    endpoint is off in production, and a docs build shouldn't depend on the API
+    being up. If you'd rather commit the exported spec than pass it between
+    jobs,{" "}
+    <a href="/guides/openapi-documentation-ci">Keep API documentation in sync with backend changes in CI</a>{" "}
+    adds the freshness and breaking-change checks that go with it.
+  </Callout>
+
+  <h2>Troubleshooting</h2>
+  <h3>mvn verify passes, but there's no openapi.json</h3>
+  <p>
+    <code>failOnError</code> is missing or <code>false</code>. The log shows{" "}
+    <code>[ERROR] An error has occurred, response code: 404</code> and then{" "}
+    <code>BUILD SUCCESS</code>. Set <code>failOnError</code> to{" "}
+    <code>true</code> so the next failure stops the build, then fix the cause
+    below.
+  </p>
+  <h3>The export fails with "response code: 404"</h3>
+  <p>
+    The app started, but the spec isn't at <code>apiDocsUrl</code>. Check that
+    the <code>start</code> execution lists the <code>openapi</code> profile.
+    If you set <code>springdoc.api-docs.path</code> or{" "}
+    <code>server.servlet.context-path</code>, include them in{" "}
+    <code>apiDocsUrl</code>.
+  </p>
+  <h3>The export fails with "response code: 401" or 403</h3>
+  <p>
+    Spring Security is guarding the spec. Permit it in your security filter
+    chain with <code>.requestMatchers("/v3/api-docs/**").permitAll()</code>.
+    The endpoint is only on under the <code>openapi</code> profile, so this
+    exposes nothing in production. Don't work around it by sending a real
+    token through the plugin's <code>headers</code> setting: the build would
+    then need a production credential to document the API.
+  </p>
+  <h3>The next export can't start because port 8080 is in use</h3>
+  <p>
+    When <code>generate</code> fails, Maven stops before{" "}
+    <code>post-integration-test</code>, so the app it started keeps running on
+    port 8080. Stop that Java process, then run the build again. CI runners
+    start clean each time, so this only bites locally.
+  </p>
+  <h3>The app doesn't start in time</h3>
+  <p>
+    The <code>start</code> goal checks 60 times, half a second apart, so it
+    gives up after 30 seconds. For a slow app, raise{" "}
+    <code>maxAttempts</code> in the <code>start</code> execution's
+    configuration. If it needs a database or a broker to boot, point the{" "}
+    <code>openapi</code> profile at a local stand-in, never at production.
+  </p>
+  <h3>Send fails in Try it, but curl works</h3>
+  <p>
+    That's CORS: the panel calls your API from the docs site's origin, and the
+    browser blocks the response unless the API allows that origin. In Spring
+    MVC:
+  </p>
+  <CodeBlock
+    code={`package com.acme.messages;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+@Configuration
+public class CorsConfig implements WebMvcConfigurer {
+  @Override
+  public void addCorsMappings(CorsRegistry registry) {
+    registry.addMapping("/**")
+        .allowedOrigins("https://docs.acme.example")
+        .allowedMethods("GET", "POST")
+        .allowedHeaders("Authorization", "Content-Type");
+  }
+}`}
+    lang="java"
+    title="acme-api/src/main/java/com/acme/messages/CorsConfig.java"
+  />
+  <p>
+    <a href="/guides/api-documentation-cors-errors">Fix CORS errors in an API documentation playground</a>{" "}
+    covers reading the preflight, and Blume's proxy for APIs you can't change.
+  </p>
+  <h3>The docs build fails with BLUME_OPENAPI_UNAVAILABLE</h3>
+  <p>
+    Blume couldn't read the spec where <code>spec</code> points. In CI, check
+    that the download step's <code>path</code> is <code>docs-site</code>, so
+    the file lands at <code>docs-site/openapi.json</code>. Locally, copy the
+    export in again. In <code>blume dev</code> this is only a warning and the
+    reference is skipped, so a working dev server can hide it.
+  </p>
+</GuidePage>

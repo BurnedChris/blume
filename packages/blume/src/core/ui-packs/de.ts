@@ -34,6 +34,7 @@ export const de: UIStringsOverride = {
     error: "Entschuldigung, etwas ist schiefgelaufen.",
     explainCode: "Erkläre diesen Code.",
     label: "Eine Frage stellen",
+    open: "Assistenten öffnen",
     placeholder: "Eine Frage stellen…",
     rateLimited:
       "Du hast viele Fragen gestellt. Versuch es in ein paar Minuten noch einmal.",
@@ -50,6 +51,7 @@ export const de: UIStringsOverride = {
   banner: { dismiss: "Ankündigung schließen" },
   changelog: {
     description: "Produkt-Updates und Versionshinweise.",
+    empty: "Noch keine Einträge im Änderungsprotokoll.",
     title: "Änderungsprotokoll",
   },
   consent: {
@@ -71,6 +73,7 @@ export const de: UIStringsOverride = {
     preview: "Vorschau",
     prop: "Eigenschaft",
     selectTab: "Tab auswählen",
+    selectView: "Ansicht auswählen",
     showLess: "Weniger anzeigen",
     showMore: "Mehr anzeigen",
     stars: "Sterne",

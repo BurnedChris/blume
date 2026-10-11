@@ -1,7 +1,7 @@
 ---
 title: Assistent
 description: >-
-  Ein In-Page-Assistent, der in deinen Docs verankert ist — vorgeschlagene Fragen, eigene Anweisungen, Dimensionierung des Retrievals, Provider-Adapter vom Vercel AI Gateway bis zu jedem OpenAI-kompatiblen Endpunkt und die Server-Ausgabe, die er braucht.
+  Ein In-Page-Assistent, der in deinen Docs verankert ist — vorgeschlagene Fragen, eigene Anweisungen, Dimensionierung des Retrievals, Provider-Adapter für OpenAI, Anthropic, Gemini, Grok, das Vercel AI Gateway und jeden OpenAI-kompatiblen Endpunkt sowie die Server-Ausgabe, die er braucht.
 ---
 
 Füge einen Assistenten hinzu, der Leserfragen in einem In-Page-Chat-Panel beantwortet, unterstützt von einem streamenden Server-Endpunkt und dem [AI SDK](https://ai-sdk.dev). Er ist opt-in, und statische Docs bleiben vollständig statisch, bis du ihn aktivierst:
@@ -35,6 +35,27 @@ ai: {
 
 `label` ist die Frage, die gestellt wird; `icon` ist optional. Lässt du `suggestions` weg (oder leer), öffnet sich das Panel mit einem einfachen Eingabefeld.
 
+## Fragen zum Code [#asking-about-code]
+
+Ist der Assistent aktiviert, bekommt jeder Codeblock neben seinem Kopieren-Button einen **Ask**-Button. Er öffnet den Assistenten mit dem angehängten Block, dargestellt als Chip über dem Eingabefeld, sodass der Leser fragen kann, was der Code tut, warum er fehlschlägt oder wie er sich anpassen lässt. Wird er ohne Frage abgesendet, wird der Assistent gebeten, den Code zu erklären. Der Code geht als abgegrenzter Codeblock im Anschluss an die Frage an das Modell, bis zu 6.000 Zeichen.
+
+Eine eigene Chat-UI, die auf `useAssistant` aufbaut, kann dasselbe: Lausche auf `window` auf `blume:open-assistant`, dessen `detail.code` `language`, `source` und `title` des Blocks enthält.
+
+## Support kontaktieren [#contact-support]
+
+Wenn die Docs keine Antwort haben, übergib den Leser an einen Menschen. Setze `support`, und sobald es eine Konversation gibt, zeigt das Panel darunter einen **Contact support**-Link:
+
+```ts blume.config.ts lineNumbers
+ai: {
+  assistant: {
+    enabled: true,
+    support: "mailto:help@example.com", // or "https://example.com/support", or "/support"
+  },
+},
+```
+
+Eine `mailto:`-Adresse beginnt eine E-Mail mit der Konversation als Inhalt, sodass der Leser nichts erneut erklären muss (bei einer langen Konversation bleiben die neuesten Beiträge erhalten). Eine URL oder eine Seite auf deiner Site bekommt die ID der Konversation als `thread`-Query-Parameter. Die [Analytics-Ereignisse](#analytics) `ask`, `ask_answer` und `ask_error` des Assistenten tragen dasselbe `thread`, sodass dein Support-Team die Konversation in deinen Analytics finden kann.
+
 ## Eigene Anweisungen [#custom-instructions]
 
 Ergänze deinen eigenen System-Prompt-Text mit `instructions` — Identität, Sprache, Tonfall oder alles andere, was der Assistent im Blick behalten soll:
@@ -55,9 +76,27 @@ Dein Text wird an die eingebauten Anweisungen **angehängt** und ersetzt sie nic
 
 Der Assistent ist **in deinen Docs verankert**. Für jede Frage ruft er die relevantesten Seiten ab — über denselben lexikalischen [Orama](/docs/configuration/search)-Index, der auch die Suche auf der Seite antreibt — und injiziert sie in den System-Prompt des Modells, sodass Antworten aus deinen Inhalten statt aus dem Eigenwissen des Modells kommen. Der Assistent wird angewiesen, nur anhand der abgerufenen Seiten zu antworten, zu sagen, wenn etwas nicht abgedeckt ist, und die Seiten zu zitieren, aus denen er geschöpft hat.
 
-Die Seite, auf der sich der Leser gerade befindet, wird dem Kontext zuerst hinzugefügt und dient dazu, das Retrieval auf die Sprache dieser Seite zu beschränken — und auf einer [versionierten](/docs/content/versioning) Site auf ihre Docs-Version —, damit Antworten relevant für die aktuelle Stelle in den Docs bleiben. Das Retrieval läuft zur Anfragezeit aus einem in den Build eingebackenen Snapshot, funktioniert also unabhängig von deinem [Such](/docs/configuration/search)-Provider — selbst mit `search: false` — und braucht keine Konfiguration.
+Die Seite, auf der sich der Leser gerade befindet, wird dem Kontext zuerst hinzugefügt und dient dazu, das Retrieval auf die Sprache dieser Seite zu beschränken — und auf einer [versionierten](/docs/content/versioning) Site auf ihre Docs-Version —, damit Antworten relevant für die aktuelle Stelle in den Docs bleiben. Eine Frage von außerhalb der Docs, etwa von einer Landingpage, hält sich an die Sprache, die das Locale-Präfix der URL nennt (`/ja`), oder an die Standardsprache. Das Retrieval läuft zur Anfragezeit aus einem in den Build eingebackenen Snapshot, funktioniert also unabhängig von deinem [Such](/docs/configuration/search)-Provider — selbst mit `search: false` — und braucht keine Konfiguration.
 
 Grounding ist für jeden Adapter aktiv außer **[Inkeep](#inkeep)**, das sein eigenes Retrieval über die Inhalte ausführt, die du in seinem Dashboard indexiert hast.
+
+## Seiten durchsuchen und lesen [#searching-and-reading-pages]
+
+Die abgerufenen Seiten sind ein Vorsprung. Der Assistent kann auch selbst nachschlagen: Er hat ein `search_docs`-Tool, das deine Docs durchsucht, und ein `read_page`-Tool, das eine ganze Seite liest, für den Fall, dass ein Auszug vor der Antwort endet. Er kann suchen, eine oder zwei Seiten lesen, erneut suchen und dann antworten, alles innerhalb einer Frage. Tool-Aufrufe laufen auf deinem Server gegen denselben Snapshot wie das Grounding, halten sich an die Sprache und Docs-Version des Lesers und erreichen den Leser nie; er sieht nur die Antwort.
+
+Die Tools sind standardmäßig für jeden Adapter aktiv, dessen Modelle Tool Calling unterstützen. Für [OpenAI-kompatible Endpunkte](#openai-compatible-endpoints) sind sie deaktiviert, da ein selbst gehostetes Modell das womöglich nicht tut. Setze `tools`, um einen der beiden Standards zu ändern:
+
+```ts blume.config.ts lineNumbers
+ai: {
+  assistant: {
+    enabled: true,
+    provider: openai({ baseUrl, model, apiKeyEnv }),
+    tools: true, // this model supports tool calling
+  },
+}
+```
+
+Jede Frage braucht höchstens fünf Modellschritte: bis zu vier Runden Tool-Aufrufe, dann die Antwort. Mit `tools: false` antwortet der Assistent allein anhand der abgerufenen Seiten, so wie vor der Einführung der Tools.
 
 ## Retrieval-Größe [#retrieval-size]
 
@@ -86,6 +125,8 @@ Die drei sind nicht austauschbar. `contextBudget` begrenzt die gesamte Injektion
 
 Die Standardwerte passen zu einem gehosteten Modell. Senke sie, wenn du von eigener Hardware auslieferst und die Zeit bis zum ersten Token wichtiger ist als der Recall; Antworten bleiben in beiden Fällen verankert, und der Assistent ist angewiesen, zu sagen, wenn etwas nicht abgedeckt ist, statt die Lücke zu füllen.
 
+Auf eigener Hardware solltest du außerdem das Kontextfenster des Modells für den gesamten Prompt dimensionieren, nicht nur für die Auszüge: Die bisherige Konversation fügt bis zu 24.000 Zeichen hinzu, und mit aktivierten `tools` ein einzelnes `read_page`-Ergebnis bis zu 20.000, allein schon etwa 5.000 Tokens. Ollama etwa nutzt auf kleineren GPUs standardmäßig ein Fenster von 4k Tokens, und ein Prompt, der darüber hinauswächst, schlägt nicht fehl: Ollama verwirft den Anfang des Prompts, wo die Anweisungen und Auszüge stehen, und das Modell antwortet ohne deine Docs.
+
 ## Externer Endpunkt [#external-endpoint]
 
 Du hast schon ein API-Backend für AI? Richte das Panel darauf aus und halte den Docs-Build statisch:
@@ -108,6 +149,8 @@ Blume sendet denselben `POST`-Body wie seine eingebaute Route:
 }
 ```
 
+`messages` ist die bisherige Konversation, die mit der neuen Frage endet. Die eingebaute Route nimmt höchstens 40 Nachrichten und davon 24.000 Zeichen als JSON an; wächst eine Konversation über eine der beiden Grenzen hinaus, sendet das Panel die neuesten Beiträge, die hineinpassen, und verwirft die ältesten.
+
 Gib eine erfolgreiche Antwort zurück, deren Body ein reiner UTF-8-Textstream ist. Liegt der Endpunkt auf einem anderen Origin, erlaube den Docs-Origin per CORS: akzeptiere `OPTIONS` und `POST`, lasse den Request-Header `content-type` zu und gib die CORS-Header sowohl beim Preflight als auch bei der gestreamten Antwort zurück. Mit gesetztem `endpoint` erzeugt Blume die Chat-UI, aber keine Server-Route, keinen Grounding-Snapshot, keine Provider-Abhängigkeit und keine Warnung zu Provider-Secrets; dein Backend verantwortet Retrieval, Authentifizierung, Rate Limiting, Modellzugriff und Zitate. Ein daneben gesetzter Adapter wird ignoriert.
 
 ## Cross-Origin-Aufrufer [#cross-origin-callers]
@@ -123,7 +166,7 @@ ai: {
 }
 ```
 
-Die Route antwortet dann auf den `OPTIONS`-Preflight des Browsers und nennt einen aufgeführten Origin bei jeder Antwort — bei der gestreamten Antwort genauso wie bei den Fehler-Status, damit der Aufrufer einen abgelehnten Body von einem Provider-Ausfall unterscheiden kann. Origins, die nicht aufgeführt sind, bekommen keinen Header und bleiben der Same-Origin-Regel des Browsers unterworfen. Jeder Eintrag wird auf seinen Origin reduziert, `https://www.example.com/docs/` und `https://www.example.com` bedeuten also dasselbe. Damit jede Seite die Route aufrufen darf, führe `"*"` statt einzelner Origins auf.
+Die Route antwortet dann auf den `OPTIONS`-Preflight des Browsers und nennt einen aufgeführten Origin bei jeder Antwort — bei der gestreamten Antwort genauso wie bei den Fehler-Status, damit der Aufrufer einen abgelehnten Body von einem Provider-Ausfall unterscheiden kann. Diese Antworten geben außerdem `Retry-After` frei, sodass der Aufrufer nach einem `429` des [Rate Limitings](/docs/configuration/rate-limiting) auslesen kann, wie viele Sekunden er warten muss. Origins, die nicht aufgeführt sind, bekommen keinen Header und bleiben der Same-Origin-Regel des Browsers unterworfen. Jeder Eintrag wird auf seinen Origin reduziert, `https://www.example.com/docs/` und `https://www.example.com` bedeuten also dasselbe. Damit jede Seite die Route aufrufen darf, führe `"*"` statt einzelner Origins auf.
 
 Der Aufrufer sendet denselben `POST`-Body, den der Vertrag für den [externen Endpunkt](#external-endpoint) beschreibt, und liest denselben Textstream zurück. Sende ihn als JSON mit einem `content-type: application/json`-Header:
 
@@ -161,13 +204,13 @@ Ein statischer Build mit aktiviertem Assistenten und ohne externen `endpoint` sc
 
 ```ts blume.config.ts lineNumbers
 import { defineConfig } from "blume";
-import { openrouter } from "blume/ai";
+import { anthropic } from "blume/ai";
 
 export default defineConfig({
   ai: {
     assistant: {
       enabled: true,
-      provider: openrouter({ model: "anthropic/claude-sonnet-4-5" }),
+      provider: anthropic({ model: "claude-sonnet-5" }),
     },
   },
 });
@@ -175,15 +218,119 @@ export default defineConfig({
 
 | Adapter | Antwortet mit | API-Key-Umgebungsvariable | Zu installierendes SDK |
 | --- | --- | --- | --- |
+| [`openai()`](#openai) | einem [OpenAI](https://platform.openai.com)-Modell oder jedem [OpenAI-kompatiblen Endpunkt](#openai-compatible-endpoints) | `OPENAI_API_KEY` | `@ai-sdk/openai` (`@ai-sdk/openai-compatible` mit einer `baseUrl`) |
+| [`anthropic()`](#anthropic) | einem [Claude](https://platform.claude.com)-Modell | `ANTHROPIC_API_KEY` | `@ai-sdk/anthropic` |
+| [`gemini()`](#gemini) | einem [Gemini](https://ai.google.dev)-Modell | `GEMINI_API_KEY` | `@ai-sdk/google` |
+| [`grok()`](#grok) | einem [xAI](https://x.ai/api)-Grok-Modell | `XAI_API_KEY` | `@ai-sdk/xai` |
 | [`gateway()`](#vercel-ai-gateway) (Standard) | einem `provider/model`-String über das Vercel AI Gateway | `AI_GATEWAY_API_KEY` | keins — bei Blume enthalten |
 | [`openrouter()`](#openrouter) | jedem [OpenRouter](https://openrouter.ai)-Modell | `OPENROUTER_API_KEY` | `@openrouter/ai-sdk-provider` |
 | [`llmgateway()`](#llmgateway) | jedem [LLMGateway](https://llmgateway.io)-Modell | `LLMGATEWAY_API_KEY` | `@ai-sdk/openai-compatible` |
 | [`inkeep()`](#inkeep) | einem [Inkeep](https://inkeep.com)-QA-Modell | `INKEEP_API_KEY` | `@ai-sdk/openai-compatible` |
-| [`openaiCompatible()`](#openai-compatible-endpoints) | dem, was dein Endpunkt ausliefert | die `apiKeyEnv`, die du angibst | `@ai-sdk/openai-compatible` |
 
-Die SDKs sind optionale Peer-Dependencies, füge deinem Projekt also das hinzu, das dein Adapter braucht (z. B. `npm install @openrouter/ai-sdk-provider`). Fehlt es, bricht `blume build` ab, bevor Vite läuft, und nennt das Paket und den Befehl, der es installiert; auch [`blume doctor`](/docs/cli/doctor) meldet es.
+`openai()`, `anthropic()`, `gemini()` und `grok()` rufen die eigene API des Providers mit deinem Key auf — dazwischen sitzt nichts. Die SDKs sind optionale Peer-Dependencies, füge deinem Projekt also das hinzu, das dein Adapter braucht (z. B. `npm install @ai-sdk/anthropic`). Fehlt es, bricht `blume build` ab, bevor Vite läuft, und nennt das Paket und den Befehl, der es installiert; auch [`blume doctor`](/docs/cli/doctor) meldet es.
 
 Der Deskriptor, den ein Adapter zurückgibt, besteht aus reinen Daten — seine Art, seine Optionen, die Umgebungsvariablen, die er liest, und das SDK, das er braucht —, sodass die generierte Route (und die per [Eject](/docs/configuration/customization#eject) übernommene) ihn als Literale einbettet und das Provider-SDK per Namen importiert. Nichts liest `blume.config.ts` zur Anfragezeit, und kein Secret wird je in eine Route geschrieben: Adapter nehmen den **Namen** der Umgebungsvariable entgegen, die den Key enthält, und die Route liest den Wert über Astros [`getSecret()`](https://docs.astro.build/en/guides/environment-variables/#retrieving-secrets-programmatically), sodass jeder Deployment-Adapter ihn auf seine eigene Weise bereitstellt: als Umgebungsvariablen auf Node, Vercel und Netlify und über die [Bindings](https://docs.astro.build/en/guides/integrations-guide/cloudflare/#environment-variables-and-secrets) des Workers auf Cloudflare.
+
+### OpenAI
+
+Jedes [OpenAI](https://platform.openai.com)-Modell, direkt aufgerufen über OpenAIs eigenen AI-SDK-Provider:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { openai } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: openai({ model: "gpt-5.5" }),
+    },
+  },
+});
+```
+
+#### OpenAI-kompatible Endpunkte [#openai-compatible-endpoints]
+
+Jeder Endpunkt, der die OpenAI-API spricht — ein selbst gehostetes Modell, ein internes Gateway — funktioniert ebenfalls über `openai()`: Gib seine `baseUrl` an und meist `apiKeyEnv` für die Umgebungsvariable mit seinem Key (standardmäßig `OPENAI_API_KEY`). `name` ist der Provider-Name, den das AI SDK meldet, und der Key, unter dem der Endpunkt [`providerOptions`](#options-every-adapter-takes) liest; er ist standardmäßig `openai-compatible`:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { openai } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: openai({
+        baseUrl: "https://my-gateway.example.com/v1",
+        apiKeyEnv: "MY_GATEWAY_API_KEY",
+        model: "gpt-4o",
+        name: "my-gateway",
+      }),
+    },
+  },
+});
+```
+
+Mit einer `baseUrl` ruft die Route die Chat-Completions-API des Endpunkts über `@ai-sdk/openai-compatible` auf, installiere also dieses Paket statt `@ai-sdk/openai`: Die meisten kompatiblen Endpunkte bieten OpenAIs Responses API nicht an. Die [Docs-Tools](#searching-and-reading-pages) sind standardmäßig deaktiviert, da ein selbst gehostetes Modell womöglich kein Tool Calling unterstützt.
+
+:::note
+`openaiCompatible()` aus früheren Blume-Versionen funktioniert weiterhin: Es ist derselbe Adapter wie `openai()` mit einer `baseUrl`.
+:::
+
+### Anthropic
+
+Jedes [Claude](https://platform.claude.com)-Modell, direkt aufgerufen über Anthropics AI-SDK-Provider:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { anthropic } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: anthropic({ model: "claude-sonnet-5" }),
+    },
+  },
+});
+```
+
+### Gemini
+
+Jedes [Gemini](https://ai.google.dev)-Modell, direkt aufgerufen über Googles AI-SDK-Provider. Der Key ist ein API-Key aus Google AI Studio:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { gemini } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: gemini({ model: "gemini-3.5-flash" }),
+    },
+  },
+});
+```
+
+### Grok
+
+Jedes [xAI](https://x.ai/api)-Grok-Modell, direkt aufgerufen über xAIs AI-SDK-Provider:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { grok } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: grok({ model: "grok-4.7" }),
+    },
+  },
+});
+```
 
 ### Vercel AI Gateway
 
@@ -266,29 +413,6 @@ export default defineConfig({
 
 `baseUrl` überschreibt den voreingestellten Endpunkt (`https://api.inkeep.com/v1`).
 
-### OpenAI-kompatible Endpunkte [#openai-compatible-endpoints]
-
-Jeder Endpunkt, der die OpenAI-API spricht, funktioniert über `openaiCompatible()` — gib seine `baseUrl`, das `model`, das er ausliefert, und die Umgebungsvariable mit seinem Key an. Ein generischer Endpunkt hat für keins davon eine Voreinstellung, deshalb sind alle drei Pflicht; `name` ist der Provider-Name, den das AI SDK meldet, und ist standardmäßig `openai-compatible`:
-
-```ts blume.config.ts lineNumbers
-import { defineConfig } from "blume";
-import { openaiCompatible } from "blume/ai";
-
-export default defineConfig({
-  ai: {
-    assistant: {
-      enabled: true,
-      provider: openaiCompatible({
-        baseUrl: "https://my-gateway.example.com/v1",
-        apiKeyEnv: "MY_GATEWAY_API_KEY",
-        model: "gpt-4o",
-        name: "my-gateway",
-      }),
-    },
-  },
-});
-```
-
 ### Optionen, die jeder Adapter akzeptiert [#options-every-adapter-takes]
 
 **`apiKeyEnv`** lässt einen Adapter auf eine andere Umgebungsvariable als seine Standardvariable zeigen — `gateway({ apiKeyEnv: "DOCS_GATEWAY_KEY" })` liest diese Variable statt `AI_GATEWAY_API_KEY`, und die Warnung zu fehlenden Secrets bei `blume dev`/`build` prüft ebenfalls sie. Solange der Key nicht gesetzt ist, antwortet die deployte Route mit `503` und einer Meldung, die die Variable nennt. Die Route liest einen Request-Body nur bis 64 KB und beantwortet alles Größere mit `413`.
@@ -296,7 +420,7 @@ export default defineConfig({
 **`headers`** sendet bei jedem Aufruf statische Request-Header mit — etwa einen Header, der den Aufrufer identifiziert, bei einem gemeinsam genutzten Backend, damit dessen eigene Observability oder sein Rate Limiting deine Docs von anderem Traffic unterscheiden kann:
 
 ```ts blume.config.ts lineNumbers
-provider: openaiCompatible({
+provider: openai({
   baseUrl: "https://llm.internal.example.com/v1",
   apiKeyEnv: "INTERNAL_LLM_API_KEY",
   model: "gpt-4o",
@@ -315,7 +439,7 @@ provider: gateway({
 }),
 ```
 
-Blume bildet nur die Optionen ab, die es benennt (`model`, `reasoning`, `apiKeyEnv`, `headers`), und leitet `providerOptions` unverändert weiter. Es muss also JSON sein — es wird in die Route eingebettet — und den Key verwenden, den der zugrunde liegende Provider erwartet (`openai` für ein OpenAI-Modell hinter dem Gateway, `openrouter` bei OpenRouter). Den Assistenten zu aktivieren schaltet außerdem React für die In-Page-Island ein — siehe [Customization](/docs/configuration/customization#interactive-islands).
+Blume bildet nur die Optionen ab, die es benennt (`model`, `reasoning`, `apiKeyEnv`, `headers`), und leitet `providerOptions` unverändert weiter. Es muss also JSON sein — es wird in die Route eingebettet — und den Key verwenden, den der zugrunde liegende Provider erwartet (`openai` für `openai()` oder ein OpenAI-Modell hinter dem Gateway, `anthropic` für `anthropic()`, `google` für `gemini()`, `xai` für `grok()`, `openrouter` bei OpenRouter und den `name` des Adapters bei einem OpenAI-kompatiblen Endpunkt). Den Assistenten zu aktivieren schaltet außerdem React für die In-Page-Island ein — siehe [Customization](/docs/configuration/customization#interactive-islands).
 
 ## Reasoning
 
@@ -329,10 +453,13 @@ Jeder Adapter sendet die Stufe als die eigene Reasoning-Steuerung seines Backend
 
 | Adapter | Was aus der Stufe wird |
 | --- | --- |
+| `openai()` | OpenAIs `reasoning_effort`. Mit einer `baseUrl` wird sie als `reasoning_effort` im Request gesendet, der Endpunkt muss diesen Parameter also akzeptieren. |
+| `anthropic()` | Claudes Thinking: eine Effort-Stufe bei Modellen mit adaptivem Thinking, ein Thinking-Budget bei älteren und abgeschaltetes Thinking bei `"none"`. |
+| `gemini()` | Geminis Thinking-Level oder ein Thinking-Budget bei Modellen, die eines akzeptieren. |
+| `grok()` | xAIs Reasoning-Effort, bei den Modellen, die einen anbieten. |
 | `gateway()` | Die [`reasoning`](https://ai-sdk.dev/docs/ai-sdk-core/reasoning)-Aufrufoption des AI SDK, die das Gateway auf die Einstellung des Modells abbildet — etwa auf OpenAIs `reasoning_effort`. |
 | `openrouter()` | OpenRouters `reasoning.effort`, am Modell gesetzt. Sein Provider ignoriert die Aufrufoption des AI SDK, deshalb wird die Stufe dort platziert, wo OpenRouter sie liest. |
 | `llmgateway()` | `reasoning_effort` im Request, über die Aufrufoption des AI SDK. |
-| `openaiCompatible()` | `reasoning_effort` im Request, der Endpunkt muss diesen Parameter also akzeptieren. |
 | `inkeep()` | Nicht verfügbar. Inkeep führt seine eigene QA-Pipeline ohne Reasoning-Steuerung aus, deshalb hat der Adapter keine `reasoning`-Option, und eine zu setzen ist ein Konfigurationsfehler. |
 
 Das Modell muss die von dir gewählte Stufe unterstützen: OpenAI weist eine Stufe ab, die ein Modell nicht anbietet (`"none"` und `"xhigh"` gibt es nur bei manchen), prüfe also die Dokumentation des Modells, bevor du eine setzt. Lässt du es weg, bleibt der Standard des Modells erhalten. Wie die [Retrieval-Größe](#retrieval-size) tauscht es Gründlichkeit gegen die Zeit bis zum ersten Token, und Antworten bleiben in beiden Fällen verankert.
@@ -343,16 +470,45 @@ Mit einem konfigurierten [Analytics-Provider](/docs/configuration/analytics) mel
 
 | Ereignis | Wann | Eigenschaften |
 | --- | --- | --- |
-| `ask` | Eine Frage wird abgesendet | `path`, `questionChars` |
-| `ask_answer` | Die Antwort ist fertig gestreamt | `path`, `questionChars`, `ms`, `chars` |
-| `ask_error` | Die Anfrage schlägt fehl, bricht ab oder kommt leer zurück | `path`, `questionChars`, `ms`, `status` |
+| `ask` | Eine Frage wird abgesendet | `path`, `questionChars`, `thread` |
+| `ask_answer` | Die Antwort ist fertig gestreamt | `path`, `questionChars`, `thread`, `ms`, `chars` |
+| `ask_error` | Die Anfrage schlägt fehl, bricht ab oder kommt leer zurück | `path`, `questionChars`, `thread`, `ms`, `status` |
 
-`path` ist die Seite, von der aus der Leser gefragt hat (der ausgelieferte Pfadname, er stimmt also mit dem Feedback-Widget und deinen Seitenaufrufen unter einem `base` überein), `questionChars` die Länge der Frage, `ms` die Zeit vom Absenden der Frage bis zum letzten Chunk und `chars` die Länge der Antwort. `status` ist der HTTP-Status: `0`, wenn überhaupt keine Antwort ankam (offline, DNS, CORS), und `200`, wenn die Antwort in Ordnung war, ihr Stream aber mitten in der Antwort abbrach — so zeigt sich ein Provider- oder Credential-Fehler, da das Backend seine Header schon gesendet hat — oder nichts lieferte. Wird die Konversation mitten in der Antwort geleert, wird keines der beiden Ergebnisse gemeldet.
+`path` ist die Seite, von der aus der Leser gefragt hat (der ausgelieferte Pfadname, er stimmt also mit dem Feedback-Widget und deinen Seitenaufrufen unter einem `base` überein), `questionChars` die Länge der Frage, `thread` die ID der Konversation (neu, wenn der Leser sie leert), `ms` die Zeit vom Absenden der Frage bis zum letzten Chunk und `chars` die Länge der Antwort. `status` ist der HTTP-Status: `0`, wenn überhaupt keine Antwort ankam (offline, DNS, CORS), und `200`, wenn die Antwort in Ordnung war, ihr Stream aber mitten in der Antwort abbrach — so zeigt sich ein Provider- oder Credential-Fehler, da das Backend seine Header schon gesendet hat — oder nichts lieferte. Wird die Konversation mitten in der Antwort geleert, wird keines der beiden Ergebnisse gemeldet.
 
 Der Text der Frage erreicht nie einen Provider: Es ist freie Lesereingabe (eingefügte Keys, Fehlerlogs, Namen), die gegen die Bedingungen und die Größenlimits pro Wert der meisten Provider verstoßen würde. Er reist nur auf dem DOM-Event `blume:track`, als `question` in `detail.props`, sodass ein Listener, den du schreibst, ihn dorthin weiterleiten kann, wo er nach deiner Entscheidung hingehört. Eine eigene Chat-UI, die auf `useAssistant` aus `blume/hooks` aufbaut, meldet dieselben Ereignisse. Ist kein Provider konfiguriert, sind die eingebauten Provider-Aufrufe No-ops, aber das `blume:track`-Event wird trotzdem ausgelöst, sodass eine eigene Integration, die darauf lauscht, sie erhält.
 
 ## Rate Limiting
 
-Der Endpunkt `POST /api/ask` ist **nicht authentifiziert** — er muss es sein, damit der In-Page-Assistent ihn aufrufen kann. Blume validiert jede Anfrage — verwirft fehlerhafte Bodies, begrenzt sie auf 1–40 Nachrichten und akzeptiert nur die Rollen `user`/`assistant`, damit ein Aufrufer keinen eigenen System-Prompt injizieren und die Route als allgemeinen LLM-Proxy umnutzen kann — um zu begrenzen, wie viel ein einzelner Aufruf bei deinem Modell verbrauchen kann; verhindern kann es aber nicht, dass jemand den Endpunkt wiederholt aufruft. Wenn Kostenmissbrauch ein Thema ist, stelle einen Rate Limiter vor die Route — das Edge-Rate-Limiting deines Hosters (z. B. von Vercel), eine Middleware oder die Ausgabelimits pro Key bei deinem Modellanbieter.
+Der Endpunkt `POST /api/ask` ist **nicht authentifiziert** — er muss es sein, damit der In-Page-Assistent ihn aufrufen kann. Blume validiert jede Anfrage — verwirft fehlerhafte Bodies, begrenzt sie auf 1–40 Nachrichten und akzeptiert nur die Rollen `user`/`assistant`, damit ein Aufrufer keinen eigenen System-Prompt injizieren und die Route als allgemeinen LLM-Proxy umnutzen kann — um zu begrenzen, wie viel ein einzelner Aufruf bei deinem Modell verbrauchen kann. Das standardmäßig aktive [Rate Limiting](/docs/configuration/rate-limiting) begrenzt dann, wie viele Fragen ein einzelner Leser stellen kann: Ist die Grenze überschritten, fordert das Panel ihn auf, es in ein paar Minuten erneut zu versuchen.
+
+## Bot-Schutz [#bot-protection]
+
+Rate Limiting zählt pro IP-Adresse, ein Skript, das seine Fragen auf viele Adressen verteilt, schlüpft also durch. Um Skripte aufzuhalten, füge eine Bot-Prüfung aus `blume/captcha` hinzu: Vor jeder Frage holt sich das Panel ein Token von der Prüfung, und die Route verifiziert es beim Provider, bevor das Modell läuft. Die meisten Leser sehen nie eine Challenge; die Prüfung verlangt nur dann einen Klick, wenn sie unsicher ist.
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { turnstile } from "blume/captcha";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      captcha: turnstile({ siteKey: "0x4AAAAAAA…" }),
+    },
+  },
+});
+```
+
+| Adapter | Provider | Umgebungsvariable für den Secret Key |
+| --- | --- | --- |
+| `turnstile()` | [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/) | `TURNSTILE_SECRET_KEY` |
+| `hcaptcha()` | [hCaptcha](https://www.hcaptcha.com), unsichtbar ausgeführt | `HCAPTCHA_SECRET_KEY` |
+
+Der Site Key geht an den Browser und kann bedenkenlos committet werden; der Secret Key bleibt auf dem Server. Für Turnstile erstellst du im Cloudflare-Dashboard ein Widget und wählst den Modus **Managed** oder **Invisible**. Solange das Secret nicht gesetzt ist, antwortet der Assistent, dass er nicht konfiguriert ist, und `blume build` warnt. Das Skript des Providers lädt mit der ersten Frage eines Lesers, nicht mit der Seite.
+
+Eine fehlgeschlagene Prüfung zeigt dem Leser einen übersetzten Hinweis „Wir konnten nicht prüfen, ob du ein Mensch bist“, und die Route antwortet mit `403`. Beide Provider veröffentlichen Test-Keys, die immer bestehen, um die Prüfung lokal auszuprobieren: bei Turnstile `1x00000000000000000000BB` mit dem Secret `1x0000000000000000000000000000000AA` und bei hCaptcha `10000000-ffff-ffff-ffff-000000000001` mit `0x0000000000000000000000000000000000000000`.
+
+Mit einem [externen Endpunkt](#external-endpoint) sendet das Panel das Token trotzdem, als `captcha` im Request-Body, damit dein Backend es verifiziert.
 
 Der Endpunkt wird im [Agent-Readability-Manifest](/docs/discoverability/agent-discovery#agent-readability) neben der übrigen maschinenlesbaren Oberfläche der Site bekannt gemacht.

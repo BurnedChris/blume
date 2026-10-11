@@ -33,6 +33,7 @@ export const th: UIStringsOverride = {
     error: "ขออภัย เกิดข้อผิดพลาดบางอย่าง",
     explainCode: "อธิบายโค้ดนี้",
     label: "ถามคำถาม",
+    open: "เปิดผู้ช่วย",
     placeholder: "ถามคำถาม…",
     rateLimited: "คุณถามคำถามจำนวนมากแล้ว โปรดลองอีกครั้งในอีกไม่กี่นาที",
     removeCode: "นำโค้ดออก",
@@ -47,6 +48,7 @@ export const th: UIStringsOverride = {
   banner: { dismiss: "ปิดประกาศ" },
   changelog: {
     description: "อัปเดตผลิตภัณฑ์และบันทึกประจำรุ่น",
+    empty: "ยังไม่มีรายการในบันทึกการเปลี่ยนแปลง",
     title: "บันทึกการเปลี่ยนแปลง",
   },
   consent: {
@@ -67,6 +69,7 @@ export const th: UIStringsOverride = {
     preview: "ตัวอย่าง",
     prop: "คุณสมบัติ",
     selectTab: "เลือกแท็บ",
+    selectView: "เลือกมุมมอง",
     showLess: "แสดงน้อยลง",
     showMore: "แสดงเพิ่มเติม",
     stars: "ดาว",

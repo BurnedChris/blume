@@ -1,0 +1,454 @@
+---
+// Docs pages not indexed: checked against the audit, sitemap-and-robots,
+// metadata, frontmatter, versioning, i18n, OpenAPI, and deployment docs, and
+// the source on main: audit/checks/{indexability,sitemap,robots,links,
+// network}.ts, audit/catalog.ts, deploy/sitemap.ts, deploy/robots.ts, and
+// the canonical and noindex logic in astro/templates.ts and the layouts.
+// Google's labels and behavior are from the Page indexing report help
+// (support.google.com/webmasters/answer/7440203), the URL Inspection tool
+// help (answer/9012289), and the Search Essentials technical requirements and
+// crawlable-links pages; Vercel's preview X-Robots-Tag from its knowledge
+// base. Ran the Acme pages below through scanProject and buildSitemapFiles
+// (the sitemap contents described), then runAudit from source over a
+// hand-written dist/ carrying those pages' head tags (the audit output shown),
+// plus a local server sending X-Robots-Tag: noindex for the --url check. Did
+// not run `blume build` or use a real Search Console property. Not yet run
+// end to end.
+// Review pass: re-checked the Page indexing and URL Inspection help, Vercel's
+// x-robots-tag docs, and duplicates.ts (byte-identical content only). The
+// canonical and sitemap outputs were edited by hand to match deploy/sitemap.ts
+// (a page canonicalizing elsewhere is left out) and audit/catalog.ts on main,
+// not rerun.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("documentation-not-indexed")}>
+  <p>
+    When Search Console lists a docs page as not indexed, the reason usually
+    comes down to one of four causes. Google can't crawl the page (a robots.txt
+    rule, an error status, or a login). The page tells Google not to index it
+    (a <code>noindex</code> tag or an <code>X-Robots-Tag</code> header). Google
+    indexed a different URL as the canonical. Or Google found or crawled the
+    page and chose not to index it for now. URL Inspection tells you which one
+    applies, and <code>blume audit</code> traces the first three to the file or
+    setting behind them.
+  </p>
+  <p>
+    This guide runs that diagnosis on an example Acme docs site at{" "}
+    <code>docs.acme.example</code>, with one page broken on purpose for each
+    cause and the audit finding it produces, then shows how to confirm a fix.
+    The Search Console steps work for any site; the audit needs a Blume build.
+  </p>
+  <p>
+    Not every exclusion is a bug. Google says not to expect every URL to be
+    indexed, and a <code>noindex</code> page, an archived version, a redirect,
+    or a duplicate pointing at its original is out on purpose. Blume's
+    defaults avoid the common accidents, so the cause is usually a setting
+    someone added. This guide is about reading the report, not getting more
+    pages crawled, and nothing here can make Google index a page or say when.
+  </p>
+
+  <h2>Inspect the exact URL</h2>
+  <p>
+    In Search Console, open URL Inspection and paste the complete URL as the
+    report shows it.{" "}
+    <code>/quickstart</code>, <code>/quickstart/</code>, and the{" "}
+    <code>http://</code> version are different URLs to Google, and Blume's
+    canonical tags name the one without the trailing slash. Then expand Page
+    indexing:
+  </p>
+  <ul>
+    <li>
+      <strong>Discovery</strong> lists the sitemaps and referring page Google
+      found the URL through.
+    </li>
+    <li>
+      <strong>Crawl</strong>: <em>Crawl allowed?</em> is about robots.txt,{" "}
+      <em>Page fetch</em> about the HTTP response, and{" "}
+      <em>Indexing allowed?</em> about <code>noindex</code>.
+    </li>
+    <li>
+      <strong>Indexing</strong> shows the <em>User-declared canonical</em> and
+      the <em>Google-selected canonical</em>. If Google's pick isn't the URL
+      you inspected, Google indexed that one instead.
+    </li>
+  </ul>
+  <p>
+    This all comes from Google's last crawl. <strong>Test live URL</strong>{" "}
+    fetches the page as deployed now, though it doesn't check duplicate or
+    canonical conditions. When robots.txt blocks a page,{" "}
+    <em>Indexing allowed?</em> always reads "Yes", because Google never saw a{" "}
+    <code>noindex</code>.
+  </p>
+  <p>
+    Don't decide from a <code>site:</code> search. Google says it doesn't
+    necessarily return every indexed URL, so a missing page isn't proof that
+    it's out of the index.
+  </p>
+
+  <h2>Match the reason to a cause</h2>
+  <p>
+    The Page indexing report lists excluded URLs under "Why pages aren't
+    indexed". Its Source column says whether a reason comes from your website
+    or from Google, and Google says you can generally fix only the Website
+    ones. The common reasons map to Blume like this (check ids without their{" "}
+    <code>BLUME_AUDIT_</code> prefix):
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Search Console reason</th>
+        <th scope="col">Usual cause on a Blume site</th>
+        <th scope="col">Audit check</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>URL blocked by robots.txt</td>
+        <td>A <code>Disallow</code> rule in your own <code>public/robots.txt</code></td>
+        <td>
+          <code>ROBOTS_DISALLOWS_INDEXABLE</code>,{" "}
+          <code>ROBOTS_BLOCKS_CRAWLER</code>
+        </td>
+      </tr>
+      <tr>
+        <td>URL marked ‘noindex’</td>
+        <td>
+          <code>noindex</code> in frontmatter, a version, or a reference source,
+          or an <code>X-Robots-Tag</code> header from the host
+        </td>
+        <td>
+          <code>ROBOTS_META_UNEXPECTED</code>,{" "}
+          <code>ROBOTS_HEADER_CONFLICT</code>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          Alternate page with proper canonical tag; Duplicate, Google chose
+          different canonical than user; Duplicate without user-selected
+          canonical
+        </td>
+        <td>
+          <code>seo.canonical</code>, an archived version or translation
+          fallback, near-duplicate pages, or a wrong <code>deployment.site</code>
+        </td>
+        <td>
+          <code>CANONICAL_NOT_SELF</code>, <code>DUPLICATE_CONTENT</code>
+        </td>
+      </tr>
+      <tr>
+        <td>Not found (404), Server error (5xx), Blocked due to unauthorized request (401)</td>
+        <td>A deleted or moved page, a host rewrite, or access protection</td>
+        <td><code>HTTP_4XX</code>, <code>HTTP_5XX</code></td>
+      </tr>
+      <tr>
+        <td>Page with redirect</td>
+        <td>An entry in <code>redirects</code>, as intended</td>
+        <td>None</td>
+      </tr>
+      <tr>
+        <td>Discovered - currently not indexed; Crawled - currently not indexed</td>
+        <td>Google's decision</td>
+        <td>
+          <code>ORPHAN_PAGE</code>, <code>INDEXABLE_PAGE_NOT_IN_SITEMAP</code>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Run the audit on the build</h2>
+  <p>
+    <code>blume audit</code> crawls the HTML in <code>dist/</code> and names
+    the source file (and frontmatter line) behind each finding. It needs an
+    absolute site URL: without one, Blume writes no canonical tags or sitemap,
+    and the audit reports <code>BLUME_AUDIT_SITE_NOT_SET</code> instead.
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme Docs",
+  deployment: { site: "https://docs.acme.example" },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Build the same commit that's in production, then run the checks that
+    decide indexing:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+npx blume audit --only indexability,sitemap,robots,links,duplicates`}
+    lang="bash"
+  />
+  <p>Headers and status codes live on the deployed site, so check it too:</p>
+  <CodeBlock
+    code="npx blume audit --url https://docs.acme.example --only indexability,network"
+    lang="bash"
+  />
+  <p>Each section below shows what the audit reported for Acme's broken page.</p>
+
+  <h2>Blocked crawling</h2>
+  <p>
+    Blume's own robots.txt allows every crawler, but Blume never overwrites a
+    file you put in <code>public/</code>, so one left over from staging keeps
+    shipping. Acme's file still blocks a page that was being rewritten:
+  </p>
+  <CodeBlock
+    code={`User-agent: *
+Disallow: /templates
+
+Sitemap: https://docs.acme.example/sitemap.xml`}
+    lang="txt"
+    title="public/robots.txt"
+  />
+  <CodeBlock
+    code={`✖ robots.txt disallows a page that is in the sitemap  1 page
+    /templates                         dist/robots.txt
+    fix: A page can't be both disallowed in robots.txt and advertised in the sitemap.`}
+    lang="txt"
+  />
+  <p>
+    Remove the rule, or delete the file to get Blume's back. A rule in a group
+    that names one crawler, such as <code>Googlebot</code>, shows up as a
+    warning instead: "robots.txt blocks one crawler from pages in the
+    sitemap". The audit reads the robots.txt in <code>dist/</code>, so check
+    the live file and CDN bot rules with the scripts in{" "}
+    <a href="/guides/ai-search-documentation-crawlability">checking crawler access</a>.
+  </p>
+  <p>
+    Don't use robots.txt to keep a page out of Google. Google can still index a
+    blocked URL if other pages link to it ("Indexed, though blocked by
+    robots.txt"), and the block hides any{" "}
+    <code>noindex</code> on the page. Use <code>noindex</code> instead.
+  </p>
+
+  <h2>A noindex you didn't mean</h2>
+  <p>
+    Acme's webhooks page was <code>noindex</code> while the feature was in
+    beta, and the line outlived the beta:
+  </p>
+  <CodeBlock
+    code={`---
+title: Webhooks
+description: Receive delivery, bounce, and reply events from Acme at an HTTPS endpoint you control.
+noindex: true
+---`}
+    lang="mdx"
+    title="docs/webhooks.mdx"
+  />
+  <CodeBlock
+    code={`ℹ Page is not indexable  1 page
+    /webhooks                          docs/webhooks.mdx:4
+    fix: Remove \`noindex\` from the page's frontmatter if it should be indexed.`}
+    lang="txt"
+  />
+  <p>
+    It's only a note, since <code>noindex</code> is usually deliberate, so read
+    every page in this group.
+    The same tag comes from{" "}
+    <code>seo.noindex</code>, from <code>noindex: true</code> on an archived{" "}
+    <a href="/docs/content/versioning#seo">version</a>, and from{" "}
+    <code>noindex: true</code> on an{" "}
+    <a href="/docs/references/openapi#per-source-indexing">API reference source</a>.
+  </p>
+  <p>
+    A page's HTML can be clean while the host sends{" "}
+    <code>X-Robots-Tag: noindex</code>, and the header wins. Only the live check
+    sees it:
+  </p>
+  <CodeBlock
+    code={`✖ X-Robots-Tag header conflicts with the page's robots meta  5 pages
+    /getting-started                   docs/getting-started.mdx
+    /                                  docs/index.mdx
+    /quickstart                        docs/quickstart.mdx
+    … and 2 more (--verbose)
+    fix: Remove the X-Robots-Tag header, or align it with the page's robots meta.`}
+    lang="txt"
+  />
+  <p>
+    Look for a header rule in your host or CDN config. On a preview deployment
+    it's expected: Vercel adds <code>X-Robots-Tag: noindex</code> to every
+    preview, and to production deployments a newer one has replaced.
+  </p>
+
+  <h2>Canonical consolidation</h2>
+  <p>
+    Google indexes one URL per set of duplicates. Blume gives every indexable
+    page a canonical tag naming its own URL, built from{" "}
+    <code>deployment.site</code>.
+    It names another page in three cases: a page's own{" "}
+    <code>seo.canonical</code>, an archived version's page pointing at the
+    live one, and a translation{" "}
+    <a href="/docs/content/i18n#fallbacks">fallback</a> pointing at the page it
+    copies. The last two show up as "Alternate page with proper canonical tag",
+    which Google says needs no action.
+  </p>
+  <p>Acme kept an old page and pointed it at the quickstart:</p>
+  <CodeBlock
+    code={`---
+title: Getting started
+description: The steps from the quickstart, kept at their old URL for readers who bookmarked it.
+seo:
+  canonical: https://docs.acme.example/quickstart
+---`}
+    lang="mdx"
+    title="docs/getting-started.mdx"
+  />
+  <CodeBlock
+    code={`ℹ Non-canonical page  1 page
+    /getting-started                   docs/getting-started.mdx:5
+    fix: Point \`seo.canonical\` at this page, or remove it to use the default self-canonical.`}
+    lang="txt"
+  />
+  <p>
+    It's only a note, since pointing a page elsewhere is usually deliberate.
+    Blume leaves a page whose <code>seo.canonical</code> names another URL out
+    of the sitemap, which lists canonical URLs only. For a page that really is
+    a duplicate, a redirect is cleaner. Delete the file and add this to{" "}
+    <code>blume.config.ts</code>:
+  </p>
+  <CodeBlock
+    code={`redirects: [{ from: "/getting-started", to: "/quickstart", status: 301 }],`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The old URL then moves to "Page with redirect", as it should. For
+    "Duplicate, Google chose different canonical than user", compare the two
+    canonicals in URL Inspection. If Google's is on another host, check the
+    tag on the live page:
+  </p>
+  <CodeBlock
+    code={`curl -s https://docs.acme.example/quickstart | grep -o '<link[^>]*rel="canonical"[^>]*>'`}
+    lang="bash"
+  />
+  <p>
+    Blume builds its canonicals from <code>deployment.site</code>. For
+    "Duplicate without user-selected canonical", note that{" "}
+    <code>DUPLICATE_CONTENT</code> only catches byte-identical pages. Its fix
+    is to merge the pages, or point <code>seo.canonical</code> on all but one
+    at the page to index, as Acme did above. Merging and redirecting the one
+    you drop leaves Google a single URL to choose.
+  </p>
+
+  <h2>Discovered or crawled, but not indexed</h2>
+  <p>
+    These are Google's calls. "Crawled - currently not indexed" means Google
+    fetched the page and left it out; it may or may not be indexed later, and
+    Google says there's no need to resubmit it. "Discovered - currently not
+    indexed" means Google hasn't crawled the URL yet, typically because it
+    expected the crawl to overload the site. No setting clears either, but
+    three things are worth a look.
+  </p>
+  <p>
+    <strong>The content is in the HTML.</strong> Blume prerenders every docs
+    page, so confirm the deployed page answers 200 and carries a phrase from
+    its text, and compare with <strong>View crawled page</strong> in URL
+    Inspection:
+  </p>
+  <CodeBlock
+    code={`curl -sI https://docs.acme.example/quickstart | head -n 1
+curl -s https://docs.acme.example/quickstart | grep -c "API key"`}
+    lang="bash"
+  />
+  <p>
+    <strong>Something links to it.</strong> Google asks that every page you
+    care about have a link from at least one other page on your site. Acme's
+    beta page is hidden from the sidebar:
+  </p>
+  <CodeBlock
+    code={`---
+title: Scheduled sends
+description: Schedule a message to send later with the sendAt field, available in beta on selected accounts.
+hidden: true
+---`}
+    lang="mdx"
+    title="docs/scheduled-sends.mdx"
+  />
+  <CodeBlock
+    code={`⚠ Orphan page (only reachable from navigation)  1 page
+    /scheduled-sends                   docs/scheduled-sends.mdx
+    fix: Link to this page from the body of a related page.
+
+⚠ Indexable page not in sitemap  1 page
+    /scheduled-sends                   docs/scheduled-sends.mdx
+    fix: Remove \`draft\`/\`hidden\`/\`noindex\` from the page's frontmatter if it should be indexed. A \`public/sitemap.xml\` replaces the generated sitemap, so add the page there or delete that file.`}
+    lang="txt"
+  />
+  <p>
+    <code>hidden</code> drops a page from the sidebar, pagination, and sitemap,
+    but doesn't add <code>noindex</code>. The page is live and indexable with
+    nothing pointing at it, and URL Inspection may call it unknown to Google.
+    Link it from a related page if readers should find it, or add{" "}
+    <code>noindex: true</code> if they shouldn't.
+  </p>
+  <p>
+    <strong>The page stands on its own.</strong> For crawled pages, look at{" "}
+    <code>DUPLICATE_TITLE</code>, <code>DUPLICATE_DESCRIPTION</code>, and{" "}
+    <code>LOW_WORD_COUNT</code>. For discovered ones, the live check reports
+    slow responses, timeouts, and 5xx errors. Don't answer either reason by
+    publishing more pages or resubmitting the same ones.
+  </p>
+
+  <h2>Verify the fix and follow the recrawl</h2>
+  <ol>
+    <li>
+      Rebuild and rerun the audit until the finding is gone. Deploy, then rerun
+      it with <code>--url</code>.
+    </li>
+    <li>
+      In URL Inspection, run <strong>Test live URL</strong>. <em>Crawl
+      allowed?</em> and <em>Indexing allowed?</em> should both read "Yes".
+    </li>
+    <li>
+      For a page that matters, click <strong>Request Indexing</strong>. Google
+      refuses it while the live test finds the page non-indexable.
+    </li>
+    <li>
+      Once every instance of a reason is fixed, open it in the report and click{" "}
+      <strong>Validate fix</strong>. Google emails you when validation passes or
+      fails; don't click it again before then.
+    </li>
+  </ol>
+  <p>
+    Google recrawls on its own schedule, and the report updates as it does,
+    with or without validation.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The audit says deployment.site is inferred at deploy time</h3>
+  <p>
+    With the <code>vercel()</code> or <code>netlify()</code> adapter, Blume
+    reads the site URL from the platform while it deploys. A local build has
+    none, so the canonical and sitemap checks stay quiet and the audit reports{" "}
+    <code>BLUME_AUDIT_SITE_INFERRED_AT_DEPLOY</code>. Don't hardcode the site.
+    Build with the platform's variables set instead, as the finding suggests
+    (on Vercel,{" "}
+    <code>VERCEL=1 VERCEL_PROJECT_PRODUCTION_URL=docs.acme.example npx blume build</code>),
+    and use <code>--url</code> for the live checks.
+  </p>
+  <h3>Google chose a canonical on another domain</h3>
+  <p>
+    <code>deployment.site</code> points at the wrong origin, like an old domain
+    or a per-deploy URL. Cloudflare Pages only exposes each deployment's own
+    URL, so set <code>site</code> there yourself (see{" "}
+    <a href="/docs/deployment#set-your-site-url">Set your site URL</a>).
+  </p>
+  <h3>The audit is clean, but the report still lists the page</h3>
+  <p>
+    The report reflects the last crawl. If URL Inspection's <em>Last crawl</em>{" "}
+    date is older than your fix, the report catches up when Google recrawls.
+  </p>
+  <h3>Old URLs show as Not found (404)</h3>
+  <p>
+    Google keeps trying URLs it once knew. A 404 for a page you removed isn't
+    necessarily a problem, but a page that moved needs a redirect. See{" "}
+    <a href="/guides/documentation-url-migration-redirects">
+      Move documentation URLs while preserving old links
+    </a>.
+  </p>
+</GuidePage>

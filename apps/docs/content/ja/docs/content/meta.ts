@@ -8,6 +8,7 @@ export default {
     "frontmatter",
     "syntax",
     "includes",
+    "variables",
     "components",
     "islands",
     "sources",

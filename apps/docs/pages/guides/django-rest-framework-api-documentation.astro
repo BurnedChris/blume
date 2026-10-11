@@ -1,0 +1,842 @@
+---
+// Build Django REST Framework docs with drf-spectacular: checked against the
+// drf-spectacular 0.30.0 readme, settings reference, changelog, and source,
+// DRF's schema docs, Blume's OpenAPI reference docs, and the OpenAPI parser,
+// operation routes, schema tables, examples, and security samples on main
+// (openapi/parse.ts, openapi/model.ts, components/openapi/helpers.ts,
+// schema-tree.ts, operation-model.ts, cli/commands/dev.ts). Ran the Django
+// side on Python 3.13 with Django 6.0.8, DRF 3.17.2, and drf-spectacular
+// 0.30.0: generated the schema with --validate --fail-on-warn, reproduced and
+// fixed the warning shown, compared the enum, auth, operation ID, and path
+// prefix output with and without each setting, sent requests to runserver
+// (401, 202, paginated list, 404), and read the result with Blume's own
+// parser and schema helpers. Later regenerated the schema with only
+// ENUM_GENERATE_CHOICE_DESCRIPTION off and read its wrapped enums with the
+// same helpers. Not yet run end to end: blume dev and build weren't run on
+// the generated spec.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("django-rest-framework-api-documentation")}>
+  <p>
+    To publish Django REST Framework documentation, describe your API with
+    drf-spectacular, write the OpenAPI schema to a file with its{" "}
+    <code>spectacular</code> management command, and point Blume at that file.
+    Blume builds a page for every endpoint, and the onboarding guides you write
+    sit beside them in the same sidebar, search, and build.
+  </p>
+  <p>
+    By the end, your Django repository has a small DRF API with bearer-token
+    auth and pagination, a schema that generates without warnings, and a Blume
+    site in <code>docs-site/</code> with an API reference at <code>/api</code>{" "}
+    and a first-request tutorial next to it. A CI job regenerates the schema on
+    every pull request and fails when the committed copy is out of date. The
+    example is the fictional Acme Messages API, which sends email and SMS.
+  </p>
+  <p>
+    If your team only needs an interactive explorer, drf-spectacular already
+    serves Swagger UI and Redoc views from your Django app, with no second
+    project. Blume fits when the reference should live with written guides on
+    a docs site you host as static files. DRF's own schema generator is
+    deprecated in favor of drf-spectacular, so this guide doesn't use it. For
+    how Blume's reference works with any spec, see{" "}
+    <a href="/guides/openapi-documentation-website">Generate API docs from an OpenAPI spec</a>.
+  </p>
+
+  <h2>Install drf-spectacular</h2>
+  <p>Pin the three packages:</p>
+  <CodeBlock
+    code={`Django==6.0.8
+djangorestframework==3.17.2
+drf-spectacular==0.30.0`}
+    lang="txt"
+    title="requirements.txt"
+  />
+  <p>
+    drf-spectacular 0.30.0 lists support for Django up to 6.0 and DRF up to
+    3.17, so these pins stay in that range even though newer releases of both
+    are out. Django 6.0 needs Python 3.12 or later. Install them, and if you're
+    starting from scratch, create the project and an app for the API:
+  </p>
+  <CodeBlock
+    code={`python -m pip install -r requirements.txt
+django-admin startproject acme .
+python manage.py startapp messaging`}
+    lang="bash"
+  />
+  <p>Add the apps and settings to the end of the settings file:</p>
+  <CodeBlock
+    code={`INSTALLED_APPS += [
+    "rest_framework",
+    "rest_framework.authtoken",
+    "drf_spectacular",
+    "messaging",
+]
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "messaging.authentication.BearerTokenAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 20,
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Acme Messages API",
+    "DESCRIPTION": "Send transactional email and SMS, and manage the templates they use.",
+    "VERSION": "1.0.0",
+    "SERVERS": [{"url": "https://api.acme.example/v1"}],
+    "SCHEMA_PATH_PREFIX": r"/v1",
+    "SCHEMA_PATH_PREFIX_TRIM": True,
+    "COMPONENT_SPLIT_REQUEST": True,
+    "TAGS": [
+        {"name": "Messages", "description": "Send a message and check whether it arrived."},
+        {"name": "Templates", "description": "Reusable message bodies with variables."},
+    ],
+}`}
+    lang="python"
+    title="acme/settings.py"
+  />
+  <p>Each part changes what the reference shows:</p>
+  <ul>
+    <li>
+      <strong>Authentication.</strong> drf-spectacular documents every
+      authentication class you list, and DRF's defaults are session and basic
+      auth. Listing only your API's real scheme keeps the reference to the one
+      readers use.
+    </li>
+    <li>
+      <strong>Pagination.</strong> List endpoints get a <code>page</code> query
+      parameter and a response wrapped in <code>count</code>,{" "}
+      <code>next</code>, <code>previous</code>, and <code>results</code>.
+    </li>
+    <li>
+      <strong>Servers and path prefix.</strong> Django serves the API under{" "}
+      <code>/v1/</code>, and the server URL already ends in <code>/v1</code>,
+      so <code>SCHEMA_PATH_PREFIX_TRIM</code> drops it from each path.
+      Operations read <code>/messages</code>, not <code>/v1/messages</code>.
+    </li>
+    <li>
+      <strong>Split request components.</strong>{" "}
+      <code>COMPONENT_SPLIT_REQUEST</code> writes a separate request schema,{" "}
+      <code>MessageRequest</code>, without the read-only fields.
+      drf-spectacular recommends it for the most accurate description of your
+      API. Blume leaves read-only fields out of request body tables either way,
+      so <code>id</code> and <code>status</code> never show up in the request
+      body.
+    </li>
+    <li>
+      <strong>Tags.</strong> Their descriptions become the section intros on
+      the reference's overview page.
+    </li>
+  </ul>
+  <p>
+    Leave <code>OAS_VERSION</code> unset. drf-spectacular writes OpenAPI 3.0.3
+    by default, which Blume upgrades to 3.1 as it reads the file. It can also
+    write 3.1.0 or 3.2.0, which Blume reads as written.
+  </p>
+
+  <h3>Accept bearer tokens</h3>
+  <p>
+    DRF's <code>TokenAuthentication</code> expects{" "}
+    <code>Authorization: Token &lt;key&gt;</code>. Subclass it to accept the
+    more common <code>Bearer</code> keyword:
+  </p>
+  <CodeBlock
+    code={`from rest_framework.authentication import TokenAuthentication
+
+
+class BearerTokenAuthentication(TokenAuthentication):
+    keyword = "Bearer"`}
+    lang="python"
+    title="messaging/authentication.py"
+  />
+  <p>
+    With that keyword, drf-spectacular describes the class as an HTTP bearer
+    scheme. Blume then shows an Authorization section on each operation and
+    sends <code>Authorization: Bearer YOUR_TOKEN</code> in its code samples.
+    The class still reads DRF's token table, so keep{" "}
+    <code>rest_framework.authtoken</code> installed and run{" "}
+    <code>python manage.py migrate</code>. To test locally,{" "}
+    <code>python manage.py drf_create_token ada</code> prints a key for the
+    user <code>ada</code>.
+  </p>
+
+  <h2>Describe the API in code</h2>
+  <p>
+    drf-spectacular reads your models, serializers, and views, so this is where
+    the reference's content comes from. Start with the models:
+  </p>
+  <CodeBlock
+    code={`import secrets
+
+from django.db import models
+
+
+def new_message_id():
+    return f"msg_{secrets.token_hex(4)}"
+
+
+class Template(models.Model):
+    id = models.SlugField(primary_key=True, help_text="The template ID, like welcome.")
+    name = models.CharField(max_length=200)
+    body = models.TextField(help_text="The message body, with {{ variables }}.")
+
+
+class Message(models.Model):
+    class Channel(models.TextChoices):
+        EMAIL = "email"
+        SMS = "sms"
+
+    class Status(models.TextChoices):
+        QUEUED = "queued"
+        SENT = "sent"
+        DELIVERED = "delivered"
+        FAILED = "failed"
+
+    id = models.CharField(
+        primary_key=True,
+        max_length=20,
+        default=new_message_id,
+        editable=False,
+        help_text="The message ID, like msg_5f2a9c1e.",
+    )
+    channel = models.CharField(max_length=5, choices=Channel.choices)
+    to = models.CharField(max_length=254)
+    template = models.ForeignKey(Template, on_delete=models.PROTECT)
+    variables = models.JSONField(default=dict, blank=True)
+    status = models.CharField(
+        max_length=9, choices=Status.choices, default=Status.QUEUED
+    )
+    created_at = models.DateTimeField(auto_now_add=True)`}
+    lang="python"
+    title="messaging/models.py"
+  />
+  <p>Run <code>python manage.py makemigrations messaging</code> and{" "}
+  <code>migrate</code>, then add the serializers:</p>
+  <CodeBlock
+    code={`import re
+
+from drf_spectacular.utils import OpenApiExample, extend_schema_serializer
+from rest_framework import serializers
+
+from .models import Message, Template
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Welcome email",
+            value={
+                "channel": "email",
+                "to": "ada@example.com",
+                "template": "welcome",
+                "variables": {"name": "Ada"},
+            },
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Queued message",
+            value={
+                "id": "msg_5f2a9c1e",
+                "channel": "email",
+                "to": "ada@example.com",
+                "template": "welcome",
+                "variables": {"name": "Ada"},
+                "status": "queued",
+                "created_at": "2026-09-27T09:30:00Z",
+            },
+            response_only=True,
+            status_codes=[200, 202],
+        ),
+    ]
+)
+class MessageSerializer(serializers.ModelSerializer):
+    variables = serializers.DictField(
+        child=serializers.CharField(),
+        required=False,
+        help_text="Values for the template's variables.",
+    )
+
+    class Meta:
+        model = Message
+        fields = ["id", "channel", "to", "template", "variables", "status", "created_at"]
+        read_only_fields = ["id", "status", "created_at"]
+        extra_kwargs = {
+            "channel": {"help_text": "How to deliver the message."},
+            "to": {"help_text": "An email address, or a phone number in E.164 format."},
+            "template": {"help_text": "The ID of the template to send."},
+        }
+
+
+class TemplateSerializer(serializers.ModelSerializer):
+    variables = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Template
+        fields = ["id", "name", "body", "variables"]
+
+    def get_variables(self, template):
+        return re.findall(r"{{\\s*(\\w+)\\s*}}", template.body)`}
+    lang="python"
+    title="messaging/serializers.py"
+  />
+  <p>Three choices here shape the reference:</p>
+  <ul>
+    <li>
+      <code>help_text</code> becomes each field's description in the schema
+      tables.
+    </li>
+    <li>
+      <code>variables</code> is declared as a <code>DictField</code> of
+      strings. Left to the model's <code>JSONField</code>, drf-spectacular
+      writes an empty schema, and the table can only call it <code>any</code>.
+    </li>
+    <li>
+      <code>extend_schema_serializer</code> adds examples. The request example
+      fills in the Try it form, and the response example replaces generated
+      values like <code>"string"</code>. Response examples only attach to 200
+      and 201 responses unless you set <code>status_codes</code>, and sending
+      a message returns 202.
+    </li>
+  </ul>
+  <p>Then the views and URLs:</p>
+  <CodeBlock
+    code={`from drf_spectacular.utils import (
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_view,
+)
+from rest_framework import mixins, status, viewsets
+
+from .models import Message, Template
+from .serializers import MessageSerializer, TemplateSerializer
+
+
+@extend_schema(tags=["Messages"])
+@extend_schema_view(
+    create=extend_schema(
+        operation_id="sendMessage",
+        summary="Send a message",
+        description="Queues an email or SMS for delivery and returns its ID right away.",
+        responses={
+            202: OpenApiResponse(MessageSerializer, description="The message is queued."),
+        },
+    ),
+    retrieve=extend_schema(
+        operation_id="getMessage",
+        summary="Get a message",
+        description="Returns a message and its delivery status.",
+        responses={
+            200: OpenApiResponse(MessageSerializer, description="The message."),
+            404: OpenApiResponse(description="No message has that ID."),
+        },
+    ),
+    list=extend_schema(
+        operation_id="listMessages",
+        summary="List messages",
+        description="Returns your messages, newest first, 20 per page.",
+    ),
+)
+class MessageViewSet(
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.ListModelMixin,
+    viewsets.GenericViewSet,
+):
+    queryset = Message.objects.order_by("-created_at")
+    serializer_class = MessageSerializer
+
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        response.status_code = status.HTTP_202_ACCEPTED
+        return response
+
+
+@extend_schema(tags=["Templates"])
+@extend_schema_view(
+    list=extend_schema(
+        operation_id="listTemplates",
+        summary="List templates",
+        description="Returns every template in the workspace, 20 per page.",
+    ),
+)
+class TemplateViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+    queryset = Template.objects.order_by("id")
+    serializer_class = TemplateSerializer`}
+    lang="python"
+    title="messaging/views.py"
+  />
+  <CodeBlock
+    code={`from django.urls import include, path
+from rest_framework.routers import SimpleRouter
+
+from messaging.views import MessageViewSet, TemplateViewSet
+
+router = SimpleRouter(trailing_slash=False)
+router.register("messages", MessageViewSet, basename="message")
+router.register("templates", TemplateViewSet, basename="template")
+
+urlpatterns = [
+    path("v1/", include(router.urls)),
+]`}
+    lang="python"
+    title="acme/urls.py"
+  />
+  <p>
+    Blume builds each operation's URL from its first tag and its operation ID.
+    Left alone, drf-spectacular names operations after the route and action,
+    like <code>messages_create</code>, and tags them <code>messages</code>, so
+    the page would live at <code>/api/messages/messages-create</code>. With{" "}
+    <code>operation_id</code> and <code>tags</code> set, the pages are:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Operation</th>
+        <th scope="col">Page</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>POST /messages</code></td>
+        <td><code>/api/messages/send-message</code></td>
+      </tr>
+      <tr>
+        <td><code>GET /messages/&#123;id&#125;</code></td>
+        <td><code>/api/messages/get-message</code></td>
+      </tr>
+      <tr>
+        <td><code>GET /messages</code></td>
+        <td><code>/api/messages/list-messages</code></td>
+      </tr>
+      <tr>
+        <td><code>GET /templates</code></td>
+        <td><code>/api/templates/list-templates</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    <code>summary</code> becomes the page title and sidebar label, and{" "}
+    <code>description</code> the page's introduction. The{" "}
+    <code>create</code> override returns 202, and drf-spectacular can't see a
+    status code set inside a method, so <code>responses</code> declares it.{" "}
+    <code>trailing_slash=False</code> keeps paths as <code>/messages</code>{" "}
+    rather than <code>/messages/</code>.
+  </p>
+
+  <h2>Generate and validate the schema</h2>
+  <p>
+    Create the folder the docs site will live in, then write the schema into it
+    from the repository root:
+  </p>
+  <CodeBlock
+    code={`mkdir docs-site
+python manage.py spectacular --file docs-site/openapi.yaml --validate --fail-on-warn`}
+    lang="bash"
+  />
+  <p>
+    <code>--validate</code> checks the output against the OpenAPI JSON Schema,
+    and <code>--fail-on-warn</code> exits with an error on any warning. This
+    first run fails with one warning (your output starts with the file's full
+    path):
+  </p>
+  <CodeBlock
+    code={`messaging/serializers.py:55: Warning [TemplateViewSet > TemplateSerializer]: unable to resolve type hint for function "get_variables". Consider using a type hint or @extend_schema_field. Defaulting to string.
+
+Schema generation summary:
+Warnings: 1 (1 unique)
+Errors:   0 (0 unique)
+
+SchemaGenerationError: Failing as requested due to warnings`}
+    lang="txt"
+  />
+  <p>
+    A <code>SerializerMethodField</code> can return anything, so
+    drf-spectacular reads the method's return type hint. There isn't one, so it
+    falls back to <code>string</code>, and the reference would call a list a
+    string. Because the run failed, it didn't write the file: with{" "}
+    <code>--fail-on-warn</code>, a failed run leaves the previous schema
+    untouched.
+  </p>
+
+  <h3>Fix the warning</h3>
+  <p>
+    Declare the field's type with <code>extend_schema_field</code>. Change the
+    import at the top of the serializers file and decorate the method:
+  </p>
+  <CodeBlock
+    code={`from drf_spectacular.utils import (
+    OpenApiExample,
+    extend_schema_field,
+    extend_schema_serializer,
+)
+
+# ...
+
+
+class TemplateSerializer(serializers.ModelSerializer):
+    variables = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Template
+        fields = ["id", "name", "body", "variables"]
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_variables(self, template):
+        return re.findall(r"{{\\s*(\\w+)\\s*}}", template.body)`}
+    lang="python"
+    title="messaging/serializers.py"
+  />
+  <p>
+    A return type hint, <code>-&gt; list[str]</code>, fixes it too. Run the
+    command again: it exits cleanly and writes{" "}
+    <code>docs-site/openapi.yaml</code>.
+  </p>
+
+  <h2>Shape the schema for the docs</h2>
+  <p>
+    The schema is now valid, but two defaults read poorly in a reference. Both
+    are fixed on the Django side.
+  </p>
+
+  <h3>List each field's choices once</h3>
+  <p>
+    Look at <code>channel</code> in the generated file. drf-spectacular moves
+    every choice field into a shared enum component,{" "}
+    <code>ChannelEnum</code>, and when the field has its own description, it
+    wraps the reference in <code>allOf</code>. Blume reads a one-member{" "}
+    <code>allOf</code> as its member, so <code>channel</code> is labeled{" "}
+    <code>ChannelEnum</code> with <code>email</code> and <code>sms</code> as
+    its allowed values.
+  </p>
+  <p>
+    drf-spectacular also appends the choices to each field's description as a
+    bulleted list, so the reference shows them twice. Turn that off for the
+    docs only, so a schema you serve or generate clients from keeps it. Put the
+    override in its own module:
+  </p>
+  <CodeBlock
+    code={`# Overrides for the schema the docs site reads. Pass them with
+# manage.py spectacular --custom-settings acme.docs_schema.SETTINGS
+SETTINGS = {
+    # Leave each choice field's allowed values out of its description,
+    # since the reference lists them.
+    "ENUM_GENERATE_CHOICE_DESCRIPTION": False,
+}`}
+    lang="python"
+    title="acme/docs_schema.py"
+  />
+  <p>
+    <code>--custom-settings</code> applies it on top of{" "}
+    <code>SPECTACULAR_SETTINGS</code> for one run:
+  </p>
+  <CodeBlock
+    code={`python manage.py spectacular --custom-settings acme.docs_schema.SETTINGS \\
+  --file docs-site/openapi.yaml --validate --fail-on-warn`}
+    lang="bash"
+  />
+  <p>
+    Now <code>channel</code>'s description reads "How to deliver the
+    message.", and its allowed values appear once, from the enum.
+  </p>
+
+  <h3>Replace the pagination examples</h3>
+  <p>
+    DRF's <code>PageNumberPagination</code> describes its response with example
+    links to <code>http://api.example.org/accounts/</code>, and those end up in
+    every list example. Subclass it to describe a single page instead:
+  </p>
+  <CodeBlock
+    code={`from rest_framework.pagination import PageNumberPagination
+
+
+class AcmePagination(PageNumberPagination):
+    def get_paginated_response_schema(self, schema):
+        response = super().get_paginated_response_schema(schema)
+        # Describe a first page that holds every result.
+        response["properties"]["count"]["example"] = 1
+        response["properties"]["next"]["example"] = None
+        response["properties"]["previous"]["example"] = None
+        return response`}
+    lang="python"
+    title="messaging/pagination.py"
+  />
+  <p>
+    Set <code>DEFAULT_PAGINATION_CLASS</code> to{" "}
+    <code>"messaging.pagination.AcmePagination"</code> and run the command
+    again. Then commit <code>docs-site/openapi.yaml</code>: the docs build reads
+    the committed file, and its diff in each pull request shows reviewers what
+    changed in the API.
+  </p>
+
+  <h2>Create the docs site</h2>
+  <p>
+    Scaffold Blume into the folder that holds the schema. Blume needs Node.js
+    22.19 or later.
+  </p>
+  <CodeBlock
+    code="npx blume init docs-site --template docs --yes"
+    lang="bash"
+  />
+  <p>
+    It adds a <code>blume.config.ts</code>, a <code>docs/index.mdx</code> home
+    page, and a <code>package.json</code> with <code>dev</code> and{" "}
+    <code>build</code> scripts, installs Blume, and leaves{" "}
+    <code>openapi.yaml</code> alone. Replace the config to mount the reference
+    and give it a header tab:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  navigation: {
+    tabs: [
+      { label: "Docs", path: "/" },
+      { label: "API reference", path: "/api" },
+    ],
+  },
+  reference: [openapi({ route: "/api", spec: "./openapi.yaml" })],
+});`}
+    lang="ts"
+    title="docs-site/blume.config.ts"
+  />
+  <p>
+    The <code>spec</code> path is relative to <code>docs-site/</code>. The
+    reference never adds a tab on its own, so the tab pointing at{" "}
+    <code>/api</code> is what makes it reachable. Start the dev server:
+  </p>
+  <CodeBlock
+    code={`cd docs-site
+npm run dev`}
+    lang="bash"
+  />
+  <p>
+    The API reference tab opens an overview at <code>/api</code> with a section
+    for Messages and one for Templates. Send a message has an Authorization
+    section for the bearer token, a request body without the read-only fields,
+    and the 202 response with its example. The list pages show the{" "}
+    <code>page</code> parameter and the paginated response.
+  </p>
+  <p>
+    The Try it panel on each page sends requests from the reader's browser to
+    the server in the schema, so a real API has to allow the docs site's origin
+    with CORS. In Django that's usually the <code>django-cors-headers</code>{" "}
+    package; see{" "}
+    <a href="/guides/api-documentation-cors-errors">Fix CORS errors in an API documentation playground</a>.
+  </p>
+
+  <h2>Write a first-request tutorial</h2>
+  <p>
+    The reference says what each endpoint takes. New users also need the path
+    from an API key to a delivered message, and that's a page you write. Put it
+    in a folder named after the reference route, and it joins the API reference
+    tab's sidebar beside the generated pages:
+  </p>
+  <CodeBlock
+    code={`---
+title: Make your first request
+description: Send an email with the Acme Messages API, check its status, and page through your messages.
+---
+
+Every request needs an API key, sent in the \`Authorization\` header as a
+bearer token. Keep yours in an environment variable so the commands below
+can read it:
+
+\`\`\`bash
+export ACME_API_KEY="paste-your-key-here"
+\`\`\`
+
+## Send a message
+
+[Send a message](/api/messages/send-message) queues an email from the
+\`welcome\` template and fills in its \`name\` variable:
+
+\`\`\`bash
+curl https://api.acme.example/v1/messages \\
+  -H "Authorization: Bearer $ACME_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"channel": "email", "to": "ada@example.com", "template": "welcome", "variables": {"name": "Ada"}}'
+\`\`\`
+
+The API answers \`202 Accepted\` before the email goes out, with the
+message and its ID:
+
+\`\`\`json
+{
+  "id": "msg_5f2a9c1e",
+  "channel": "email",
+  "to": "ada@example.com",
+  "template": "welcome",
+  "variables": { "name": "Ada" },
+  "status": "queued",
+  "created_at": "2026-09-27T09:30:00Z"
+}
+\`\`\`
+
+## Check its status
+
+Pass the ID to [Get a message](/api/messages/get-message):
+
+\`\`\`bash
+curl https://api.acme.example/v1/messages/msg_5f2a9c1e \\
+  -H "Authorization: Bearer $ACME_API_KEY"
+\`\`\`
+
+\`status\` is one of \`queued\`, \`sent\`, \`delivered\`, or \`failed\`.
+
+## Page through your messages
+
+[List messages](/api/messages/list-messages) returns 20 messages per page,
+newest first, inside \`count\`, \`next\`, \`previous\`, and \`results\`.
+Request the URL in \`next\` until it's \`null\`, rather than building page
+numbers yourself.
+
+## When a request fails
+
+- \`401 Unauthorized\`: the key is missing or invalid, or the header
+  doesn't start with \`Bearer\`.
+- \`400 Bad Request\`: the body is an object keyed by field name, each with
+  a list of problems. Fix those fields and send again.
+- \`404 Not Found\` from Get a message: no message has that ID.`}
+    lang="mdx"
+    title="docs-site/docs/api/first-request.mdx"
+  />
+  <p>
+    The page lives at <code>/api/first-request</code> and links to operation
+    pages by URL, like any other page. Link the other way too: operation
+    descriptions render as Markdown, so ending the <code>sendMessage</code>{" "}
+    description with <code>[Make your first request](/api/first-request)</code>{" "}
+    puts the tutorial one click from the reference.
+  </p>
+
+  <h2>Build and check</h2>
+  <p>From <code>docs-site/</code>, build the site, check its links, and serve the build:</p>
+  <CodeBlock
+    code={`npm run build
+npx blume validate
+npx blume preview`}
+    lang="bash"
+  />
+  <p>
+    The build fails if it can't read the spec. <code>blume validate</code>{" "}
+    checks every internal link, including the tutorial's links to operation
+    pages, so a renamed operation ID shows up as a broken link instead of a
+    404 in production. In the preview, open{" "}
+    <code>/api/messages/send-message</code> directly and search for "send a
+    message" to confirm the page and its search entry. The build is static
+    files in <code>dist/</code> that any static host can serve; see{" "}
+    <a href="/docs/deployment">Deployment</a>.
+  </p>
+
+  <h2>Rebuild the docs from code in CI</h2>
+  <p>
+    The committed schema is only as current as the last time someone ran the
+    command. This workflow regenerates it on every pull request, fails if the
+    committed copy differs, and builds the site:
+  </p>
+  <CodeBlock
+    code={`name: API docs
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -r requirements.txt
+      - name: Generate the schema
+        run: >-
+          python manage.py spectacular
+          --custom-settings acme.docs_schema.SETTINGS
+          --file docs-site/openapi.yaml --validate --fail-on-warn
+      - name: Fail if the committed schema is out of date
+        run: git diff --exit-code -- docs-site/openapi.yaml
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+        working-directory: docs-site
+      - run: npx blume validate
+        working-directory: docs-site
+      - run: npm run build
+        working-directory: docs-site`}
+    lang="yaml"
+    title=".github/workflows/api-docs.yml"
+  />
+  <p>
+    Generating the schema imports your settings and URL configuration. In this
+    example it needs no database, so the job only installs Python dependencies;
+    if your settings read environment variables at import, set them on that
+    step. drf-spectacular sorts its output, so the same code writes the same
+    file, and <code>git diff --exit-code</code> fails only on a real change.
+    When it fails, run the command locally and commit the result. For gating
+    breaking API changes as well, see{" "}
+    <a href="/guides/openapi-documentation-ci">Keep API documentation in sync with backend changes in CI</a>.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>Generation fails on an APIView</h3>
+  <p>
+    An <code>APIView</code> with no <code>serializer_class</code> logs{" "}
+    <code>unable to guess serializer</code> as an error, and{" "}
+    <code>--fail-on-warn</code> fails on errors too. Describe the view with{" "}
+    <code>@extend_schema(request=..., responses=...)</code> on its method, or
+    base it on <code>GenericAPIView</code> with a serializer.
+  </p>
+  <h3>Code samples send a sessionid cookie</h3>
+  <p>
+    With DRF's default authentication classes, every operation lists{" "}
+    <code>cookieAuth</code> first and <code>basicAuth</code> second. Blume
+    shows both as alternatives, and its code samples use the first. Set{" "}
+    <code>DEFAULT_AUTHENTICATION_CLASSES</code> to the scheme your API clients
+    actually use.
+  </p>
+  <h3>The samples leave out the Token prefix</h3>
+  <p>
+    With the stock <code>TokenAuthentication</code>, drf-spectacular can't
+    express <code>Token &lt;key&gt;</code> as an HTTP scheme, so it writes an
+    API key in the <code>Authorization</code> header, with a description that
+    names the prefix. Blume's samples then send{" "}
+    <code>Authorization: YOUR_API_KEY</code>. Switch to the{" "}
+    <code>Bearer</code> keyword as shown above, or say in your tutorial that
+    the key needs the prefix.
+  </p>
+  <h3>Every operation says authentication is optional</h3>
+  <p>
+    <code>AllowAny</code>, or <code>IsAuthenticatedOrReadOnly</code> on a read,
+    adds an empty requirement to the operation's security, which Blume shows as
+    optional authentication. That's accurate if anonymous calls work. If they
+    shouldn't, fix the view's permission classes.
+  </p>
+  <h3>Sample requests go to /v1/v1/messages</h3>
+  <p>
+    The paths still start with <code>/v1</code> while the server URL ends in
+    it. Set <code>SCHEMA_PATH_PREFIX</code> to your URL prefix and{" "}
+    <code>SCHEMA_PATH_PREFIX_TRIM</code> to <code>True</code>.
+  </p>
+  <h3>The reference doesn't change after you regenerate</h3>
+  <p>
+    <code>blume dev</code> watches the file <code>spec</code> names and
+    updates the reference when it changes, so check that the command wrote a
+    new file: with <code>--fail-on-warn</code>, a run that fails leaves the
+    previous schema in place. If <code>blume build</code> fails with{" "}
+    <code>BLUME_OPENAPI_UNAVAILABLE</code>, check that <code>spec</code> is
+    relative to <code>docs-site/</code>, like <code>./openapi.yaml</code>.
+  </p>
+</GuidePage>

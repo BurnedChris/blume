@@ -14,7 +14,7 @@ agents: {
 
 Enquanto estiver ativado, o `blume build` grava dois arquivos na raiz do seu site:
 
-- **`/llms.txt`** — um índice compacto: o título e a descrição do seu site, seguidos de uma lista com links de todas as páginas e seus resumos, organizada em seções que espelham sua barra lateral — pastas e grupos viram títulos, então o agente enxerga a estrutura da documentação, e não um bloco único e achatado.
+- **`/llms.txt`** — um índice compacto: o título e a descrição do seu site, seguidos de uma lista com links de todas as páginas e seus resumos (a meta description de cada página: `seo.description`, quando a página define uma, ou `description`, caso contrário), organizada em seções que espelham sua barra lateral — pastas e grupos viram títulos, então o agente enxerga a estrutura da documentação, e não um bloco único e achatado.
 - **`/llms-full.txt`** — o corpus inteiro: o corpo completo em Markdown de cada página, com sua URL de origem, em um único arquivo.
 
 Páginas em rascunho, páginas ocultas da barra lateral (`sidebar.hidden`, ou a forma abreviada `hidden` no nível superior) e páginas com `noindex` são excluídas — exceto as páginas geradas da referência de API, cujo lugar nos dois arquivos é definido por `openapi`, mais abaixo, e não por `noindex`. Defina [`deployment.site`](/docs/deployment) para que os links e as URLs de origem resolvam para endereços absolutos.
@@ -45,7 +45,7 @@ agents: {
 
 ## Seções geradas [#generated-sections]
 
-O `llms.txt` termina com duas seções geradas que não precisam de configuração. **Agent skills** lista cada skill publicada através de [`agents.skills`](/docs/discoverability/agent-discovery#skills-discovery) com sua descrição (onde a skill diz quando deve ser usada). **Agent resources** cria links para todos os artefatos legíveis por máquina que o build emite — `llms-full.txt`, o espelho de [Markdown bruto](/docs/discoverability/markdown) por página, o [servidor MCP](/docs/discoverability/mcp) e seu documento de descoberta, o índice de skills, o [catálogo de API](/docs/discoverability/agent-discovery#api-catalog), o [catálogo de IA](/docs/discoverability/agent-discovery#ai-catalog), o [`agent-readability.json`](/docs/discoverability/agent-discovery#agent-readability) e o [sitemap](/docs/discoverability/sitemap-and-robots#sitemap) — cada um apenas quando existe, então um agente que não lê nada além do `llms.txt` ainda encontra toda a superfície.
+O `llms.txt` termina com duas seções geradas que não precisam de configuração. **Agent skills** lista [a skill do seu próprio site](/docs/discoverability/agent-discovery#your-sites-skill) e cada skill publicada através de [`agents.skills`](/docs/discoverability/agent-discovery#skills-discovery) com sua descrição (onde a skill diz quando deve ser usada). **Agent resources** cria links para todos os artefatos legíveis por máquina que o build emite — `llms-full.txt`, o espelho de [Markdown bruto](/docs/discoverability/markdown) por página, o [servidor MCP](/docs/discoverability/mcp) e seu documento de descoberta, o índice de skills, o [catálogo de API](/docs/discoverability/agent-discovery#api-catalog), o [catálogo de IA](/docs/discoverability/agent-discovery#ai-catalog), o [`agent-readability.json`](/docs/discoverability/agent-discovery#agent-readability) e o [sitemap](/docs/discoverability/sitemap-and-robots#sitemap) — cada um apenas quando existe, então um agente que não lê nada além do `llms.txt` ainda encontra toda a superfície.
 
 ## Excluindo uma página [#excluding-a-page]
 
@@ -59,7 +59,7 @@ ai:
 ---
 ```
 
-A página continua sendo renderizada, permanece na busca e mantém seu lugar no sitemap — só os arquivos `llms.txt` a ignoram.
+A página continua sendo renderizada, permanece na busca e mantém seu lugar no sitemap — só os arquivos `llms.txt` e o mapa de páginas da [skill do seu site](/docs/discoverability/agent-discovery#your-sites-skill) a ignoram.
 
 ## Usando os seus próprios [#bringing-your-own]
 

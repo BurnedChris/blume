@@ -134,7 +134,12 @@ export const blumeConsentIntegrations = (input: {
     astroConsent(options),
     {
       hooks: {
-        "astro:config:setup": ({ updateConfig, injectScript, command }) => {
+        "astro:config:setup": ({
+          command,
+          config,
+          injectScript,
+          updateConfig,
+        }) => {
           // The project's `consent.ts` (scripts and callbacks), found by
           // name like `components.ts`; eject keeps it at the same root.
           const userEntry = findConsentFile(input.root);
@@ -150,7 +155,7 @@ export const blumeConsentIntegrations = (input: {
                       ? `import extension from ${JSON.stringify(userEntry)};`
                       : "const extension = {};";
                     return `${userImport}
-${analyticsClientModule(command === "dev" ? [] : input.analytics)}
+${analyticsClientModule(command === "dev" ? [] : input.analytics, config.base)}
 import { externalConsentSource } from "blume/consent/runtime";
 export default { ...extension, pageviews: [...pageviews, ...(extension.pageviews ?? [])], scripts: [...scripts, ...(extension.scripts ?? [])], consentSource: externalConsentSource(${JSON.stringify(consent)}) ?? extension.consentSource };`;
                   },

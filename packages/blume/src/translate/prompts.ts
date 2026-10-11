@@ -64,6 +64,7 @@ ${previousTranslation}`;
 Rules:
 - Translate the prose: headings, paragraphs, list items, table cells, admonitions, and image alt text.
 - In the YAML frontmatter, translate ONLY the values of these keys: ${KEY_LIST}. Copy every other frontmatter key and value exactly as written.
+- Keep the frontmatter valid YAML: if a translated value contains a colon followed by a space (\`: \`) or a space followed by \`#\`, or starts with a quote, a backtick, or another YAML indicator character, write it as a double-quoted string and escape any double quotes inside it.
 - Never translate or alter: code blocks, inline code, import/export statements, JSX/MDX component names and their attributes, URLs, link targets, HTML tags, or frontmatter keys.
 - A heading may end with anchor markers: \`[#some-id]\`, \`{#some-id}\` (also written \`\\{#some-id\\}\`), \`[!toc]\`, or \`[toc]\`. Copy every marker exactly as written, in the same position at the end of the translated heading — never translate, reorder, or drop a marker, and never change the id inside \`[#...]\` or \`{#...}\` (anchors must stay identical across languages).
 

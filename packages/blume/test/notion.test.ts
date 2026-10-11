@@ -16,6 +16,7 @@ import { resolveSources } from "../src/core/sources/resolve.ts";
 import type { SourceContext, SourceEntry } from "../src/core/sources/types.ts";
 import type { ProjectContext } from "../src/core/types.ts";
 import { notion } from "../src/sources/notion.ts";
+import { withEnv } from "./cms-fixtures.ts";
 
 const dirs: string[] = [];
 const tempDir = async (): Promise<string> => {
@@ -324,6 +325,86 @@ describe("notionSource", () => {
     expect(body).toContain('<AccordionItem title={"More info"}>');
     expect(body).toContain(String.raw`![A \<chart>](/blume-assets/handbook/`);
     expect(entry?.data.title).toBe("Use {x}");
+  });
+
+  it("reads text blocks as MDX source when mdx is set", async () => {
+    const page = { ...PAGE, id: "mdx" };
+    const lists = new Map<string, BlockList>([
+      [
+        "mdx",
+        [
+          {
+            id: "cards",
+            paragraph: {
+              rich_text: [
+                rich(
+                  '<CardGroup cols={3}>\n<Card title="New" href="/a">\n**New release** in {version} — '
+                ),
+                {
+                  ...rich("the docs", { italic: true }),
+                  href: "https://x.dev/a",
+                },
+                rich(" and "),
+                rich("a`b", { code: true }),
+                rich("\n</Card>\n</CardGroup>"),
+              ],
+            },
+            type: "paragraph",
+          },
+          {
+            id: "esm",
+            paragraph: { rich_text: [rich('import { X } from "./x";')] },
+            type: "paragraph",
+          },
+          {
+            callout: { rich_text: [rich("Use <Badge>new</Badge>")] },
+            id: "note",
+            type: "callout",
+          },
+          {
+            code: { language: "mdx", rich_text: [rich("<Card />\n{y}")] },
+            id: "code",
+            type: "code",
+          },
+          {
+            id: "toggle",
+            toggle: { rich_text: [rich("More <b>")] },
+            type: "toggle",
+          },
+          {
+            id: "img",
+            image: {
+              caption: [rich("A <chart>")],
+              file: { url: "https://notion.so/signed/chart.png" },
+            },
+            type: "image",
+          },
+        ],
+      ],
+    ]);
+    const source = notionSource(
+      {
+        client: clientFor(lists, [page]),
+        database: "db1",
+        fetchImpl,
+        mdx: true,
+        name: "handbook",
+      },
+      await ctxFor()
+    );
+    const { entries } = await source.load();
+    const [entry] = entries;
+    const body = entry?.body.text ?? "";
+    // Text goes in as typed; Notion's own marks, links, and code still apply.
+    expect(body).toContain(
+      '<CardGroup cols={3}>\n<Card title="New" href="/a">\n**New release** in {version} — [*the docs*](https://x.dev/a) and ``a`b``\n</Card>\n</CardGroup>'
+    );
+    expect(body).toContain('import { X } from "./x";');
+    expect(body).toContain("<Callout>\nUse <Badge>new</Badge>\n</Callout>");
+    // Code, toggle titles, and captions are text either way.
+    expect(body).toContain("```mdx\n<Card />\n{y}\n```");
+    expect(body).toContain('<AccordionItem title={"More <b>"}>');
+    expect(body).toContain(String.raw`![A \<chart>](/blume-assets/handbook/`);
   });
 
   it("retries a rate-limited query and recovers", async () => {
@@ -709,6 +790,42 @@ describe("notionSource (block + property edge cases)", () => {
     expect(diagnostics.map((d) => d.code)).toContain("BLUME_SOURCE_OFFLINE");
     expect(diagnostics[0]?.message).toContain("@notionhq/client");
   });
+
+  it("builds the SDK client from NOTION_TOKEN, and fails before a request without it", async () => {
+    const auths: (string | undefined)[] = [];
+    mock.module("@notionhq/client", () => ({
+      Client: class {
+        blocks = client().blocks;
+        dataSources = client().dataSources;
+        databases = databases;
+        constructor(config: { auth?: string }) {
+          auths.push(config.auth);
+        }
+      },
+    }));
+    await withEnv("NOTION_TOKEN", "secret-token", async () => {
+      const source = notionSource(
+        { database: "db1", fetchImpl, name: "handbook" },
+        await ctxFor()
+      );
+      const { entries } = await source.load();
+      expect(entries).toHaveLength(1);
+    });
+    await withEnv("NOTION_TOKEN", undefined, async () => {
+      const source = notionSource(
+        { database: "db1", fetchImpl, name: "handbook" },
+        await ctxFor()
+      );
+      await expect(source.load()).rejects.toMatchObject({
+        diagnostic: {
+          code: "BLUME_MISSING_SECRET",
+          message: 'Source "handbook" needs NOTION_TOKEN, which is not set.',
+        },
+      });
+    });
+    // No client was built for the second load, so nothing was requested.
+    expect(auths).toStrictEqual(["secret-token"]);
+  });
 });
 
 // Pages without a title property slug to their id, so any count is fine.
@@ -728,6 +845,8 @@ describe("notionSource (video blocks)", () => {
   const SAMPLE_ID = "uy6K0h132-c";
   const SAMPLE_WATCH_URL = `https://www.youtube.com/watch?v=${SAMPLE_ID}`;
   const SAMPLE_SHORT_URL = `https://youtu.be/${SAMPLE_ID}`;
+  const PLAYLIST_URL =
+    "https://www.youtube.com/playlist?list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG";
   const UPLOAD_URL = "https://notion.so/signed/clip.mp4?X-Amz=1";
   const VIMEO_URL = "https://vimeo.com/123";
 
@@ -746,6 +865,11 @@ describe("notionSource (video blocks)", () => {
         id: "yt-plain",
         type: "video",
         video: { external: { url: SAMPLE_SHORT_URL } },
+      },
+      {
+        id: "yt-list",
+        type: "video",
+        video: { external: { url: PLAYLIST_URL } },
       },
       // An uploaded video: a signed, expiring Notion-hosted file URL.
       {
@@ -828,15 +952,20 @@ describe("notionSource (video blocks)", () => {
     expect(body).toContain(`<YouTube url={"${SAMPLE_SHORT_URL}"} />`);
   });
 
+  it("renders a YouTube playlist link as the embed component", async () => {
+    const { body } = await loadVideos();
+    expect(body).toContain(`<YouTube url={"${PLAYLIST_URL}"} />`);
+  });
+
   it("emits a url the player resolves to the sample video's embed", async () => {
     const { body } = await loadVideos();
     // Close the loop the MDX text alone can't: feed each emitted `url` prop
     // through the same helpers `<YouTube>` uses, so the assertion covers what
     // the component will actually put in the iframe rather than just the
     // string the source wrote.
-    const urls = [
-      ...body.matchAll(/<YouTube[^>]*\surl=\{"(?<url>[^"]+)"\}/gu),
-    ].map((match) => match.groups?.url ?? "");
+    const urls = [...body.matchAll(/<YouTube[^>]*\surl=\{"(?<url>[^"]+)"\}/gu)]
+      .map((match) => match.groups?.url ?? "")
+      .filter((url) => url !== PLAYLIST_URL);
     expect(urls).toHaveLength(3);
     for (const url of urls) {
       const id = parseYouTubeId(url);
@@ -902,43 +1031,43 @@ describe("notionSource (video blocks)", () => {
   });
 });
 
-describe("notionSource (request pacing)", () => {
-  /**
-   * A client whose block fetches report how many are in flight at once. Each
-   * call parks for a tick so overlapping requests are actually observed
-   * overlapping — with 429 fan-out this is exactly the burst the limiter caps.
-   */
-  const trackingClient = (
-    pageCount: number,
-    onRequest: (inFlight: number) => void
-  ): NotionClientLike => {
-    let inFlight = 0;
-    return {
-      blocks: {
-        children: {
-          list: async () => {
-            inFlight += 1;
-            onRequest(inFlight);
-            await sleep(5);
-            inFlight -= 1;
-            return { has_more: false, next_cursor: null, results: [] };
-          },
+/**
+ * A client whose block fetches report how many are in flight at once. Each
+ * call parks for a tick so overlapping requests are actually observed
+ * overlapping — with 429 fan-out this is exactly the burst the limiter caps.
+ */
+const trackingClient = (
+  pageCount: number,
+  onRequest: (inFlight: number) => void
+): NotionClientLike => {
+  let inFlight = 0;
+  return {
+    blocks: {
+      children: {
+        list: async () => {
+          inFlight += 1;
+          onRequest(inFlight);
+          await sleep(5);
+          inFlight -= 1;
+          return { has_more: false, next_cursor: null, results: [] };
         },
       },
-      dataSources: {
-        query: () =>
-          Promise.resolve({
-            has_more: false,
-            next_cursor: null,
-            results: Array.from({ length: pageCount }, (_, i) =>
-              pageStub(`p${i}`)
-            ),
-          }),
-      },
-      databases,
-    };
+    },
+    dataSources: {
+      query: () =>
+        Promise.resolve({
+          has_more: false,
+          next_cursor: null,
+          results: Array.from({ length: pageCount }, (_, i) =>
+            pageStub(`p${i}`)
+          ),
+        }),
+    },
+    databases,
   };
+};
 
+describe("notionSource (request pacing)", () => {
   it("bounds concurrent API requests to the default pool of 3", async () => {
     let peak = 0;
     const source = notionSource(
@@ -983,7 +1112,12 @@ describe("resolveSources (notion)", () => {
     const config = blumeConfigSchema.parse({
       content: {
         sources: [
-          notion({ concurrency: 2, database: "db1", prefix: "handbook" }),
+          notion({
+            concurrency: 2,
+            database: "db1",
+            mdx: true,
+            prefix: "handbook",
+          }),
         ],
       },
     });
@@ -1047,9 +1181,10 @@ describe("notionSource data sources", () => {
       { client: empty, database: "db1", fetchImpl, name: "handbook" },
       await ctxFor()
     );
+    // A misconfiguration names itself rather than reading as a fetch failure.
     const failure = source.load();
     await expect(failure).rejects.toMatchObject({
-      diagnostic: { code: "BLUME_SOURCE_FETCH_FAILED" },
+      diagnostic: { code: "BLUME_SOURCE_MISCONFIGURED" },
     });
     await expect(failure).rejects.toThrow(/no data source/u);
   });

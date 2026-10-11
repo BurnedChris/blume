@@ -1,0 +1,101 @@
+---
+title: Cookie-Einwilligung
+description: >-
+  Frag deine Leser um Erlaubnis, bevor Analytics läuft – mit Blumes eigenem Banner oder einem gehosteten Consent-Manager wie Osano oder Ethyca, als Adapter in blume.config.ts.
+---
+
+Setze `consent` in `blume.config.ts`, um deine Leser zu fragen, bevor deine [Analytics](/docs/configuration/analytics) läuft. Die Option nimmt einen Adapter aus `blume/consent` entgegen: Blumes eigenes Banner oder einen gehosteten Consent-Manager, den du bereits nutzt.
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { googleAnalytics, posthog } from "blume/analytics";
+import { native } from "blume/consent";
+
+export default defineConfig({
+  analytics: [
+    googleAnalytics({ id: "G-XXXXXXXXXX" }),
+    posthog({ key: "phc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }),
+  ],
+  consent: native({ policy: "/privacy" }),
+});
+```
+
+Ist `consent` gesetzt, wartet jeder Analytics-Adapter. Seine Tags sind zwar in der Seite enthalten, laufen aber erst, wenn der Leser Analytics erlaubt – und dann in der Reihenfolge, in der du sie aufgelistet hast. Ein Leser, der ablehnt, lädt sie nie. Er sieht auch die [Seitenbewertung](/docs/configuration#page-feedback) samt Kommentarfeld nicht, da seine Antworten nirgendwo ankommen würden. Vercel Web Analytics lädt in jedem Fall, weil seine Komponente kein Tag ist, das Blume zurückhalten kann. Es sendet aber nichts, bis der Leser Analytics erlaubt.
+
+:::note
+Die Einwilligungsabfrage musst du ausdrücklich aktivieren. Ohne `consent` läuft Analytics wie bisher, sobald die Seite lädt.
+:::
+
+## Adapter [#adapters]
+
+| Adapter | Consent-Manager | Erforderlich |
+| --- | --- | --- |
+| `native()` | [Blumes eigenes Banner](#blumes-banner) | — |
+| `osano()` | [Osano](#osano) | `customerId`, `configId` |
+| `ethyca()` | [Ethyca](#ethyca) | `privacyCenter` |
+
+## Blumes Banner
+
+`native()` zeigt am unteren Rand der Seite eine kleine Karte an, bis der Leser antwortet. Darauf stehen **Akzeptieren** und **Ablehnen** nebeneinander, sodass Ablehnen genauso einfach ist wie Akzeptieren. Die Antwort bleibt im Browser des Lesers, und sobald er sie gegeben hat, erscheint das Banner nicht wieder.
+
+```ts blume.config.ts lineNumbers
+consent: native({
+  policy: "/privacy", // optional: links the banner to your privacy policy
+}),
+```
+
+`policy` nimmt eine Seitenroute oder eine vollständige URL entgegen. Der Text des Banners ist in allen eingebauten Sprachen übersetzt. Um den Wortlaut zu ändern, überschreibst du die `consent`-[UI-Strings](/docs/content/i18n#translated-ui) (`message`, `accept`, `decline`, `policy`, `settings`) mit `i18n.ui`.
+
+Das Banner funktioniert auch in `blume dev`, sodass du es schon beim Schreiben siehst. Analytics selbst lädt nur in Production-Builds.
+
+## Osano
+
+`osano()` lädt [Osano Cookie Consent](https://www.osano.com). Das zeigt das Banner und den Drawer an, die du im Osano-Dashboard eingerichtet hast. Blume führt deine Analytics aus, sobald Osano die Analytics-Einwilligung des Lesers meldet, und erneut, wann immer er sie ändert. Beide IDs findest du im Script-Tag, das Osano dir gibt: `https://cmp.osano.com/<customerId>/<configId>/osano.js`.
+
+```ts blume.config.ts lineNumbers
+import { osano } from "blume/consent";
+
+consent: osano({ customerId: "AzZdRbSIoEzZU2", configId: "7b9e2f4a-…" }),
+```
+
+Was in welcher Region als Einwilligung gilt, entscheidet Osano anhand des Compliance-Modus, den du in seinem Dashboard gewählt hast.
+
+## Ethyca
+
+`ethyca()` lädt den Consent-Manager [Fides von Ethyca](https://www.ethyca.com) aus deinem Privacy Center. Er zeigt das Banner und das Modal an, die du in Fides eingerichtet hast. Blume führt deine Analytics aus, sobald der Analytics-Hinweis des Lesers aktiv ist. Das ist der Fall, wenn der Leser zugestimmt hat (Opt-in), wenn er nicht widersprochen hat (kein Opt-out) oder wenn der Hinweis nur zur Kenntnis genommen werden muss.
+
+```ts blume.config.ts lineNumbers
+import { ethyca } from "blume/consent";
+
+consent: ethyca({
+  privacyCenter: "https://privacy.example.com",
+  propertyId: "FDS-XXXXXX", // optional: which Fides property to load
+  notice: "analytics", // optional: the notice key that covers analytics
+}),
+```
+
+`notice` ist standardmäßig `analytics`. Setze die Option, wenn dein Fides-Hinweis für Analytics einen anderen Key hat.
+
+Wie Analytics laden auch Osano und Fides nur in Production-Builds. Beim Testen in `blume dev` entstehen also keine Einwilligungsdatensätze. Um sie dir in der Vorschau anzusehen, nutzt du `blume build` und `blume preview`.
+
+## Eine Antwort ändern [#changing-an-answer]
+
+Wenn `consent` gesetzt ist, zeigt der Footer der Website einen Link **Cookie-Einstellungen**. Er öffnet Blumes Banner erneut oder die Einstellungen des gehosteten Consent-Managers. Wenn du den Footer durch deinen eigenen [`Footer`](/docs/configuration/customization#layout-slots) ersetzt, gib einem beliebigen Element das Attribut `data-blume-consent-open`, um es zu diesem Link zu machen:
+
+```html
+<button data-blume-consent-open type="button">Cookie settings</button>
+```
+
+Wenn ein Leser Analytics erlaubt und seine Erlaubnis später zurückzieht, wird die Seite neu geladen. Nur so lassen sich Skripte stoppen, die bereits gestartet sind. Ab dann bleibt Analytics aus.
+
+## Deine eigenen Skripte [#your-own-scripts]
+
+Jedes eigene Skript kannst du auf die gleiche Weise zurückhalten: Gib ihm `type="text/plain"` und `data-blume-consent="analytics"`. Dann läuft es, sobald der Leser Analytics erlaubt. Um selbst auf Antworten zu reagieren, hörst du auf das Event `blume:consent` auf `window`. Dessen `detail.analytics` enthält die Wahl des Lesers. `window.blumeConsent.analytics` enthält die aktuelle Wahl. Der Wert ist `null`, bis der Consent-Manager antwortet, danach `true` oder `false`.
+
+```js
+window.addEventListener("blume:consent", (event) => {
+  if (event.detail.analytics) {
+    // start something that needs consent
+  }
+});
+```

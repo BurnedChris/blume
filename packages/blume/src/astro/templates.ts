@@ -4,12 +4,16 @@ import { pathToFileURL } from "node:url";
 import { dirname, isAbsolute, join, relative } from "pathe";
 
 import type { AskRetrievalOptions } from "../ai/ask-context.ts";
+import { ASK_MAX_MESSAGES, ASK_MAX_MESSAGES_CHARS } from "../ai/ask-limits.ts";
 import type { AskBackend } from "../ai/ask.ts";
 import { buildHomeLinkHeader } from "../ai/link-headers.ts";
 import type { CaptchaAdapter } from "../captcha/schema.ts";
 import { normalizeBasePath } from "../core/base-path.ts";
-import { TOC_HIDDEN_KEY } from "../core/heading-markers.ts";
-import { compileRedirects, isPatternPath } from "../core/redirect-patterns.ts";
+import { TOC_HIDDEN_KEY, TOC_TEXT_KEY } from "../core/heading-markers.ts";
+import {
+  compileEveryRedirect,
+  isPatternPath,
+} from "../core/redirect-patterns.ts";
 import type { CompiledRedirect } from "../core/redirect-patterns.ts";
 import type { ResolvedConfig } from "../core/schema.ts";
 import { resolveDocsCollection } from "../core/sources/collection.ts";
@@ -17,12 +21,19 @@ import { BLUME_IGNORE_DIRS } from "../core/sources/watch.ts";
 import { trimChar } from "../core/trim.ts";
 import type { ProjectContext } from "../core/types.ts";
 import { hasVariables } from "../core/variables.ts";
+import { getBlumeVersion } from "../core/version.ts";
 import { deployPassthrough } from "../deploy/adapters/types.ts";
 import { SVG_ASSET_HEADERS } from "../deploy/headers.ts";
 import { deployPlatform } from "../deploy/platforms/index.ts";
 import { adapterRoot, distDir } from "../deploy/platforms/paths.ts";
-import { applyBaseToAstroRedirects } from "../deploy/redirects.ts";
+import {
+  applyBaseToAstroRedirects,
+  isPageIndexFile,
+  withMirrorRedirects,
+} from "../deploy/redirects.ts";
 import { API_RAIL_KEY } from "../markdown/api-rail.ts";
+import { TITLE_ID_KEY } from "../markdown/title-heading.ts";
+import { VIEWS_KEY } from "../markdown/views.ts";
 import type { OgCache } from "../og/cache.ts";
 import type { OgFont, OgFontFamilies, OgGoogleFont } from "../og/card.ts";
 import { RATE_LIMIT_BINDING } from "../ratelimit/cloudflare.ts";
@@ -32,6 +43,7 @@ import type {
   ResolvedSearchAdapter,
   SearchAdapterKind,
 } from "../search/adapters/registry.ts";
+import type { SourcePage } from "../search/source-pages.ts";
 import { buildFontEntries, fontLocaleCodes } from "../theme/fonts.ts";
 import { importSpecifier, wrapperPropsType } from "./component-slots.ts";
 import type { ExampleSpec } from "./examples.ts";
@@ -120,7 +132,7 @@ const renderAstroAdapter = (
   const { astro } = platform;
   const args = {
     ...astro.options(context),
-    ...deployPassthrough(deployment.options),
+    ...deployPassthrough(deployment.options, astro.configOptions),
   };
   const argsLiteral = Object.keys(args).length > 0 ? JSON.stringify(args) : "";
   const construct = `adapter(${argsLiteral})`;
@@ -131,7 +143,7 @@ const renderAstroAdapter = (
       ? `withAdapterRoot(${construct}, ${JSON.stringify(adapterRoot(context))})`
       : construct;
   return {
-    configEntries: Object.entries(astro.config)
+    configEntries: Object.entries(astro.config(deployment.options))
       .map(([key, value]) => `\n  ${key}: ${JSON.stringify(value)},`)
       .join(""),
     importLine: `import adapter from "${astro.package}";\n`,
@@ -284,18 +296,14 @@ const renderUserAliases = (
     .join("");
 
 /**
- * Excludes Vite's pre-bundled dep cache from @vitejs/plugin-react. Astro's
- * react() replaces the plugin's default `/node_modules/` exclude with just
- * `/\.astro$/`, so without this Babel re-parses every optimized dep chunk
- * served from `.vite/deps` — a 500KB+ vendor bundle per chunk, re-done on each
- * re-optimization. A blanket `/node_modules/` exclude would instead switch the
- * React Compiler off for Blume's own components in published installs (they
- * resolve under `node_modules/blume/src`, and exclude beats include in the
- * plugin's filter), so only the pre-bundle cache is excluded. The hidden runtime
- * relocates that cache to `<runtime>/.cache/vite` (see `cacheOptions`), so both
- * the default and the relocated path are excluded.
+ * Excludes the hidden runtime's pre-bundled dep cache from @vitejs/plugin-react.
+ * Astro's react() already excludes `/node_modules/`, which covers Vite's
+ * default `node_modules/.vite` cache, but the hidden runtime relocates that
+ * cache to `<runtime>/.cache/vite` (see `cacheOptions`). Without this the React
+ * Compiler re-transforms every optimized dep chunk served from there — a 500KB+
+ * vendor bundle per chunk, re-done on each re-optimization.
  */
-const REACT_EXCLUDE = String.raw`exclude: [/\/node_modules\/\.vite\//, /\/\.cache\/vite\//]`;
+const REACT_EXCLUDE = String.raw`exclude: [/\/\.cache\/vite\//]`;
 
 /**
  * The `cacheDir` entries for the generated config's top level and its `vite`
@@ -325,17 +333,14 @@ const runtimeCacheOptions = (
 };
 
 /**
- * The `react()` integration call. When `compilerPath` is set (the resolved
- * absolute path to `babel-plugin-react-compiler`), react() carries the compiler
- * as the first babel plugin — an absolute path, because @vitejs/plugin-react
- * resolves babel plugins from the *project* root, not `.blume/`, so a bare
- * specifier wouldn't resolve in a user project. `target: "19"` matches Blume's
- * React pin. `null`/`undefined` (compiler off or unresolvable) omits the babel
- * block. Both variants carry the pre-bundle exclude above.
+ * The `react()` integration call. `compiler` turns on @astrojs/react's React
+ * Compiler, which runs on `oxc-transform-react` and targets the installed
+ * React major; false/absent (compiler off or unresolvable) leaves it out. Both
+ * variants carry the pre-bundle exclude above.
  */
-const reactIntegration = (compilerPath: string | null | undefined): string =>
-  compilerPath
-    ? `react({ babel: { plugins: [[${JSON.stringify(compilerPath)}, { target: "19" }]] }, ${REACT_EXCLUDE} })`
+const reactIntegration = (compiler: boolean | undefined): string =>
+  compiler
+    ? `react({ compiler: true, ${REACT_EXCLUDE} })`
     : `react({ ${REACT_EXCLUDE} })`;
 
 interface IntegrationBridgeOptions {
@@ -389,11 +394,10 @@ interface OptimizeDepsConfig {
  * the Vite root is the generated runtime, so user pages, convention islands,
  * and alias-reachable components all live outside it and are otherwise only
  * crawled when first requested. The compiler runtime rides the include list
- * because it is Babel-injected and no source scan can see it. @vitejs/plugin-react
- * would add it itself, but only when the babel plugin is passed by its bare
- * name (`getReactCompilerPlugin` is an exact string match) — Blume passes an
- * absolute path (see `reactIntegration`), which that check never matches. See
- * the optimizeDeps comment in the generated config for the failure this prevents.
+ * because the compiler injects its import and no source scan can see it. The
+ * compiler plugin in `@vitejs/plugin-react` lists it too; Blume keeps it
+ * explicit so the guard doesn't hinge on that plugin's internals. See the
+ * optimizeDeps comment in the generated config for the failure this prevents.
  */
 /**
  * The client-side libraries a site needs, decided at generation time. A
@@ -433,7 +437,7 @@ const resolveOptimizeDeps = (options: {
   context: ProjectContext;
   features: ClientFeatures;
   needsReact: boolean;
-  reactCompilerPath: string | null | undefined;
+  reactCompiler: boolean | undefined;
   searchKind: SearchAdapterKind;
 }): OptimizeDepsConfig => {
   const { context, features } = options;
@@ -457,7 +461,7 @@ const resolveOptimizeDeps = (options: {
     // (__PREFETCH_PREFETCH_ALL__ and friends) that a pre-bundled copy loses,
     // throwing ReferenceError on every page. Astro manages their optimization
     // itself, without a mid-session reload.
-    ...(options.needsReact && options.reactCompilerPath
+    ...(options.needsReact && options.reactCompiler
       ? ["react/compiler-runtime"]
       : []),
   ];
@@ -568,7 +572,10 @@ const blumeIntegrationOptions = (options: {
   pages: BlumePageRoute[];
   redirects: CompiledRedirect[];
 }): BlumeIntegrationOptions => {
-  const shared: BlumeIntegrationOptions = { pages: options.pages };
+  const shared: BlumeIntegrationOptions = {
+    pages: options.pages,
+    poweredBy: options.config.poweredBy,
+  };
   if (options.redirects.length > 0) {
     shared.redirects = options.redirects;
   }
@@ -612,11 +619,10 @@ export const astroConfigTemplate = (options: {
    */
   generatedModulesDir?: string;
   /**
-   * Absolute path to `babel-plugin-react-compiler` when the React Compiler is
-   * enabled (resolved from Blume's package root by the caller); null/absent
-   * disables the compiler and emits a bare `react()`.
+   * Turn on the React Compiler (the caller checked that `oxc-transform-react`
+   * resolves); false/absent emits `react()` without it.
    */
-  reactCompilerPath?: string | null;
+  reactCompiler?: boolean;
   /** Project tsconfig path aliases (`find` -> absolute dir), e.g. `@` -> src. */
   aliases?: Record<string, string>;
   /**
@@ -664,7 +670,7 @@ export const astroConfigTemplate = (options: {
     context,
     features,
     needsReact,
-    reactCompilerPath: options.reactCompilerPath,
+    reactCompiler: options.reactCompiler,
     searchKind: config.search.provider.kind,
   });
 
@@ -700,17 +706,31 @@ export const astroConfigTemplate = (options: {
   // Base the redirect paths the same way routes are based, so a redirect lands
   // under `basePath` too. Astro layers its own `base` (deployment.base) onto
   // `from` when matching, but never onto `to` — see applyBaseToAstroRedirects.
-  const basedRedirects = applyBaseToAstroRedirects(
-    config.redirects,
-    config.basePath,
-    deployment.options.base ?? "",
-    new Set(contentRoutes)
+  // A moved page's Markdown copies move with it (see withMirrorRedirects).
+  const redirectPages = new Set(contentRoutes);
+  const basedRedirects = withMirrorRedirects(
+    applyBaseToAstroRedirects(
+      config.redirects,
+      config.basePath,
+      deployment.options.base ?? "",
+      redirectPages
+    ),
+    redirectPages,
+    { from: "", to: normalizeBasePath(deployment.options.base) }
   );
   // Only exact redirects: Astro can't prerender a pattern's redirect pages
   // (it would need every path the pattern covers), so a pattern reaches the
   // dev server through the integration and each host through its own rules.
+  // Nor one from a page's own `index.html` in a static build, where Astro
+  // would write its redirect page inside the page's file (see
+  // `isPageIndexFile`); the host files and the dev server still carry it.
+  const staticOutput = deployment.options.output === "static";
   const exactRedirects = basedRedirects.filter(
-    (redirect) => !isPatternPath(redirect.from)
+    (redirect) =>
+      !(
+        isPatternPath(redirect.from) ||
+        (staticOutput && isPageIndexFile(redirect.from, redirectPages))
+      )
   );
   const redirectsOption =
     exactRedirects.length > 0
@@ -796,6 +816,7 @@ export const astroConfigTemplate = (options: {
   const blumeImports = [
     "blumeIntegration",
     "includeHmrPlugin",
+    "mdxSourceErrorsPlugin",
     "prerenderDepsPlugin",
     ...runtimeModuleImports,
     ...(adapterOption.includes("withAdapterRoot") ? ["withAdapterRoot"] : []),
@@ -840,7 +861,7 @@ export const astroConfigTemplate = (options: {
     `mdx({ processor: blumeMdxProcessor(${processorOptions}) })`,
   ];
   if (needsReact) {
-    integrations.push(reactIntegration(options.reactCompilerPath));
+    integrations.push(reactIntegration(options.reactCompiler));
   }
   if (needsVue) {
     integrations.push("vue()");
@@ -863,7 +884,7 @@ export const astroConfigTemplate = (options: {
         contentRoutes,
         ejected,
         pages,
-        redirects: compileRedirects(basedRedirects),
+        redirects: compileEveryRedirect(basedRedirects),
       })
     )})`
   );
@@ -909,10 +930,10 @@ ${userConfigSetup}export default defineConfig({
   devToolbar: { enabled: false },
   // One canonical URL per page: canonicals, the sitemap, and hreflang all use
   // the slashless form, so the slashed spelling is not a second address. Astro
-  // applies this itself — its dev server answers a slashed URL with a 404 that
-  // names the setting, an on-demand route redirects — and the Vercel adapter
-  // turns it into the platform's 308 route, so the Build Output config needs
-  // no hand-spliced redirect (see deploy/vercel-negotiation.ts). Static hosts
+  // applies this itself — an on-demand route redirects, and the integration
+  // has the dev server redirect too, ahead of Astro's own 404 — and the Vercel
+  // adapter turns it into the platform's 308 route, so the Build Output config
+  // needs no hand-spliced redirect (see deploy/vercel-negotiation.ts). Static hosts
   // serve the \`index.html\` directory layout as they always did.
   trailingSlash: "never",
   // The layouts render Astro's <ClientRouter />, and its in-place swaps read
@@ -930,7 +951,7 @@ ${userConfigSetup}export default defineConfig({
     plugins: [${runtimeModulesPluginEntry}${variablesPluginEntry}tailwindcss(), includeHmrPlugin(${configPath(
       `${context.outDir}/src/generated/includes.json`,
       ejected
-    )}), prerenderDepsPlugin()],
+    )}), mdxSourceErrorsPlugin(), prerenderDepsPlugin()],
     build: {${features.mermaid ? MERMAID_CHUNK_LIMIT : ""}
       rolldownOptions: {
         ${ROLLDOWN_ON_LOG},
@@ -939,8 +960,8 @@ ${userConfigSetup}export default defineConfig({
     // Everything hydration can reach must be part of the dev dep optimizer's
     // FIRST run. The Vite root is the generated runtime, so user pages,
     // islands, and aliased components live outside it and are only crawled
-    // when first requested — and \`react/compiler-runtime\` is Babel-injected,
-    // so no source scan can ever see it. A dependency discovered after
+    // when first requested — and \`react/compiler-runtime\` is injected by the
+    // React Compiler, so no source scan can ever see it. A dependency discovered after
     // hydration begins triggers a mid-session re-optimization whose new
     // generation imports React through new \`?v=\` URLs; the browser then
     // evaluates a second React copy and every island tears down with
@@ -1031,6 +1052,13 @@ const runtimeDirWithin = (base: string, outDir: string): string | null => {
 const astroGlobBase = (base: string): string =>
   isAbsolute(base) ? pathToFileURL(base).href : base;
 
+// The characters a glob reads as syntax; a `(group)` folder has two.
+const GLOB_SYNTAX = /[!()*+?@[\\\]{|}]/gu;
+
+/** A relative path as a glob that matches only that file. */
+const escapeGlob = (path: string): string =>
+  path.replaceAll(GLOB_SYNTAX, String.raw`\$&`);
+
 /** Generate `.blume/src/content.config.ts`. */
 export const contentConfigTemplate = (options: {
   context: ProjectContext;
@@ -1051,6 +1079,13 @@ export const contentConfigTemplate = (options: {
    * a non-filesystem source), the collection globs nothing — see below.
    */
   filesystem?: boolean;
+  /**
+   * Absolute paths of `.mdx` files the build dropped because they don't
+   * parse. Astro compiles every `.mdx` file in the collection, routed or
+   * not, so each is left out of the glob, or a `--no-strict` build would
+   * still fail on it.
+   */
+  unparsable?: readonly string[];
 }): string => {
   const { context, config } = options;
   const stagedBase = options.stagedBase ?? stagedContentDir(context.outDir);
@@ -1087,6 +1122,12 @@ export const contentConfigTemplate = (options: {
           dir === ".blume" ? [] : [`!**/${dir}/**`]
         ),
         ...outDirIgnore,
+        ...(options.unparsable ?? []).flatMap((file) => {
+          const rel = relative(collectionBase, file);
+          return rel.startsWith("..") || isAbsolute(rel)
+            ? []
+            : [`!${escapeGlob(rel)}`];
+        }),
       ]
     : [];
 
@@ -1118,6 +1159,10 @@ import { pageCollectionSchema } from "blume/core/schema.ts";
 // pageCollectionSchema is the scan's page front-matter schema, so entry.data
 // is typed and normalized the same way; it passes custom keys through and
 // falls back to defaults for a page the scan already dropped as invalid.
+//
+// Astro's content store re-parses an entry only when its file or this config
+// changes, so naming the Blume version (${getBlumeVersion()}) here re-parses
+// every entry after an upgrade: none keeps what an older schema produced.
 const docs = defineCollection({
   loader: withIncludeRefresh(glob({
     pattern: ${JSON.stringify(docsPattern)},
@@ -1208,9 +1253,9 @@ interface RateLimitTemplate {
  * `rateLimit` for one server route: a limiter built at module scope from the
  * configured adapter, checked against every request, keyed by the reader's
  * address and `scope` so each route keeps its own budget (see
- * `ratelimit/runtime.ts`). Upstash reads its secrets through `getSecret`;
- * Cloudflare's binding comes from the Worker's env. Nothing at all when
- * rate limiting is off.
+ * `ratelimit/runtime.ts`). An adapter that names secrets reads them through
+ * `getSecret`; Cloudflare's binding comes from the Worker's env. Nothing at
+ * all when rate limiting is off.
  */
 export const rateLimitTemplate = (
   adapter: RateLimitAdapter | null | undefined,
@@ -1223,7 +1268,7 @@ export const rateLimitTemplate = (
     'import { createLimiter, rateLimited } from "blume/ratelimit/runtime.ts";',
   ];
   let runtime = "";
-  if (adapter.kind === "upstash") {
+  if (adapter.requiredSecrets.length > 0) {
     imports.push('import { getSecret } from "astro:env/server";');
     runtime = ", { secret: getSecret }";
   } else if (adapter.kind === "cloudflare") {
@@ -1278,8 +1323,8 @@ const askCaptchaTemplate = (adapter?: CaptchaAdapter): RateLimitTemplate => {
 
 /**
  * Largest request body the assistant route reads: 64 KB, well above the
- * 24,000-character message budget it validates next, so a real conversation
- * never meets it.
+ * message budget it validates next (`ai/ask-limits.ts`), so a real
+ * conversation never meets it.
  */
 const ASK_BODY_LIMIT_BYTES = 65_536;
 
@@ -1388,7 +1433,7 @@ ${limit.check}  const text = await readCappedText(request, ${ASK_BODY_LIMIT_BYTE
   const valid =
     Array.isArray(raw) &&
     raw.length > 0 &&
-    raw.length <= 40 &&
+    raw.length <= ${ASK_MAX_MESSAGES} &&
     raw.every(
       (m: unknown) =>
         typeof m === "object" &&
@@ -1396,10 +1441,10 @@ ${limit.check}  const text = await readCappedText(request, ${ASK_BODY_LIMIT_BYTE
         ("role" in m && (m.role === "user" || m.role === "assistant")) &&
         ("content" in m && typeof m.content === "string")
     ) &&
-    JSON.stringify(raw).length <= 24_000;
+    JSON.stringify(raw).length <= ${ASK_MAX_MESSAGES_CHARS};
   if (!valid) {
     return new Response(
-      "Invalid request: send 1-40 user/assistant messages with string content.",
+      "Invalid request: send 1-${ASK_MAX_MESSAGES} user/assistant messages with string content.",
       { status: 400 }
     );
   }
@@ -1627,10 +1672,12 @@ export const searchClientTemplate = (config: ResolvedConfig): string => {
       return hostedSearchClient(provider);
     }
     case "server": {
-      return `${SEARCH_CLIENT_HEADER}${searchClientImport("endpoint")}${SEARCH_BASE_IMPORT}
+      // The dialog passes `typing`, which paces its queries (see endpoint.ts).
+      return `${SEARCH_CLIENT_HEADER}${searchClientImport("endpoint")}${SEARCH_BASE_IMPORT}import type { SearchClientOptions } from "blume/components/layout/search/types.ts";
 const api = joinBase(import.meta.env.BASE_URL, "api/search");
 
-export const createSearch = () => create({ api });
+export const createSearch = (options: SearchClientOptions = {}) =>
+  create({ ...options, api });
 `;
     }
     case "pagefind": {
@@ -1652,14 +1699,17 @@ export const createSearch = () => create({ url });
 /**
  * Generate the Mixedbread search endpoint (`/api/search`). It holds the secret
  * key server-side and proxies semantic queries to the configured store. The
- * adapter's options are inlined as a literal so the route never imports the
- * config. The result mapping is best-effort and may need tuning to how your
- * content was synced (see the Mixedbread sync step / \`mxbai vs sync\`).
+ * adapter's options are inlined as literals so the route never imports the
+ * config. `pages` (see `sourcePages`) maps each source file to its page: a
+ * chunk links to the page whose file `mxbai store sync` uploaded it from,
+ * found by the longest trailing run of the path the CLI recorded.
  */
 export const mixedbreadSearchEndpointTemplate = (
   options: MixedbreadOptions,
+  pages: [string, SourcePage][],
   rateLimit?: RateLimitAdapter | null
 ): string => {
+  const { search_options: tuning, storeId, ...searchOptions } = options;
   const limit = rateLimitTemplate(rateLimit, "search");
   const imports = [
     'import type { APIRoute } from "astro";',
@@ -1674,9 +1724,26 @@ ${imports.join("\n")}
 export const prerender = false;
 
 const client = new Mixedbread({ apiKey: getSecret("MIXEDBREAD_API_KEY") ?? "" });
-const OPTIONS = ${JSON.stringify(options)};
-// Every option besides the store reaches the search call verbatim.
-const { storeId: STORE_ID, ...SEARCH_OPTIONS } = OPTIONS;
+const STORE_ID = ${JSON.stringify(storeId)};
+// Every other option reaches the search call verbatim.
+const SEARCH_OPTIONS = ${JSON.stringify(searchOptions)};
+const SEARCH_TUNING = ${JSON.stringify(tuning ?? {})};
+// Each page's source file, relative to the project root, and the page it renders.
+const PAGES = new Map<string, { title: string; url: string }>(${JSON.stringify(pages)});
+
+// The page a synced file renders. \`mxbai store sync\` records the path
+// relative to where it ran (the project root, or a monorepo root above it), so
+// the longest trailing run of that path that names a page's file wins.
+const pageFor = (path: string) => {
+  const segments = path.replaceAll("\\\\", "/").split("/");
+  for (let start = 0; start < segments.length; start += 1) {
+    const page = PAGES.get(segments.slice(start).join("/"));
+    if (page) {
+      return page;
+    }
+  }
+  return undefined;
+};
 ${limit.setup}
 export const POST: APIRoute = async (context) => {
   const { request } = context;
@@ -1702,23 +1769,32 @@ ${limit.check}  // A search body is one short query: read it under a 16 KB cap, 
     });
   }
   // \`top_k\` defaults to 8 unless an option sets it; the query and store
-  // always come from the request and \`storeId\`.
+  // always come from the request and \`storeId\`. File metadata is always
+  // returned: it holds the path \`mxbai store sync\` recorded for the file.
   const response = await client.stores.search({
     top_k: 8,
     ...SEARCH_OPTIONS,
     query,
+    search_options: { ...SEARCH_TUNING, return_metadata: true },
     store_identifiers: [STORE_ID],
   });
-  const hits = (response.data ?? []).map((chunk) => {
+  const seen = new Set<string>();
+  const hits = (response.data ?? []).flatMap((chunk) => {
+    const { file_path: path } = (chunk.metadata ?? {}) as { file_path?: unknown };
+    const page = typeof path === "string" ? pageFor(path) : undefined;
+    // A file no page renders has nowhere to link, and a page's later chunks
+    // would repeat it: one hit per page, at its best chunk.
+    if (!page || seen.has(page.url)) {
+      return [];
+    }
+    seen.add(page.url);
     const meta = chunk.generated_metadata ?? {};
     // Only a text chunk carries \`text\`; image, audio, and video chunks fall
     // back to the excerpt the store generated for them.
     const text = "text" in chunk ? chunk.text : undefined;
-    return {
-      excerpt: text ?? meta.excerpt ?? "",
-      title: meta.title ?? chunk.filename ?? "",
-      url: meta.url ?? "",
-    };
+    return [
+      { excerpt: text ?? meta.excerpt ?? "", title: page.title, url: page.url },
+    ];
   });
   return new Response(JSON.stringify(hits), {
     headers: { "Content-Type": "application/json" },
@@ -1770,7 +1846,10 @@ export function GET({ props }: { props: { route: string } }) {
  *   - `content/<project-relative path>` — colocated content images
  *     (`![alt](./diagram.png)`), served as originals for the agent-facing
  *     Markdown endpoints (the HTML render uses the `astro:assets`-optimized
- *     copies instead). The mapping comes from `generated/content-assets.json`.
+ *     copies instead), and the other files beside a page that its links and
+ *     element URLs name (`[spec](./spec.pdf)`, `<img src="./a.png">`), which
+ *     the HTML render points here too. The mapping comes from
+ *     `generated/content-assets.json`.
  *   - `<source>/<hash>.<ext>` — remote-source images the scan pipeline
  *     materializes under `.blume/public/blume-assets` (see
  *     `core/sources/assets.ts`). That directory is NOT Astro's `publicDir`
@@ -1813,11 +1892,25 @@ const TYPES: Record<string, string> = {
   ".webp": "image/webp",
 };
 
+// The other files a page's links name beside it, typed so the dev server
+// opens them the way a static host would. Anything else downloads.
+const FILE_TYPES: Record<string, string> = {
+  ".csv": "text/csv; charset=utf-8",
+  ".json": "application/json",
+  ".mp3": "audio/mpeg",
+  ".pdf": "application/pdf",
+  ".txt": "text/plain; charset=utf-8",
+  ".wav": "audio/wav",
+  ".zip": "application/zip",
+};
+
 const extensionOf = (path: string): string =>
   path.slice(path.lastIndexOf(".")).toLowerCase();
 
 const contentType = (path: string): string =>
-  TYPES[extensionOf(path)] ?? "application/octet-stream";
+  TYPES[extensionOf(path)] ??
+  FILE_TYPES[extensionOf(path)] ??
+  "application/octet-stream";
 
 // A source downloads only images and videos; anything else in the staged
 // directory (a page an older build saved under its URL's extension) is never
@@ -2279,6 +2372,7 @@ import Badge from "blume/components/content/Badge.astro";
 import Callout from "blume/components/content/Callout.astro";
 import Card from "blume/components/content/Card.astro";
 import CardGroup from "blume/components/content/CardGroup.astro";
+import Changelog from "blume/components/content/Changelog.astro";
 import CodeBlock from "blume/components/content/CodeBlock.astro";
 import CodeGroup from "blume/components/content/CodeGroup.astro";
 import ColorRoot from "blume/components/content/Color.astro";
@@ -2308,11 +2402,13 @@ import TreeRoot from "blume/components/content/Tree.astro";
 import TreeFile from "blume/components/content/TreeFile.astro";
 import TreeFolder from "blume/components/content/TreeFolder.astro";
 import TypeTable from "blume/components/content/TypeTable.astro";
+import View from "blume/components/content/View.astro";
 import Visibility from "blume/components/content/Visibility.astro";
 import YouTube from "blume/components/content/YouTube.astro";
 import Icon from "blume/components/Icon.astro";
 import LocaleLinks from "blume/components/layout/LocaleLinks.astro";
 import NarrationPlayer from "blume/components/layout/NarrationPlayer.astro";
+import ViewSwitcher from "blume/components/content/ViewSwitcher.astro";
 import ApiOverview from "blume/components/openapi/ApiOverview.astro";
 import ApiTagOperations from "blume/components/openapi/ApiTagOperations.astro";
 import Operation from "blume/components/openapi/Operation.astro";
@@ -2330,6 +2426,7 @@ ${mathImport}import { mdxComponents as userMdx, layoutOverrides } from "../gener
   Callout,
   Card,
   CardGroup,
+  Changelog,
   CodeBlock,
   CodeGroup,
   Color,
@@ -2357,6 +2454,7 @@ ${mathImport}import { mdxComponents as userMdx, layoutOverrides } from "../gener
   Tooltip,
   Tree,
   TypeTable,
+  View,
   Visibility,
   YouTube,
   ${mathEntry}...userMdx,
@@ -2392,6 +2490,8 @@ import type { CollectionKey } from "astro:content";
 import RootLayout from "blume/components/layout/RootLayout.astro";
 import { withBase, withMountedBase } from "blume/components/islands/base-path.ts";
 import { mountBasePath, stripBasePath } from "blume/core/base-path.ts";
+import { routeSetFor, servesRoute } from "blume/core/locale-links.ts";
+import { resolveLocalizable } from "blume/core/localizable.ts";
 import { resolveSlot } from "blume/components/layout/overrides.ts";
 ${componentImports}
 import data from "blume:data";
@@ -2416,8 +2516,10 @@ export function getStaticPaths() {
       editUrl: route.editUrl,
       entryId: route.entryId,
       fallback: route.fallback,
+      hreflang: route.hreflang,
       indexable: route.indexable,
       lastModified: route.lastModified,
+      published: route.published,
       locale: route.locale,
       monolingual: route.monolingual,
       route: route.path,
@@ -2428,7 +2530,7 @@ export function getStaticPaths() {
   }));
 }
 
-const { entryId, collection, route, title, indexable, editUrl, lastModified, locale, alternates, fallback, monolingual, version, versionAlternates } = Astro.props;
+const { entryId, collection, route, title, indexable, editUrl, lastModified, published, locale, alternates, hreflang, fallback, monolingual, version, versionAlternates } = Astro.props;
 const entry = await getEntry(collection as CollectionKey, entryId);
 if (!entry) {
   return new Response(null, { status: 404 });
@@ -2439,12 +2541,34 @@ const { Content, headings: allHeadings, remarkPluginFrontmatter } = await render
 // frontmatter (see markdown/heading-anchors.ts). Only the plugin's array
 // counts: \`frontmatter.extend\` can declare the same key, and on a page with
 // no headings that user-supplied value would pass straight through.
+// A page written in \`<View>\` blocks gets their picker above the content;
+// the views plugin lists them through the render's frontmatter (see
+// markdown/views.ts), and only a list of titled entries counts.
+const viewsRaw = remarkPluginFrontmatter?.${VIEWS_KEY};
+const views = Array.isArray(viewsRaw)
+  ? viewsRaw.filter((view) => typeof view?.title === "string")
+  : [];
 const tocHiddenRaw = remarkPluginFrontmatter?.${TOC_HIDDEN_KEY};
 const tocHidden = new Set(Array.isArray(tocHiddenRaw) ? tocHiddenRaw : []);
-const headings =
+// A heading holding a \`<Badge>\` lists without the badge's text, which the
+// heading plugin reports by slug the same way.
+const tocTextRaw = remarkPluginFrontmatter?.${TOC_TEXT_KEY};
+const tocText = tocTextRaw && typeof tocTextRaw === "object" ? tocTextRaw : {};
+const headings = (
   tocHidden.size > 0
     ? allHeadings.filter((heading) => !tocHidden.has(heading.slug))
-    : allHeadings;
+    : allHeadings
+).map((heading) =>
+  typeof tocText[heading.slug] === "string"
+    ? { ...heading, text: tocText[heading.slug] }
+    : heading
+);
+// An untitled page's opening \`# Heading\` is its title, so the title-heading
+// plugin drops it from the body and reports its id here: the title \`<h1>\`
+// below takes it, so links to the heading's anchor still land (see
+// markdown/title-heading.ts).
+const titleIdRaw = remarkPluginFrontmatter?.${TITLE_ID_KEY};
+const titleId = typeof titleIdRaw === "string" ? titleIdRaw : undefined;
 const frontmatter = entry.data;
 
 const seo = frontmatter.seo;
@@ -2456,19 +2580,23 @@ const base = data.config.site ? data.config.site.replace(/\\/$/, "") : null;
 const ogPath = data.config.og.enabled
   ? encodeURI(\`/og/\${route === "/" ? "index" : route.slice(1)}.png\`)
   : null;
-// Absolute URLs also carry the deployment base (the page is served under it):
-// \`site + base + path\`. Only absolutize root-relative paths: \`seo.image\` may be
+// Root-relative paths carry the deployment base (the page is served under it),
+// and the site too once it's known: \`site + base + path\`. \`seo.image\` may be
 // an external URL, which passes through verbatim (mirrors PageLayout). An
-// authored \`seo.image\` keeps a base written by hand; the generated card is
-// always mounted under it.
+// authored image keeps a base written by hand; the generated card is always
+// mounted under it.
 const absoluteOg = (path: string, based: (path: string) => string) =>
-  base && path.startsWith("/") ? \`\${base}\${based(path)}\` : path;
-const ogImage = seo.image
-  ? absoluteOg(seo.image, withBase)
+  path.startsWith("/") ? \`\${base ?? ""}\${based(path)}\` : path;
+// The page's own image, else the site's default for its locale.
+const selectedOgImage =
+  seo.image ??
+  (data.config.og.image && resolveLocalizable(data.config.og.image, locale, data.config.i18n?.defaultLocale));
+const ogImage = selectedOgImage
+  ? absoluteOg(selectedOgImage, withBase)
   : ogPath && absoluteOg(ogPath, withMountedBase);
-// Blume's generated card has known dimensions the layout can declare; a user's
-// \`seo.image\` could be any size or format, so it gets none.
-const ogGenerated = !seo.image && Boolean(ogPath);
+// Blume's generated card has known dimensions the layout can declare; an
+// authored image could be any size or format, so it gets none.
+const ogGenerated = !selectedOgImage && Boolean(ogPath);
 
 // X attribution: the site's account, plus a creator the page can claim for
 // itself (a guest post crediting its own author) over the configured default.
@@ -2564,11 +2692,12 @@ const canonical =
       : null);
 const effectiveNoindex = Boolean(seo.noindex) || (archived?.noindex ?? false);
 
+// hreflang names only indexable translations (see \`hreflangAlternates\`).
 const localeAlternates =
   i18n && base
-    ? (alternates ?? []).map((alt) => ({ hreflang: alt.locale, href: absolute(alt.path) }))
+    ? (hreflang ?? []).map((alt) => ({ hreflang: alt.locale, href: absolute(alt.path) }))
     : [];
-const defaultAlt = i18n ? (alternates ?? []).find((alt) => alt.locale === i18n.defaultLocale) : null;
+const defaultAlt = i18n ? (hreflang ?? []).find((alt) => alt.locale === i18n.defaultLocale) : null;
 const xDefault = defaultAlt && base ? absolute(defaultAlt.path) : null;
 
 // \`route\` arrives with \`basePath\` already applied, so the locale segment it
@@ -2588,18 +2717,24 @@ const logicalRoute = i18n
   ? stripLocale(stripBasePath(data.config.basePath, route), locale)
   : route;
 // A page from a one-language source (GitHub Releases) gets no switcher: every
-// other locale would only repeat the same text.
+// other locale would only repeat the same text. A locale with no real
+// translation links the page's fallback copy, which exists only while
+// fallbacks are on; where nothing is served at that URL (\`fallbackLocale:
+// null\`), the locale is left out rather than linked to a 404.
 const localeSwitch = i18n && !monolingual
-  ? i18n.locales.map((l) => {
+  ? i18n.locales.flatMap((l) => {
       const alt = (alternates ?? []).find((x) => x.locale === l.code);
-      return {
-        code: l.code,
-        current: l.code === locale,
-        dir: l.dir,
-        href: alt ? alt.path : mountLocalized(logicalRoute, l.code),
-        label: l.label,
-        untranslated: !alt,
-      };
+      const href = alt ? alt.path : mountLocalized(logicalRoute, l.code);
+      return alt || servesRoute(routeSetFor(data.routes), href)
+        ? [{
+            code: l.code,
+            current: l.code === locale,
+            dir: l.dir,
+            href,
+            label: l.label,
+            untranslated: !alt,
+          }]
+        : [];
     })
   : [];
 
@@ -2711,6 +2846,7 @@ const LayoutComponent = resolveSlot(layoutOverrides.Layout, RootLayout);
   feedbackComments={data.config.feedbackComments}
   pagination={frontmatter.pagination}
   related={frontmatter.related}
+  search={frontmatter.search}
   exportPdf={${options.exportPdf}}
   exportEpub={${options.exportEpub}}${
     options.navFragments
@@ -2725,12 +2861,13 @@ const LayoutComponent = resolveSlot(layoutOverrides.Layout, RootLayout);
   pageType={frontmatter.type}
   apiRail={remarkPluginFrontmatter?.${API_RAIL_KEY} === true}
   pageMode={frontmatter.mode}
-  published={frontmatter.date ?? frontmatter.changelog?.date ?? null}
+  published={frontmatter.date ?? frontmatter.changelog?.date ?? published}
+  authors={frontmatter.authors}
   lastModified={lastModified}
   noindex={effectiveNoindex}
   structuredDataEnabled={data.config.structuredData}
 >
-  {pageChrome && <h1>{title}</h1>}
+  {pageChrome && <h1 id={titleId}>{title}</h1>}
   {pageChrome && frontmatter.description && <p class="text-lg text-muted-foreground">{frontmatter.description}</p>}
   {narration && (
     <NarrationPlayer
@@ -2741,6 +2878,7 @@ const LayoutComponent = resolveSlot(layoutOverrides.Layout, RootLayout);
       strings={ui.narration}
     />
   )}
+  {views.length > 1 && <ViewSwitcher label={ui.content.selectView} views={views} />}
   <LocaleLinks locale={locale}>
     <Content components={components} />
   </LocaleLinks>
@@ -2763,41 +2901,22 @@ export const changelogIndexTemplate = (options: {
   exportPdf: boolean;
   /** Serialize the island-hooks snapshot; only needed when React is enabled. */
   needsReact: boolean;
-  /** Whether a `staged` collection exists (non-filesystem changelog sources). */
-  staged: boolean;
 }): string => {
   const clientData = options.needsReact
     ? '\n  clientData={{ config: data.config, navigation: data.navigation, page: { route: "/changelog", title: pageTitle } }}'
     : "";
-  // Staged sources (e.g. GitHub Releases) render through a parallel collection,
-  // so fold them in alongside filesystem entries when one exists.
-  const stagedSpread = options.staged
-    ? '\n  ...(await getCollection("staged")),'
-    : "";
 
   return `---
 // Generated by Blume. Do not edit.
-import { getCollection } from "astro:content";
 import RootLayout from "blume/components/layout/RootLayout.astro";
-import { withMountedBase } from "blume/components/islands/base-path.ts";
+import Changelog from "blume/components/content/Changelog.astro";
+import { withBase, withMountedBase } from "blume/components/islands/base-path.ts";
 import { resolveSlot } from "blume/components/layout/overrides.ts";
-import { resolveDateFormatOptions } from "blume/core/date-format.ts";
+import { resolveLocalizable } from "blume/core/localizable.ts";
 import { layoutOverrides } from "../generated/components.ts";
 import data from "blume:data";
 
 export const prerender = true;
-
-const entryDate = (entry: {
-  data: { date?: string | null; changelog?: { date?: string | null } | null };
-}) => entry.data.date ?? entry.data.changelog?.date ?? null;
-
-const parseDate = (value: string | null | undefined) => {
-  if (!value) {
-    return null;
-  }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-};
 
 // The changelog is an unlocalized route, so its chrome renders in the default
 // locale's dictionary and direction (\`data.ui\` is the default locale's resolved
@@ -2809,124 +2928,30 @@ const localeMeta = i18n
 const dir = localeMeta?.dir ?? "ltr";
 const htmlLang = i18n ? i18n.defaultLocale : "en";
 
-// Formatted in the same locale as the chrome, and with the configured
-// \`dateFormat\` (UTC by default), to match the per-page "last updated" stamp.
-// The year heads each group, so a row shows the rest of the date: a preset
-// style keeps its month wording, a component format simply drops the year.
-const dateFormatOptions = resolveDateFormatOptions(data.config.dateFormat);
-const { dateStyle, year: _year, ...dateComponents } = dateFormatOptions;
-const rowDateFormat: Intl.DateTimeFormatOptions = dateStyle
-  ? {
-      ...dateComponents,
-      day: "numeric",
-      month: dateStyle === "medium" ? "short" : "long",
-    }
-  : dateComponents;
-const formatRowDate = (date: Date) =>
-  new Intl.DateTimeFormat(htmlLang, rowDateFormat).format(date);
-const formatYear = (date: Date) =>
-  new Intl.DateTimeFormat(htmlLang, {
-    timeZone: dateFormatOptions.timeZone,
-    year: "numeric",
-  }).format(date);
-
-const slugify = (text: string) =>
-  text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") ||
-  "update";
-
-// Map each entry to its own generated page so the row can link to it. The
-// collection entry id matches the route manifest's \`entryId\` — and under
-// i18n every locale serves a page for it (its translations plus fallback
-// copies of an untranslated one), all sharing that id, so a map over every
-// route would keep whichever locale came last: a Portuguese permalink on an
-// unlocalized index. Only the default locale's routes are kept, and an entry
-// is listed only when it has one, so a translated changelog file (a distinct
-// entry that lives under its own locale) does not add a second row for the
-// same release.
-const defaultLocale = i18n ? i18n.defaultLocale : null;
-const routeByEntry = new Map<string, string>();
-for (const route of data.routes) {
-  if (defaultLocale === null || route.locale === defaultLocale) {
-    routeByEntry.set(route.entryId, route.path);
-  }
-}
-
-const changelogEntries = [
-  ...(await getCollection("docs")),${stagedSpread}
-]
-  .filter(
-    (entry) =>
-      entry.data.type === "changelog" &&
-      !entry.data.draft &&
-      !entry.data.sidebar?.hidden &&
-      (defaultLocale === null || routeByEntry.has(entry.id))
-  )
-  .toSorted(
-    (a, b) =>
-      (parseDate(entryDate(b))?.getTime() ?? 0) -
-      (parseDate(entryDate(a))?.getTime() ?? 0)
-  );
-
-const items = changelogEntries.map((entry) => {
-  const label =
-    entry.data.title ??
-    (entry.data.changelog?.version
-      ? "v" + entry.data.changelog.version
-      : "Update");
-  const date = parseDate(entryDate(entry));
-  const route = routeByEntry.get(entry.id);
-  return {
-    date: date ? formatRowDate(date) : null,
-    dateTime: date ? date.toISOString().slice(0, 10) : null,
-    href: route ? withMountedBase(route) : null,
-    id: slugify(label),
-    label,
-    tag: entry.data.changelog?.category ?? null,
-    year: date ? formatYear(date) : null,
-  };
-});
-
-// Repeated labels slug to the same id (e.g. two entries with neither a title
-// nor a version both falling back to "update"); suffix the later ones -2, -3,
-// ... so every row keeps its own hash anchor. The first keeps the plain slug.
-const seenIds = new Set();
-for (const item of items) {
-  let uniqueId = item.id;
-  for (let n = 2; seenIds.has(uniqueId); n += 1) {
-    uniqueId = item.id + "-" + n;
-  }
-  seenIds.add(uniqueId);
-  item.id = uniqueId;
-}
-
-// Consecutive releases from the same year share a group, so the list reads as
-// a year rail beside the rows; undated entries (sorted last) form a final
-// group with no year label.
-const groups: { items: typeof items; year: string | null }[] = [];
-for (const item of items) {
-  const last = groups[groups.length - 1];
-  if (last && last.year === item.year) {
-    last.items.push(item);
-  } else {
-    groups.push({ items: [item], year: item.year });
-  }
-}
-
 const base = data.config.site ? data.config.site.replace(/\\/$/, "") : null;
 // The canonical URL carries the deployment base (the page is served under it),
 // matching how the catch-all canonicalizes via \`withMountedBase(route)\`.
 const basedRoute = withMountedBase("/changelog");
 const canonical = base ? base + basedRoute : null;
 
-// The generated OG card for this route (the /og endpoint emits it alongside
-// the content-route cards), absolutized like the catch-all's so crawlers get
-// a full URL when the site is known.
+// The site's default image, else the generated OG card for this route (the /og
+// endpoint emits it alongside the content-route cards), absolutized like the
+// catch-all's so crawlers get a full URL when the site is known.
+const defaultOgImage =
+  data.config.og.image && resolveLocalizable(data.config.og.image, htmlLang, i18n?.defaultLocale);
 const ogPath = data.config.og.enabled ? withMountedBase("/og/changelog.png") : null;
-const ogImage = ogPath && base ? base + ogPath : ogPath;
+const ogImage = defaultOgImage
+  ? defaultOgImage.startsWith("/")
+    ? (base ?? "") + withBase(defaultOgImage)
+    : defaultOgImage
+  : ogPath && base ? base + ogPath : ogPath;
 
 // The page chrome (h1, title, description) comes from the translatable
-// \`changelog\` group; optional chaining tolerates a not-yet-regenerated data
-// snapshot from before these keys existed.
+// \`changelog\` group, which carries the \`changelog\` config's title and
+// description when it sets them; optional chaining tolerates a
+// not-yet-regenerated data snapshot from before these keys existed. The list
+// itself is \`<Changelog />\`, the same component an authored page can place to
+// put prose above it.
 const changelogTitle = data.ui.changelog?.title ?? "Changelog";
 const changelogDescription =
   data.ui.changelog?.description ??
@@ -2967,7 +2992,7 @@ const LayoutComponent = resolveSlot(layoutOverrides.Layout, RootLayout);
   searchEnabled={data.config.search.enabled}
   indexable={true}
   ogImage={ogImage}
-  ogGenerated={Boolean(ogImage)}
+  ogGenerated={!defaultOgImage && Boolean(ogImage)}
   x={data.config.x}
   canonical={canonical}
   exportPdf={${options.exportPdf}}
@@ -2981,51 +3006,7 @@ const LayoutComponent = resolveSlot(layoutOverrides.Layout, RootLayout);
 >
   <h1>{changelogTitle}</h1>
   <p class="text-lg text-muted-foreground">{changelogDescription}</p>
-  {
-    items.length === 0 ? (
-      <p>No changelog entries yet.</p>
-    ) : (
-      <div class="not-prose mt-10 divide-y divide-border border-border border-y">
-        {groups.map((group) => (
-          <section
-            aria-label={group.year ?? undefined}
-            class="grid md:grid-cols-[6rem_minmax(0,1fr)] md:gap-x-8"
-          >
-            <h2 class="mt-0! pt-3! font-medium! text-muted-foreground text-sm! leading-5! tabular-nums max-md:pb-1">
-              {group.year}
-            </h2>
-            <ul class="m-0! list-none divide-y divide-border p-0!">
-              {group.items.map((item) => (
-                <li class="m-0! p-0!" id={item.id}>
-                  <a
-                    class="group/release flex items-baseline gap-4 py-3 no-underline! hover:no-underline!"
-                    href={item.href ?? "#" + item.id}
-                  >
-                    <span class="min-w-0 flex-1 font-medium text-foreground text-sm transition-colors group-hover/release:text-accent">
-                      {item.label}
-                    </span>
-                    {item.tag && (
-                      <span class="shrink-0 rounded-full bg-muted px-2 py-0.5 font-medium text-[0.65rem] text-muted-foreground">
-                        {item.tag}
-                      </span>
-                    )}
-                    {item.date && (
-                      <time
-                        class="shrink-0 font-mono text-muted-foreground text-xs tabular-nums"
-                        datetime={item.dateTime}
-                      >
-                        {item.date}
-                      </time>
-                    )}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
-      </div>
-    )
-  }
+  <Changelog />
 </LayoutComponent>
 `;
 };

@@ -1,0 +1,413 @@
+---
+// Translate docs and catch stale translations: checked against the i18n and
+// translate docs, the translate command and its work list, ledger, prompts,
+// and report (packages/blume/src/translate), RootLayout's hreflang output, and
+// the repo's own translations workflow on main. Action versions checked
+// against the actions/checkout and actions/setup-node READMEs. Per-locale
+// header-link and footer-link labels are not in the current npm release
+// (checked against the blume@2.0.3 tag's schema). Updated for main: the
+// frontmatter rebuild drops seo.canonical (492fdf20); read in the source.
+// Not yet run end to end on a sample project.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("translate-markdown-documentation")}>
+  <p>
+    By the end of this guide, a small English docs site also reads in German.
+    A coding agent writes the German pages, a person who reads German reviews
+    them, and a committed ledger records which English revision each one came
+    from. A check in CI then fails whenever an English page changes and its
+    German copy doesn't follow, so translations can't quietly fall behind.
+  </p>
+  <p>
+    The example is three pages and one folder, but the loop is the same for a
+    site of hundreds of pages in several languages.
+  </p>
+
+  <h2>Before you start</h2>
+  <p>
+    Pick one audience and one language first. A second language costs little
+    once the loop works, but every language needs someone who can read it, so
+    start with the one your readers ask for most.
+  </p>
+  <p>
+    Blume translates pages that are Markdown or MDX files in your repository.
+    Pages from a remote or CMS-backed source, like Notion, are skipped: there
+    is no local file to write their translation to. Blume runs Claude Code or
+    Codex to translate the text, but holds no API keys and calls no model
+    itself, so the agent's usage bills to your own account with its provider.
+  </p>
+  <p>This guide starts from a project with three English pages:</p>
+  <CodeBlock
+    code={`docs/
+  index.mdx
+  guides/
+    meta.ts
+    install.mdx
+    configure.mdx`}
+    lang="txt"
+  />
+  <p>
+    The <code>meta.ts</code> gives the Guides folder its sidebar title and page
+    order. If you're starting fresh, <code>npx blume init</code> creates the{" "}
+    <code>docs/</code> folder and config.
+  </p>
+
+  <h2>Turn on i18n</h2>
+  <p>
+    Add an <code>i18n</code> block to your config with the default locale and
+    every locale you serve:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme",
+  i18n: {
+    defaultLocale: "en",
+    locales: [
+      { code: "en", label: "English" },
+      {
+        code: "de",
+        label: "Deutsch",
+        style: "Informal du-form. Keep the product name Acme and the terms API key and webhook in English.",
+      },
+    ],
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Each locale has a <code>code</code>, used in its URLs, and a{" "}
+    <code>label</code>, shown in the language switcher. A right-to-left
+    language also takes <code>dir: "rtl"</code>.
+  </p>
+  <p>
+    <code>style</code> is freeform guidance that rides along in every
+    translation prompt for that locale. Use it to settle the choices an agent
+    would otherwise make page by page: formal or informal address, dialect, and
+    the terms that should stay in English. Without it, the first translation
+    decides, and later pages may decide differently. Blume's own docs use this
+    pattern, with German set to the informal du-form. There's no separate
+    glossary option, so your terminology rules go in <code>style</code> too.
+  </p>
+  <p>
+    English stays at the root of <code>docs/</code> and keeps its URLs. German
+    pages live in <code>docs/de/</code> and publish under <code>/de/</code>.
+    Blume ships its own interface strings in German, like "On this page" and
+    the search button, so you only translate your content.
+  </p>
+
+  <h2>Translate with an agent</h2>
+  <p>From the project root, run:</p>
+  <CodeBlock code="npx blume translate --claude" lang="bash" />
+  <p>
+    To use Codex instead, swap <code>--claude</code> for <code>--codex</code>.
+    Blume works out which pages are missing or out of date in each locale, runs
+    the agent headlessly on each one with its file, shell, and web tools turned
+    off, checks the reply, and writes the file itself. It runs four files at a
+    time by default, and <code>--locale de</code> limits a run to one language
+    when you serve several.
+  </p>
+  <p>When it finishes, the German files sit beside the English ones:</p>
+  <CodeBlock
+    code={`docs/
+  index.mdx
+  guides/
+    meta.ts
+    install.mdx
+    configure.mdx
+  de/
+    index.mdx
+    guides/
+      meta.ts
+      install.mdx
+      configure.mdx
+blume.translations.json`}
+    lang="txt"
+  />
+  <p>
+    The German <code>meta.ts</code> translates the folder's title and copies
+    everything else, like the page order, as it is. Blume never trusts the
+    agent with structure: it rebuilds each page's frontmatter from the English
+    file and only takes the translated title, description, sidebar label and
+    badge, and SEO title and description. The one English key it leaves out is{" "}
+    <code>seo.canonical</code>, so each translation's canonical URL is its own.
+    A reply with a different number of
+    code blocks, an empty body, or frontmatter that doesn't parse is rejected,
+    and nothing is written for that file.
+  </p>
+
+  <h2>Review the translation</h2>
+  <p>
+    Structural checks catch a broken file, not a bad sentence. Before you
+    merge, have your reviewer read every page, and check these yourself:
+  </p>
+  <ul>
+    <li>
+      <strong>Prose.</strong> Register, dialect, and your terms from{" "}
+      <code>style</code> should hold on every page.
+    </li>
+    <li>
+      <strong>Code.</strong> Code blocks and inline code are copied, never
+      translated, and that includes comments inside code blocks. Commands and
+      config should be identical to the English page.
+    </li>
+    <li>
+      <strong>Headings.</strong> Each translated heading ends with a marker like{" "}
+      <code>[#install]</code>. It pins the heading to the English anchor, so a
+      link to <code>#install</code> works in every language. Leave the markers
+      in.
+    </li>
+    <li>
+      <strong>Links.</strong> Link targets aren't translated. Blume moves each
+      root-relative link into the reader's locale when it renders, so{" "}
+      <code>/guides/install</code> on a German page goes to{" "}
+      <code>/de/guides/install</code>.
+    </li>
+    <li>
+      <strong>Navigation.</strong> Sidebar labels come from each page's title
+      and the folder's <code>meta.ts</code>. Header tab labels live in{" "}
+      <code>blume.config.ts</code>, not in content, so give each one a
+      per-locale map there, like{" "}
+      <code>{'label: { en: "Guides", de: "Anleitungen" }'}</code>. Header links
+      and footer links take the same map.
+    </li>
+  </ul>
+  <p>Then check every link and anchor in both languages, and read the site:</p>
+  <CodeBlock
+    code={`npx blume validate
+npx blume dev`}
+    lang="bash"
+  />
+  <p>
+    Open <code>http://localhost:4321/de</code>, click through the German
+    sidebar, and use the language switcher in the header to flip each page
+    between languages.
+  </p>
+
+  <h2>Commit the ledger</h2>
+  <p>
+    <code>blume.translations.json</code> records, for each English file and
+    each locale, a short hash of the English file at the moment its translation
+    was written:
+  </p>
+  <CodeBlock
+    code={`{
+  "files": {
+    "docs/guides/configure.mdx": {
+      "de": "5b0e71c9d4a3f812"
+    },
+    "docs/guides/install.mdx": {
+      "de": "a41f96e02c7d3b58"
+    },
+    "docs/guides/meta.ts": {
+      "de": "e8c2d7a95f1b0634"
+    },
+    "docs/index.mdx": {
+      "de": "0d93b4f6a82e17c5"
+    }
+  },
+  "version": 1
+}`}
+    lang="json"
+    title="blume.translations.json"
+  />
+  <p>
+    Commit it with the translations. It's how the next run knows which pages
+    are already current, and it's what the CI check reads. It tracks freshness,
+    not quality: a hash match means the German page was translated from the
+    current English file, not that the German is good. That's what the review
+    is for.
+  </p>
+  <CodeBlock
+    code={`git add docs/de blume.translations.json
+git commit -m "Add German translations"`}
+    lang="bash"
+  />
+
+  <h2>Change a page and catch the drift</h2>
+  <p>
+    Now edit one paragraph of <code>docs/guides/install.mdx</code> in English.
+    The file's hash no longer matches its ledger entry, and the check sees it:
+  </p>
+  <CodeBlock code="npx blume translate --check" lang="bash" />
+  <CodeBlock
+    code={`  ✖ docs/guides/install.mdx → de stale
+
+  1 stale · 3 up to date`}
+    lang="txt"
+  />
+  <p>
+    <code>--check</code> runs no agent and writes nothing. It lists every
+    missing or stale translation and exits with code 1 when there is one. The
+    hash covers the whole file, frontmatter included, so any edit counts, even
+    a typo fix. Add <code>--json</code> for a machine-readable report on
+    stdout. Its <code>translate</code> key groups the drift by locale:
+  </p>
+  <CodeBlock
+    code={`{
+  "locales": {
+    "de": {
+      "missing": [],
+      "stale": ["docs/guides/install.mdx"],
+      "untracked": []
+    }
+  },
+  "upToDate": 3
+}`}
+    lang="json"
+  />
+  <p>
+    The report also carries <code>diagnostics</code> and <code>summary</code>,
+    in the same shape as <code>blume validate --json</code>. Each stale page is
+    a <code>BLUME_TRANSLATE_STALE</code> error, and each missing one a{" "}
+    <code>BLUME_TRANSLATE_MISSING</code> error.
+  </p>
+  <p>Run the translation again:</p>
+  <CodeBlock code="npx blume translate --claude" lang="bash" />
+  <p>
+    It retranslates only <code>install.mdx</code>. The agent sees the existing
+    German page and is told to match its wording and change only what the
+    English edit requires, so the diff should be about one paragraph, not a
+    rewritten page. Review that paragraph, then commit the page and the updated
+    ledger together.
+  </p>
+
+  <h2>Bring in translations you already have</h2>
+  <p>
+    If some German pages already exist, written by hand before you started, the
+    first translate run adopts them. A translation with no ledger entry is
+    stamped as current and never overwritten, because Blume can't tell which
+    English revision a person translated from, and it won't throw away their
+    work to guess.
+  </p>
+  <p>
+    Until that run, <code>--check</code> lists those pages as untracked and
+    still passes. They don't fail the gate, because nothing says they're out
+    of date. That cuts both ways: a hand-written page that was already behind
+    the English is adopted as current too. Review those pages before your first
+    run, and delete any that are too far behind so they're retranslated as
+    missing. <code>--force</code> retranslates everything, hand-written pages
+    included.
+  </p>
+
+  <h2>Add the check to CI</h2>
+  <p>
+    The check is read-only and needs no agent or API key, so it runs anywhere
+    your docs install. On GitHub Actions:
+  </p>
+  <CodeBlock
+    code={`name: Translations
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx blume translate --check`}
+    lang="yaml"
+    title=".github/workflows/translations.yml"
+  />
+  <p>
+    Decide where the gate belongs. Run on every pull request, it asks each
+    author to translate their own change. If translations happen in one batch
+    before each release, run it only on the release branch instead, the way
+    Blume's own docs run it only on their release pull request.
+  </p>
+
+  <h2>Ship it</h2>
+  <p>
+    Build and deploy as you normally would. If you don't have a host yet, the{" "}
+    <a href="/guides/markdown-docs-github-pages">GitHub Pages guide</a> walks
+    through one. Once it's live, open a German page's source and check
+    what search engines see:
+  </p>
+  <ul>
+    <li>
+      <code>&lt;html lang="de"&gt;</code> on every German page.
+    </li>
+    <li>
+      A <code>hreflang</code> alternate link for each real translation of the
+      page, plus an <code>x-default</code> pointing at the English page.
+    </li>
+    <li>A canonical URL in the page's own language.</li>
+  </ul>
+  <p>
+    Pages you haven't translated yet still work at their German URLs: Blume
+    renders the English content there, points its canonical at the English
+    page, and leaves it out of <code>hreflang</code> and the search index, so
+    it doesn't compete with the original. The language switcher marks those
+    pages as not translated.
+  </p>
+  <Callout type="info">
+    Snapshots made with <code>blume version</code> keep their own translations
+    and are never retranslated. The{" "}
+    <a href="/guides/version-markdown-documentation">versioning guide</a> covers
+    them.
+  </Callout>
+
+  <h2>Troubleshooting</h2>
+  <h3>There are no hreflang links</h3>
+  <p>
+    <code>hreflang</code> alternates need your site's absolute URL. Blume
+    detects it on Vercel, Netlify, and Cloudflare Pages. On any other host, set{" "}
+    <code>deployment.site</code> in your config.
+  </p>
+  <h3>German pages name the English page as canonical</h3>
+  <p>
+    If the page has no German file, that's expected: Blume renders the English
+    content at the German URL and points its canonical at the English page. If
+    it does have one, the German file sets <code>seo.canonical</code> itself,
+    usually because it was written by hand from a copy of the English file.{" "}
+    <code>blume translate</code> leaves <code>seo.canonical</code> out of the
+    files it writes, but it adopts hand-written pages as they are. Remove the
+    key from the German file. The{" "}
+    <a href="/guides/multilingual-documentation-hreflang">hreflang guide</a>{" "}
+    covers the audit that catches it.
+  </p>
+  <h3>The agent isn't found</h3>
+  <p>
+    Blume runs the agent's own CLI, <code>claude</code> or <code>codex</code>,
+    and stops if it isn't on your <code>PATH</code>. The error names the
+    install command. Sign in to the agent once on its own before you translate.
+  </p>
+  <h3>A page failed to translate</h3>
+  <p>
+    A reply that fails the structural checks writes nothing, and the run exits
+    with code 1 after finishing the rest. Everything that succeeded is already
+    in the ledger, so running the same command again retries only the failures.
+    A very long page can hit the ten-minute limit per file: raise it with{" "}
+    <code>--timeout</code>, in seconds.
+  </p>
+  <h3>The ledger has merge conflicts</h3>
+  <p>
+    If two branches both translated pages, <code>blume.translations.json</code>{" "}
+    can conflict. Blume refuses to read a ledger with conflict markers and
+    reports <code>BLUME_TRANSLATE_LEDGER_CONFLICT</code>, because treating it as
+    empty would mark every translation current. Resolve the conflict, keeping
+    the entries from both sides, then run the check again.
+  </p>
+  <h3>An anchor link breaks on a hand-written page</h3>
+  <p>
+    Translated headings get their own anchors unless they're pinned, so{" "}
+    <code>#install</code> can stop matching. <code>blume validate</code> reports
+    it. Add the English anchor to the end of the translated heading, like{" "}
+    <code>## Installation [#install]</code>.
+  </p>
+</GuidePage>

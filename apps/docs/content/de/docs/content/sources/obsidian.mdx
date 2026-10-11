@@ -1,0 +1,40 @@
+---
+title: Obsidian
+description: >-
+  Veröffentliche einen Obsidian-Vault direkt an Ort und Stelle mit der Quelle obsidian() — Wikilinks, Eigenschaften und Vault-Bilder werden zur Build-Zeit aufgelöst, ganz ohne Export-Schritt.
+---
+
+Der eingebaute `obsidian()`-Adapter liest einen [Obsidian](https://obsidian.md)-Vault direkt an Ort und Stelle. Es gibt keinen Export-Schritt, und nichts wird in dein Repo generiert: Der Vault bleibt die maßgebliche Quelle, und Blume wandelt Obsidians Dialekt beim Laden in Markdown um.
+
+```ts blume.config.ts
+import { defineConfig } from "blume";
+import { filesystem, obsidian } from "blume/sources";
+
+export default defineConfig({
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      obsidian({
+        prefix: "notes",
+        vault: "vault",
+        // Vault folder names to skip at any depth, on top of dot-folders
+        exclude: ["Templates", "Daily"],
+      }),
+    ],
+  },
+});
+```
+
+`[[Wikilinks]]` werden zu Routen-Links. Sie werden wie in Obsidian über den Notiznamen im gesamten Vault adressiert und nicht über den Pfad. Das alles funktioniert: eigener Linktext (`[[Note|label]]`), Überschriften-Anker (`[[Note#Install]]`), vollständige Pfade (`[[folder/Note]]` und `[[folder/Note.md]]`), die Teilpfade, die Obsidian mit seiner Standardeinstellung „Kürzester Pfad, wenn möglich“ schreibt (`[[guides/Note]]`), und die Form `[[Note\|label]]`, die Obsidian innerhalb einer Tabellenzelle schreibt. Eine Notiz, die in ihrem Frontmatter `slug` setzt, wird unter der Route verlinkt, unter der dieser Slug veröffentlicht wird. Haben zwei Notizen denselben Namen, gewinnt zuerst eine Notiz, deren vollständiger Vault-Pfad genau diesem Namen entspricht — Obsidian löst einen Link erst als Pfad und dann als Namen auf. Danach gewinnt die erste Notiz in Vault-Reihenfolge (Ordner vor Notizen, ohne Beachtung der Groß-/Kleinschreibung, wie im Datei-Explorer von Obsidian). Blume warnt nur, wenn ein Wikilink tatsächlich über eine solche Kollision aufgelöst wird. Schreib einen längeren Pfad, damit der Link eindeutig ist. Ein Blockverweis (`[[Note#^id]]`) verlinkt ohne Anker auf seine Notiz, weil Blöcke ohne ID gerendert werden und es kein Sprungziel gibt. Ein Überschriften-Anker wird gegen die tatsächlichen Überschriften der Zielnotiz aufgelöst. Der Abgleich funktioniert so, wie Obsidians Autovervollständigung Überschriften schreibt (`**bold**`, `` `code` `` und Link-Syntax werden entfernt). Den Slug erzeugt derselbe `extractHeadings`-Durchlauf, der auch das Seitenmanifest füllt. So landet ein Link auf `#Install` auf der Überschrift und nicht auf einer ID, die keine Seite ausgibt. `[[#Install]]` adressiert eine Überschrift in der Notiz, die du gerade schreibst. Ein Link auf eine Überschrift, die es nicht gibt, behält den Seitenlink, verwirft den Anker und gibt eine Warnung aus.
+
+Im Frontmatter bleibt alles, was Blumes [Seitenschema](/docs/content/frontmatter) akzeptiert. Dazu kommt jeder Schlüssel, den du in [`frontmatter.extend`](/docs/content/frontmatter#custom-keys) deklarierst, oder bei Notizen des jeweiligen `type` im `frontmatter` eines Inhaltstyps. Jede andere Obsidian-Eigenschaft wird beim Umwandeln einer Notiz verworfen: Dataview-Felder, Templater-Datumsangaben, `publish` und Obsidians eigene `tags`, `aliases` und `cssclasses`. So baut auch ein Vault, den du mit der Eigenschaften-Oberfläche geschrieben hast, ohne Frontmatter-Fehler. `aliases` wird verworfen und nicht aufgelöst — Alias-Linkziele werden noch nicht unterstützt. Ein relatives Markdown-Bild neben einer Notiz (`![chart](./chart.png)`) wird aus dem Vault ausgeliefert. Liegt der Vault in deinem Git-Repository, bekommen Vault-Seiten wie jede andere Seite ein aus Git abgeleitetes [„Zuletzt aktualisiert“-Datum](/docs/configuration#last-modified). „Diese Seite bearbeiten“-Links werden über `github.dir` aufgelöst. Ein Vault, der in einem Monorepo neben der Docs-App liegt, verlinkt also trotzdem auf seine Datei. Ein Vault außerhalb des Repositorys bekommt keinen Link.
+
+Sprachverzeichnisse und Versions-Snapshots im Vault werden genauso gelesen wie von der Filesystem-Quelle: `fr/Note.md` wird bei konfiguriertem [i18n](/docs/content/i18n) unter `/fr/` veröffentlicht und `v1.0/Note.md` mit [Versionen](/docs/content/versioning) unter `/v1.0/`. Wikilinks auf diese Notizen zeigen jeweils auf die Route, unter der die Notiz veröffentlicht wird.
+
+Ein Link auf eine `index`-Notiz landet auf der Route ihres Ordners und nicht auf einem Phantom-`/index`. **Ein nicht auflösbarer Wikilink wird mit einer Build-Warnung zu reinem Text, statt den Build scheitern zu lassen.** So wird auch ein Vault mitten im Refactoring veröffentlicht. Einzeilige `%%comments%%` werden entfernt. Ein Wikilink in einem HTML-Kommentar (`<!-- [[Draft]] -->`) bleibt unangetastet, weil Obsidian ihn ebenfalls ausblendet. Eine Notiz ohne `title` im Frontmatter bekommt ihren Dateinamen als Titel — nach derselben Regel wie in Obsidian selbst. Die einzige Ausnahme ist eine `index`-Notiz: Sie benennt eine Route und keine Notiz. Ihr Titel ergibt sich deshalb wie sonst bei Blume üblich (zuerst aus der ersten Überschrift, dann aus dem lesbar gemachten Segment). Code in Fences, eingerückter Code und Inline-Code werden unverändert durchgereicht, sodass eine Notiz, die diese Syntax dokumentiert, erhalten bleibt.
+
+Dot-Ordner werden übersprungen, auch Obsidians eigenes Konfigurationsverzeichnis `.obsidian` und `.trash`. Auch der Dev-Watcher ignoriert sie. Wenn du also in der App einen Bereich verschiebst, wird deine Site nicht neu gebaut. Wenn du eine Notiz bearbeitest, schon — und ebenso, wenn du eine Notiz in den Papierkorb löschst, weil sie dann den Vault verlässt. Die Verzeichnisse, die kein Content-Scan liest (`node_modules`, `dist`, `.git`, …), werden ebenfalls übersprungen. Liegt die Wurzel eines Vaults im Projekt selbst, werden also keine READMEs von Abhängigkeiten veröffentlicht. Eine Notiz mit `#` oder `?` im Pfad wird wie eine [Inhaltsdatei](/docs/content#files-and-routes) mit einem Fehler ausgelassen, weil Astro ihre Kopie nicht laden kann. Benenne sie also um. Symlinks im Vault werden wie bei der Filesystem-Quelle verfolgt. Ein geteilter Ordner, der in den Vault verlinkt ist, wird also mit veröffentlicht. Liegt ein Vault im Wurzelverzeichnis der Filesystem-Quelle, musst du ihn dort ausschließen (`filesystem({ root: "docs", exclude: ["vault/**"] })`). [`blume version <id>`](/docs/cli/version) lässt den Vault dann im Snapshot weg, weil der Vault seine eigenen Notizen weiterhin als aktuelle Version veröffentlicht.
+
+Noch nicht umgewandelt wird Folgendes: Callouts (`> [!note]`) werden als einfache Blockzitate gerendert, Einbettungen (`![[image.png]]`) werden unverändert durchgereicht, mehrzeilige `%%comments%%` bleiben stehen, und es gibt keinen Backlink-Graphen.
+
+[Obsidian-Notizen als Docs-Site veröffentlichen](/guides/publish-obsidian-documentation) führt dich Schritt für Schritt durch den gesamten Ablauf, vom Vault bis zur deployten Site.

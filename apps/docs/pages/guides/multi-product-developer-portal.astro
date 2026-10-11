@@ -1,0 +1,768 @@
+---
+// Build a developer portal for multiple products: checked against the
+// navigation, folder meta, includes, OpenAPI, search, versioning, content
+// sources, and deployment docs, and on main against tab scoping and
+// pagination (components/layout/nav-utils.ts, core/navigation.ts), the
+// selector's active item (components/layout/NavSelector.astro), search
+// sections and popular pages (search/documents.ts, components/layout/
+// Search.astro), nav diagnostics (core/nav-diagnostics.ts), and the doctor
+// command. Ran scanProject in process over the fixture below (both specs,
+// the config, every page, the include, and both meta.ts files) to confirm
+// every route, the sidebar, breadcrumbs, and previous/next per tab, search
+// sections and keywords, the include prop, and a clean diagnostics list;
+// then over variants: a reference mounted at /api/<product>, an index.mdx in
+// a reference folder (BLUME_DUPLICATE_ROUTE), reference folders without
+// meta.ts, a third source at /messages/api-v1 with includeInSearch: false,
+// and a product selector with page-mode groups and no tabs. Checked that the
+// page renders on the local dev server. Not yet run end to end: no Blume dev
+// server, build, validate, audit, or deploy of the fixture itself. Updated
+// for main: a source's label names its sidebar group (openapi/source.ts
+// tagFolderMeta, c5f25f55), so the reference folders need no meta.ts; read
+// in the source, not rerun.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("multi-product-developer-portal")}>
+  <p>
+    To keep several products understandable in one developer portal, give
+    each product its own URL prefix and put everything about it under that
+    prefix: its guides at <code>/messages</code> and its API reference at{" "}
+    <code>/messages/api</code>. Then add one header tab per product. A Blume
+    tab scopes the sidebar to the routes under its path, so a reader inside
+    one product sees only that product's guides and reference, and the
+    breadcrumbs and previous and next links stay inside it too.
+  </p>
+  <p>
+    By the end, you have a portal for two fictional Acme products: Messages,
+    which sends email and SMS, and Verify, which sends one-time codes. Each has
+    an overview, a quickstart, and an API reference generated from its own
+    OpenAPI spec. Pages both products share, like authentication, sit outside
+    either product and stay one click away from every page, and search results
+    say which product they belong to.
+  </p>
+  <p>
+    If your products are small, Blume's default may be enough: every folder
+    becomes a sidebar group with no configuration. Tabs pay off once one
+    sidebar is long enough that readers lose track of which product they're
+    in. For the details of mounting several specs, see{" "}
+    <a href="/guides/multiple-openapi-specs-documentation">Combine multiple OpenAPI specifications in one docs site</a>.
+    And if some products need their own sign-in or their own release
+    versions, they belong in separate sites, as{" "}
+    <a href="#keep-products-apart-from-versions-and-access">explained below</a>.
+  </p>
+
+  <h2>Map products to routes</h2>
+  <p>
+    Decide the URL map before you write pages, because tabs match routes by
+    prefix. A tab owns every route under its <code>path</code>, on a path
+    boundary, so <code>/verify</code> never claims <code>/verify-legacy</code>.
+    When two tabs match, the longer path wins. Here's the map for the two
+    products:
+  </p>
+  <CodeBlock
+    code={`docs.acme.example
+│
+├── Overview tab   path "/"   (pages no product owns)
+│     /                             docs/index.mdx
+│     /platform/authentication      docs/platform/authentication.mdx
+│
+├── Messages tab   path "/messages"
+│     /messages                     docs/messages/index.mdx
+│     /messages/quickstart          docs/messages/quickstart.mdx
+│     /messages/api                 generated from openapi/messages.yaml
+│     /messages/api/messages/...    one page per operation
+│
+└── Verify tab   path "/verify"
+      /verify                       docs/verify/index.mdx
+      /verify/quickstart            docs/verify/quickstart.mdx
+      /verify/api                   generated from openapi/verify.yaml
+      /verify/api/verifications/... one page per operation
+
+On every page: a featured link to Authentication, and one search index`}
+    lang="txt"
+    title="Acme portal map"
+  />
+  <p>Three rules make this map work:</p>
+  <ul>
+    <li>
+      <strong>Product first, content type second.</strong> Mount the reference
+      at <code>/messages/api</code>, not <code>/api/messages</code>. A
+      reference outside the product's prefix falls under the Overview tab,
+      next to every other product's reference, and readers lose the product's
+      sidebar the moment they open an endpoint.
+    </li>
+    <li>
+      <strong>Shared pages outside every product.</strong> A route belongs to
+      one tab at most, so authentication, errors, and other pages both
+      products need go under <code>/platform</code>, which no product tab
+      claims.
+    </li>
+    <li>
+      <strong>Stable slugs.</strong> Every URL in a product starts with its
+      prefix, so renaming the prefix later means a redirect for every page.
+    </li>
+  </ul>
+
+  <h2>Write each product's pages</h2>
+  <p>
+    Start from a Blume project (<code>npx blume init</code>, docs template,
+    content in <code>docs/</code>). The home page is the portal's front door,
+    with a card per product:
+  </p>
+  <CodeBlock
+    code={`---
+title: Acme developer docs
+description: Guides and API references for Acme Messages and Acme Verify.
+---
+
+Pick a product to start. Both use the same API key.
+
+<CardGroup cols={2}>
+  <Card title="Messages" href="/messages" icon="mail">
+    Send transactional email and SMS.
+  </Card>
+  <Card title="Verify" href="/verify" icon="shield-check">
+    Confirm a phone number or email address with a one-time code.
+  </Card>
+</CardGroup>`}
+    lang="mdx"
+    title="docs/index.mdx"
+  />
+  <p>
+    Each product gets an overview and a quickstart. Give every page a title
+    that names its product, because the title is what browser tabs and search
+    results show. <code>sidebar.label</code> keeps the sidebar row short, since
+    the tab already tells the reader which product they're in:
+  </p>
+  <CodeBlock
+    code={`---
+title: Acme Messages
+description: Send transactional email and SMS from your app with Acme Messages.
+sidebar:
+  label: Overview
+---
+
+Acme Messages sends transactional email and SMS through one API.
+
+- [Send your first message](/messages/quickstart)
+- [Messages API reference](/messages/api)`}
+    lang="mdx"
+    title="docs/messages/index.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Send your first message
+description: Send a transactional email with the Acme Messages API.
+sidebar:
+  label: Quickstart
+search:
+  keywords: [quickstart, get started]
+---
+
+<include product="Messages">/_snippets/api-key.mdx</include>
+
+## Send a message
+
+\`\`\`bash
+curl https://api.acme.example/v1/messages \\
+  -H "Authorization: Bearer $ACME_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"channel":"email","to":"ada@example.com","template":"welcome"}'
+\`\`\`
+
+The response holds the message ID. Pass it to
+[Get a message](/messages/api/messages/get-message) to check whether it arrived.`}
+    lang="mdx"
+    title="docs/messages/quickstart.mdx"
+  />
+  <p>
+    Both quickstarts open with the same step, getting an API key. Write it once
+    as a partial and pass the product name in as a prop, which the partial
+    reads as <code>{"{{product}}"}</code>. Files and folders whose names start
+    with an underscore stay out of routing, navigation, and search. For more on
+    partials, see{" "}
+    <a href="/guides/reuse-markdown-snippets">Reuse Markdown snippets and variables</a>.
+  </p>
+  <CodeBlock
+    code={`## Get an API key
+
+Create an API key in the Acme dashboard and export it as \`ACME_API_KEY\`. The
+same key works for {{product}} and every other Acme product. See
+[Authentication](/platform/authentication) for how requests send it.`}
+    lang="mdx"
+    title="docs/_snippets/api-key.mdx"
+  />
+  <p>Verify's pages follow the same shape:</p>
+  <CodeBlock
+    code={`---
+title: Acme Verify
+description: Confirm a phone number or email address with a one-time code.
+sidebar:
+  label: Overview
+---
+
+Acme Verify sends a one-time code and checks the code your user types back.
+
+- [Verify a phone number](/verify/quickstart)
+- [Verify API reference](/verify/api)`}
+    lang="mdx"
+    title="docs/verify/index.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Verify a phone number
+description: Send a one-time code by SMS and check it with the Acme Verify API.
+sidebar:
+  label: Quickstart
+search:
+  keywords: [quickstart, get started]
+---
+
+<include product="Verify">/_snippets/api-key.mdx</include>
+
+## Send a code
+
+\`\`\`bash
+curl https://api.acme.example/v1/verifications \\
+  -H "Authorization: Bearer $ACME_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"channel":"sms","to":"+15555550100"}'
+\`\`\`
+
+Then pass the code your user enters to
+[Check a code](/verify/api/verifications/check-verification).`}
+    lang="mdx"
+    title="docs/verify/quickstart.mdx"
+  />
+  <p>Last, the shared page, in a folder no product owns:</p>
+  <CodeBlock
+    code={`---
+title: Authentication
+description: Send your Acme API key as a bearer token to any Acme API.
+---
+
+One API key works for every Acme product. Send it in the \`Authorization\`
+header as a bearer token:
+
+\`\`\`bash
+curl https://api.acme.example/v1/messages/msg_8f2k \\
+  -H "Authorization: Bearer $ACME_API_KEY"
+\`\`\``}
+    lang="mdx"
+    title="docs/platform/authentication.mdx"
+  />
+
+  <h2>Mount each product's API reference</h2>
+  <p>
+    Save each product's spec in an <code>openapi/</code> folder beside{" "}
+    <code>blume.config.ts</code>. Both APIs share a server and an API key,
+    which is why one authentication page serves both.
+  </p>
+  <CodeBlock
+    code={`openapi: 3.1.0
+info:
+  title: Acme Messages API
+  version: 1.0.0
+  description: Send transactional email and SMS.
+servers:
+  - url: https://api.acme.example/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: Messages
+    description: Send a message and check whether it arrived.
+  - name: Templates
+    description: Reusable message bodies with variables.
+paths:
+  /messages:
+    post:
+      operationId: sendMessage
+      tags: [Messages]
+      summary: Send a message
+      description: Queues an email or SMS for delivery and returns its ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel, to, template]
+              properties:
+                channel:
+                  type: string
+                  enum: [email, sms]
+                to:
+                  type: string
+                template:
+                  type: string
+      responses:
+        "202":
+          description: The message is queued.
+  /messages/{id}:
+    get:
+      operationId: getMessage
+      tags: [Messages]
+      summary: Get a message
+      description: Returns a message and its delivery status.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The message.
+  /templates:
+    get:
+      operationId: listTemplates
+      tags: [Templates]
+      summary: List templates
+      description: Returns every template in the workspace.
+      responses:
+        "200":
+          description: The templates.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer`}
+    lang="yaml"
+    title="openapi/messages.yaml"
+  />
+  <CodeBlock
+    code={`openapi: 3.1.0
+info:
+  title: Acme Verify API
+  version: 1.0.0
+  description: Send one-time codes and check them.
+servers:
+  - url: https://api.acme.example/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: Verifications
+    description: Send a code, then check the one the user entered.
+paths:
+  /verifications:
+    post:
+      operationId: startVerification
+      tags: [Verifications]
+      summary: Start a verification
+      description: Sends a one-time code by SMS or email and returns the verification's ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel, to]
+              properties:
+                channel:
+                  type: string
+                  enum: [sms, email]
+                to:
+                  type: string
+      responses:
+        "201":
+          description: The code is on its way.
+  /verifications/{id}/check:
+    post:
+      operationId: checkVerification
+      tags: [Verifications]
+      summary: Check a code
+      description: Checks the code the user entered and says whether it matched.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+      responses:
+        "200":
+          description: Whether the code matched.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer`}
+    lang="yaml"
+    title="openapi/verify.yaml"
+  />
+  <p>
+    Then list both as sources of one <code>openapi()</code> adapter, each
+    routed under its product:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  reference: [
+    openapi({
+      sources: [
+        {
+          label: "Messages API",
+          route: "/messages/api",
+          spec: "./openapi/messages.yaml",
+        },
+        {
+          label: "Verify API",
+          route: "/verify/api",
+          spec: "./openapi/verify.yaml",
+        },
+      ],
+    }),
+  ],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Each source gets an overview page at its route, titled with the spec's{" "}
+    <code>info.title</code>, and a page per operation built from its route, its
+    tag, and its operation ID: <code>/messages/api/messages/send-message</code>,{" "}
+    <code>/verify/api/verifications/check-verification</code>, and so on. Those
+    are the URLs the quickstarts link to.
+  </p>
+  <p>
+    Each source's <code>label</code> names its sidebar group as written, so
+    the groups read Messages API and Verify API, and so do their filters in
+    search. Without a label, a group is named after the last segment of its
+    route, and both would read API.
+  </p>
+  <p>
+    Don't add a <code>docs/messages/api/index.mdx</code> or{" "}
+    <code>docs/verify/api/index.mdx</code>, because each reference's overview
+    already owns that route. The two sources share
+    display options like code sample languages. If your products need
+    different ones, or their specs share operation names, the{" "}
+    <a href="/guides/multiple-openapi-specs-documentation">multiple-specs guide</a>{" "}
+    covers that setup.
+  </p>
+
+  <h2>Scope the sidebar with tabs</h2>
+  <p>
+    Add a tab per product, an Overview tab for the shared pages, and a
+    featured link to the page every product needs:
+  </p>
+  <CodeBlock
+    code={`navigation: {
+  tabs: [
+    { label: "Overview", path: "/" },
+    { label: "Messages", path: "/messages", icon: "mail" },
+    { label: "Verify", path: "/verify", icon: "shield-check" },
+  ],
+  featured: [
+    { label: "Authentication", href: "/platform/authentication", icon: "key" },
+  ],
+},`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>Here's what a reader sees from each part of the portal:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Reader is on</th>
+        <th scope="col">Current tab</th>
+        <th scope="col">Sidebar lists</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>/</code>, <code>/platform/authentication</code></td>
+        <td>Overview</td>
+        <td>The home page and the Platform group</td>
+      </tr>
+      <tr>
+        <td><code>/messages/quickstart</code></td>
+        <td>Messages</td>
+        <td>Overview, Quickstart, and the Messages API group</td>
+      </tr>
+      <tr>
+        <td><code>/verify/api/verifications/check-verification</code></td>
+        <td>Verify</td>
+        <td>Overview, Quickstart, and the Verify API group</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Breadcrumbs and previous and next links come from the scoped sidebar, so
+    the Messages quickstart's next link goes to the Messages API overview,
+    never to a Verify page. On the Overview tab, Blume hides every folder that
+    has its own tab, so the root sidebar lists only the pages no product owns.
+  </p>
+  <p>
+    That's also why shared pages need help: inside a product, the sidebar
+    doesn't list <code>/platform</code>. Featured links sit above the sidebar
+    on every route, whatever tab is current, so Authentication stays one click
+    away from either product. The API key partial links to it as well.
+  </p>
+
+  <h2>Make search results name the product</h2>
+  <p>
+    Search covers the whole portal from one index. Results aren't scoped to
+    the product the reader is in, and each row shows a page's title and an
+    excerpt, not its product. Four habits keep results readable:
+  </p>
+  <ul>
+    <li>
+      <strong>Product-specific titles.</strong> Two pages titled Quickstart
+      look identical in results. Send your first message and Verify a phone
+      number don't.
+    </li>
+    <li>
+      <strong>Keywords for generic terms.</strong> Readers still type
+      "quickstart", so both quickstarts set <code>search.keywords</code>. The
+      query finds both, and their titles tell them apart.
+    </li>
+    <li>
+      <strong>Distinct group names.</strong> When results span several sidebar
+      groups, the dialog shows a filter pill per group. Each page files under
+      its nearest group: a quickstart under its product, an operation under its
+      tag, and a reference's overview under the reference's own group. That's
+      why each source has a <code>label</code>; without one, both overviews
+      would file under API.
+    </li>
+    <li>
+      <strong>Pinned starting points.</strong> Before a reader types, the
+      dialog lists popular pages, by default the first six in the full
+      sidebar. Pin each product's quickstart instead.
+    </li>
+  </ul>
+  <CodeBlock
+    code={`search: {
+  popular: [
+    { href: "/messages/quickstart", icon: "mail", label: "Send your first message" },
+    { href: "/verify/quickstart", icon: "shield-check", label: "Verify a phone number" },
+    { href: "/platform/authentication", icon: "key", label: "Authentication" },
+  ],
+},`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    If two products' specs share operation summaries, like List events in
+    both, rename them for the docs with an overlay, as the multiple-specs guide
+    shows. After a build, <code>npx blume audit --only duplicates</code> lists
+    pages that still share a title.
+  </p>
+
+  <h2>Tabs or a product selector</h2>
+  <p>
+    A selector is a dropdown beside the logo. One with{" "}
+    <code>kind: "product"</code> shows the product the reader is in and lists
+    every product, each with an optional description. But a selector only
+    links: the sidebar, breadcrumbs, and previous and next links follow tabs,
+    never selectors. <code>kind</code> is a hint, and every kind renders the
+    same dropdown.
+  </p>
+  <p>
+    With two or three products, tabs do both jobs, so leave the selector out.
+    Next to product tabs, it would list the same products twice. Switch when
+    the products no longer fit in the header's tab row: remove the product
+    tabs, add the selector, and turn each product folder into a drill-in
+    panel.
+  </p>
+  <CodeBlock
+    code={`navigation: {
+  selectors: [
+    {
+      kind: "product",
+      label: "Product",
+      items: [
+        { label: "All products", path: "/", icon: "layout-grid" },
+        {
+          label: "Messages",
+          path: "/messages",
+          icon: "mail",
+          description: "Transactional email and SMS",
+        },
+        {
+          label: "Verify",
+          path: "/verify",
+          icon: "shield-check",
+          description: "One-time codes",
+        },
+      ],
+    },
+  ],
+  featured: [
+    { label: "Authentication", href: "/platform/authentication", icon: "key" },
+  ],
+},`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <CodeBlock
+    code={`import { defineMeta } from "blume";
+
+export default defineMeta({ display: "page" });`}
+    lang="ts"
+    title="docs/messages/meta.ts"
+  />
+  <p>Add the same <code>meta.ts</code> to <code>docs/verify/</code>. Then:</p>
+  <ul>
+    <li>
+      Each product is one sidebar row. Landing on a page inside a product opens
+      its panel, with a back arrow to the rest of the portal.
+    </li>
+    <li>
+      The selector shows the item whose <code>path</code> is the longest match
+      for the current route, and its first item when none matches. All
+      products at <code>/</code> matches every route, so shared pages show it
+      instead of claiming to be part of Messages.
+    </li>
+    <li>
+      Previous and next links run across the whole portal, from the last
+      Messages page into Platform and on into Verify, because nothing scopes
+      them anymore.
+    </li>
+  </ul>
+
+  <h2>Keep products apart from versions and access</h2>
+  <p>
+    A product switcher, a version switcher, and a login wall can all look like
+    a choice in the header. Blume treats them differently.
+  </p>
+  <p>
+    <strong>Versions are site-wide.</strong> The <code>versions</code> config
+    snapshots the whole content tree, not one product, and adds its own
+    version switcher. API references generated from specs stay current in
+    every snapshot, and tabs don't scope an archived tree's sidebar. If only
+    Messages ships a breaking change, keep its old API inside the product as a
+    second source at a route like <code>/messages/api-v1</code>, with{" "}
+    <code>includeInSearch: false</code> so it doesn't compete with the current
+    one. For a release of the whole portal, see{" "}
+    <a href="/guides/version-markdown-documentation">Version your docs for a breaking release</a>.
+    And don't give a product selector <code>kind: "version"</code>: on a
+    versioned site, a selector of that kind replaces the automatic version
+    switcher.
+  </p>
+  <p>
+    <strong>Access is per site.</strong> Blume has no sign-in. Leaving a
+    product out of the tabs or the selector doesn't hide it: its pages are
+    still in the build, the search index, the sitemap, and{" "}
+    <code>llms.txt</code>. Host protection covers a whole site, so a
+    partner-only or internal product belongs in a separate site behind it. See{" "}
+    <a href="/docs/deployment#private-docs">Private docs</a> and{" "}
+    <a href="/guides/private-documentation-cloudflare-access">Protect an internal documentation site with Cloudflare Access</a>.
+  </p>
+  <p>
+    <strong>Ownership can be per repository.</strong> If each product team
+    keeps its docs beside its code, the portal can still own the structure by
+    mounting each repository under its own prefix and tab, as{" "}
+    <a href="/guides/documentation-multiple-repositories">Build one documentation portal from multiple GitHub repositories</a>{" "}
+    shows.
+  </p>
+
+  <h2>Test every entry point</h2>
+  <p>
+    Readers arrive on the home page, on a product overview, on a quickstart
+    from a search engine, and deep in an endpoint from someone's link. Check
+    each one. First, scan the project for duplicate routes, unknown icons, and
+    tabs or selector items that point at missing pages:
+  </p>
+  <CodeBlock code="npx blume doctor" lang="bash" />
+  <p>Then run <code>npx blume dev</code> and open each entry point:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Open</th>
+        <th scope="col">Current tab</th>
+        <th scope="col">Next link goes to</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>/</code></td>
+        <td>Overview</td>
+        <td>Authentication</td>
+      </tr>
+      <tr>
+        <td><code>/messages/quickstart</code></td>
+        <td>Messages</td>
+        <td>The Messages API overview</td>
+      </tr>
+      <tr>
+        <td><code>/messages/api/messages/send-message</code></td>
+        <td>Messages</td>
+        <td>List templates</td>
+      </tr>
+      <tr>
+        <td><code>/verify/api/verifications/check-verification</code></td>
+        <td>Verify</td>
+        <td>Start a verification</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    On each page, check that the sidebar shows only that tab's pages and that
+    the Authentication link sits above it. Then open search from a Messages
+    page and from a Verify page. An empty query should list the three pinned
+    pages, and "quickstart" should find both quickstarts under their own
+    titles. Finally, build and check links and titles:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+npx blume validate
+npx blume audit --only duplicates`}
+    lang="bash"
+  />
+  <p>
+    <code>validate</code> checks every internal link, including the
+    quickstarts' links into the generated references, and the audit flags
+    pages that share a title or description.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>A product's API reference shows under Overview</h3>
+  <p>
+    Its <code>route</code> isn't under the product's prefix, such as{" "}
+    <code>/api/messages</code> beside a <code>/messages</code> tab. The
+    longest matching tab is then the root one, so the reference joins the
+    Overview sidebar and the product's tab loses it. Move the route under the
+    product, and redirect the old operation URLs if they were ever published.
+  </p>
+  <h3>The build fails with BLUME_DUPLICATE_ROUTE</h3>
+  <p>
+    A page sits at a route the reference generates, most often an{" "}
+    <code>index.mdx</code> in <code>docs/messages/api/</code>, which collides
+    with the Messages API overview. Delete it or move it up a level.
+  </p>
+  <h3>Both reference groups are named API</h3>
+  <p>
+    A source has no <code>label</code>, so its group takes the last segment
+    of its route. Give each source a <code>label</code>. A{" "}
+    <code>meta.ts</code> in the folder that matches the route, like{" "}
+    <code>docs/messages/api/meta.ts</code>, also names the group and wins over
+    the label.
+  </p>
+  <h3>A tab opens a product's first page instead of its overview</h3>
+  <p>
+    The product's folder has no <code>index.mdx</code>, so the tab falls back to
+    the first page in its section. Add the overview page, or set the tab's{" "}
+    <code>href</code> to the page it should open.
+  </p>
+  <h3>The dev server warns BLUME_NAV_MISSING_PAGE</h3>
+  <p>
+    A tab, selector item, or featured link points at a route with no page,
+    often a typo like <code>/verfy</code>. <code>blume dev</code>,{" "}
+    <code>blume build</code>, and <code>blume doctor</code> print it as a
+    warning. Fix the path in <code>blume.config.ts</code>.
+  </p>
+</GuidePage>

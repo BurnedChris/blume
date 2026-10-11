@@ -1,0 +1,732 @@
+---
+// Migrate from Fumadocs: checked against the migration docs, the
+// blume-migrate skill (SKILL.md and references/fumadocs.md), Blume's source on
+// main (config, meta.ts, and frontmatter schemas; basePath link and tab
+// rebasing; ordering-prefix routes; migrate detection), and Fumadocs itself
+// (fumadocs-core and fumadocs-ui 16.15.15, fumadocs-mdx 15.4.5, the Next.js
+// template from create-fumadocs-app 16.2.10). Ran: the "before" site with
+// those pins on Next.js 16.3.6 (`next build`, sidebar hiding and root-folder
+// scoping checked in the output); `blume migrate` without an agent flag in it
+// (detected from fumadocs-core); the "after" config, meta.ts files, and page
+// frontmatter parsed against Blume's schemas; the URL-listing and component
+// census commands against the fixture. Reviewer: checked inline `$$` math
+// against the syntax docs and markdown/features.ts, and the PageLayout props
+// against the custom pages docs. Not yet run end to end: no agent run, no
+// `blume build` of the result, and no Vercel deploy.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("migrate-from-fumadocs")}>
+  <p>
+    Most of it. A Fumadocs site is already MDX pages in a folder tree, ordered
+    by a <code>meta.json</code> in each folder, and that's the model Blume uses.
+    Your pages move with targeted rewrites to callouts, cards, tabs, and icon
+    names, each <code>meta.json</code> becomes a <code>meta.ts</code>, and your
+    docs stay at <code>/docs</code>. What you rebuild is the React app around
+    the pages: the home page, custom layouts, and your own components.
+  </p>
+  <p>
+    By the end of this guide, a coding agent has converted your repository, you
+    have checked its diff against a worked example, every old URL resolves, and
+    the site is live on a preview deployment. The guide follows the Next.js
+    project that <code>create-fumadocs-app</code> scaffolds. React Router,
+    TanStack Start, Waku, and Astro setups migrate the same way.
+  </p>
+  <p>
+    If your docs are part of a larger app and share its sign-in, components, or
+    request-time data, stay on Fumadocs: Blume builds a separate site. To mount
+    one under <code>/docs</code> of an existing Next.js app, see{" "}
+    <a href="/guides/nextjs-documentation-subpath">Serve a separate documentation site under /docs in Next.js</a>,
+    and <a href="/compare/fumadocs">Blume vs Fumadocs</a> for the rest of the
+    trade-off.
+  </p>
+
+  <h2>What carries over</h2>
+  <p>
+    A lot already works as written: <code>title</code> and{" "}
+    <code>description</code> frontmatter, <code>&lt;Steps&gt;</code>,{" "}
+    <code>&lt;TypeTable&gt;</code>,{" "}
+    <code>&lt;GithubInfo&gt;</code>, <code>&lt;include&gt;</code> partials,{" "}
+    <code>(group)</code> folders that add no URL segment, and heading markers
+    like <code>[#custom-id]</code> and <code>[!toc]</code>. The rest maps like
+    this:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In Fumadocs</th>
+        <th scope="col">In Blume</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>The loader's <code>baseUrl: "/docs"</code></td>
+        <td><code>basePath: "/docs"</code> in <code>blume.config.ts</code></td>
+      </tr>
+      <tr>
+        <td><code>content/docs/</code></td>
+        <td><code>docs/</code>, at the same URLs</td>
+      </tr>
+      <tr>
+        <td><code>meta.json</code></td>
+        <td><code>meta.ts</code></td>
+      </tr>
+      <tr>
+        <td>Folders with <code>"root": true</code></td>
+        <td>Header tabs in <code>navigation.tabs</code></td>
+      </tr>
+      <tr>
+        <td><code>"defaultOpen": true</code></td>
+        <td><code>collapsed: false</code></td>
+      </tr>
+      <tr>
+        <td><code>&lt;Callout type="warn"&gt;</code></td>
+        <td><code>:::warning</code>, and the other types to their directives</td>
+      </tr>
+      <tr>
+        <td><code>&lt;Cards&gt;</code> of <code>&lt;Card icon={"{<Cpu />}"}&gt;</code></td>
+        <td><code>&lt;CardGroup&gt;</code> of <code>&lt;Card icon="cpu"&gt;</code></td>
+      </tr>
+      <tr>
+        <td><code>&lt;Accordions&gt;</code> of <code>&lt;Accordion&gt;</code></td>
+        <td><code>&lt;Accordion&gt;</code> of <code>&lt;AccordionItem&gt;</code></td>
+      </tr>
+      <tr>
+        <td><code>&lt;Tabs items={"{[…]}"}&gt;</code> of <code>&lt;Tab value&gt;</code></td>
+        <td><code>&lt;Tabs&gt;</code> of <code>&lt;Tab title&gt;</code></td>
+      </tr>
+      <tr>
+        <td><code>&lt;Files&gt;</code>, <code>&lt;Folder&gt;</code>, <code>&lt;File&gt;</code></td>
+        <td><code>&lt;Tree&gt;</code>, <code>&lt;Tree.Folder&gt;</code>, <code>&lt;Tree.File&gt;</code></td>
+      </tr>
+      <tr>
+        <td><code>```npm</code> fences</td>
+        <td><code>```package-install</code></td>
+      </tr>
+      <tr>
+        <td>lucide-react names like <code>BookOpen</code></td>
+        <td>Lucide names like <code>book-open</code></td>
+      </tr>
+      <tr>
+        <td>Inline <code>$x$</code> math from <code>remark-math</code></td>
+        <td><code>$$x$$</code> inside the sentence; block <code>$$</code> math works as written</td>
+      </tr>
+      <tr>
+        <td>Pages generated by <code>fumadocs-openapi</code></td>
+        <td><code>openapi()</code> in <code>reference</code>, a page per operation</td>
+      </tr>
+      <tr>
+        <td>Route handlers for search, <code>llms.txt</code>, Markdown, and OG images</td>
+        <td>Built in</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    What doesn't carry over: the home page and anything else in{" "}
+    <code>app/</code> outside the docs route, header menus and custom items
+    in <code>lib/layout.shared.tsx</code>, a folder's{" "}
+    <code>description</code>,
+    reversed (<code>z...a</code>) and extracted (<code>...folder</code>)
+    ordering, <code>&lt;DynamicCodeBlock&gt;</code>,{" "}
+    <code>&lt;InlineTOC&gt;</code>, and custom remark, rehype, or Shiki
+    plugins. A <code>full: true</code> page has no
+    exact match: <code>mode: wide</code> is the closest, a full-width page
+    without the table of contents.
+  </p>
+
+  <h2>Before you start</h2>
+  <p>Start on a clean branch, so the whole migration is one diff:</p>
+  <CodeBlock code="git switch -c migrate-to-blume" lang="bash" />
+  <p>Then find where your setup keeps things:</p>
+  <ul>
+    <li>
+      <strong><code>lib/source.ts</code></strong> holds the loader. Note its{" "}
+      <code>baseUrl</code> (in a scaffolded project, the <code>docsRoute</code>{" "}
+      constant in <code>lib/shared.ts</code>) and any <code>i18n</code> option.
+      Newer projects also define the content collection here, with{" "}
+      <code>fumadocs-mdx/macro</code>.
+    </li>
+    <li>
+      <strong><code>source.config.ts</code></strong>, in projects that use the
+      Config API, holds <code>mdxOptions</code> and your own remark, rehype, and
+      Shiki plugins.
+    </li>
+    <li>
+      <strong><code>components/mdx.tsx</code></strong> (or{" "}
+      <code>mdx-components.tsx</code>) registers components pages use without
+      importing them.
+    </li>
+    <li>
+      <strong><code>app/</code></strong> holds the home page, the docs layout,
+      and the route handlers.
+    </li>
+  </ul>
+  <p>
+    Count the components your pages use, to check each one later. Skip any type
+    parameters from code samples in the list:
+  </p>
+  <CodeBlock
+    code={`grep -rhoE '<[A-Z][A-Za-z.]*' content/docs | sort | uniq -c | sort -rn`}
+    lang="bash"
+  />
+  <p>
+    Next, save the URLs your docs serve today. Fumadocs builds each URL from the
+    file path, so this lists them from the content folder, dropping extensions,{" "}
+    <code>index</code>, and <code>(group)</code> folders:
+  </p>
+  <CodeBlock
+    code={`find content/docs -name '*.md' -o -name '*.mdx' \\
+  | sed -E -e 's#^content/docs#/docs#' -e 's#/\\([^/]+\\)##g' \\
+    -e 's#\\.mdx?$##' -e 's#/index$##' \\
+  | sort > ../old-urls.txt`}
+    lang="bash"
+  />
+  <p>
+    If your <code>baseUrl</code> isn't <code>/docs</code>, change the{" "}
+    <code>#/docs#</code> replacement to match. Run it before the migration,
+    while any generated API pages still exist. You also need Node.js 22.19 or
+    later, and Claude Code or Codex installed and signed in.
+  </p>
+
+  <h2>Run the migration</h2>
+  <p>From the folder that holds your docs' <code>package.json</code>, run:</p>
+  <CodeBlock code="npx blume migrate fumadocs --claude" lang="bash" />
+  <p>
+    To use Codex, swap <code>--claude</code> for <code>--codex</code>. On pnpm
+    12, run it with <code>pnpm dlx --allow-build=esbuild</code> instead of{" "}
+    <code>npx</code>, since pnpm 12 won't run esbuild's install script until you
+    approve it. Leave out <code>fumadocs</code> and Blume detects the source
+    from a <code>source.config.ts</code> or a <code>fumadocs-core</code>,{" "}
+    <code>fumadocs-ui</code>, or <code>fumadocs-mdx</code> dependency. Run it
+    with neither flag and it only prints where the skill lives, for another
+    agent to use.
+  </p>
+  <p>
+    <code>blume migrate</code> converts nothing itself. It names the source,
+    then opens the agent in your terminal on the <code>blume-migrate</code>{" "}
+    skill that ships inside the package, pointed at the skill's Fumadocs
+    reference. The agent runs interactively, so its edits go through its usual
+    permission prompts. If the repository also holds a product app whose
+    routes and dependencies must stay, say so first: the skill removes the host
+    framework along with Fumadocs. Following the skill, it:
+  </p>
+  <ol>
+    <li>
+      Writes <code>blume.config.ts</code>, with a <code>basePath</code> from
+      your loader's <code>baseUrl</code>, and the title, repository, and
+      header links from <code>lib/layout.shared.tsx</code>.
+    </li>
+    <li>
+      Moves the pages into <code>docs/</code>, converts each{" "}
+      <code>meta.json</code> to a <code>meta.ts</code>, and turns root folders
+      into header tabs.
+    </li>
+    <li>
+      Rewrites components and icon names, converts <code>```npm</code> fences,
+      and removes the imports pages no longer need.
+    </li>
+    <li>Replaces generated OpenAPI pages with Blume's <code>openapi()</code> reference.</li>
+    <li>Adds a redirect for every URL that moves.</li>
+    <li>
+      Points <code>dev</code>, <code>build</code>, and <code>start</code> at{" "}
+      <code>blume dev</code>, <code>blume build</code>, and{" "}
+      <code>blume preview</code>, removes Fumadocs and Next.js, deletes the app
+      files, then runs <code>blume build</code> and <code>blume validate</code>{" "}
+      until both pass.
+    </li>
+  </ol>
+  <p>
+    It finishes with a summary of what it migrated, dropped, and approximated.
+    Keep it: it's your checklist for the review.
+  </p>
+
+  <h2>A migration, before and after</h2>
+  <p>
+    Here's a small site on fumadocs-ui 16.15.15 and Next.js 16, then the Blume
+    files a correct migration ends with. Expect the same kinds of change in your
+    diff. The site has a Guides folder and an SDK root folder:
+  </p>
+  <CodeBlock
+    code={`content/docs/
+  index.mdx
+  guides/
+    meta.json
+    install.mdx
+    configure.mdx
+    internal-notes.mdx
+  sdk/
+    meta.json
+    index.mdx`}
+    lang="txt"
+  />
+  <CodeBlock
+    code={`{
+  "title": "Guides",
+  "icon": "BookOpen",
+  "defaultOpen": true,
+  "pages": ["install", "configure"]
+}`}
+    lang="json"
+    title="content/docs/guides/meta.json"
+  />
+  <CodeBlock
+    code={`{
+  "title": "SDK",
+  "description": "Client libraries for the Acme API",
+  "icon": "Package",
+  "root": true
+}`}
+    lang="json"
+    title="content/docs/sdk/meta.json"
+  />
+  <CodeBlock
+    code={`---
+title: Install the SDK
+description: Add the Acme SDK to a Node.js project.
+icon: Download
+---
+
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
+import { KeyRound } from "lucide-react";
+
+<Callout type="warn" title="Node.js 20 or later">
+  The SDK uses the built-in \`fetch\`.
+</Callout>
+
+## Install the package
+
+\`\`\`npm
+npm install @acme/sdk
+\`\`\`
+
+## Create a client [#create-client]
+
+<Tabs items={["TypeScript", "JavaScript"]}>
+<Tab value="TypeScript">
+
+\`\`\`ts
+import { Acme } from "@acme/sdk";
+
+export const acme = new Acme({ apiKey: process.env.ACME_API_KEY });
+\`\`\`
+
+</Tab>
+<Tab value="JavaScript">
+
+\`\`\`js
+const { Acme } = require("@acme/sdk");
+
+module.exports.acme = new Acme({ apiKey: process.env.ACME_API_KEY });
+\`\`\`
+
+</Tab>
+</Tabs>
+
+<Cards>
+  <Card
+    icon={<KeyRound />}
+    title="Configure the client"
+    description="Set your API key and region."
+    href="/docs/guides/configure"
+  />
+</Cards>`}
+    lang="mdx"
+    title="content/docs/guides/install.mdx"
+  />
+  <p>
+    Guides names two of its three pages, so Fumadocs serves{" "}
+    <code>internal-notes</code> but leaves it out of the sidebar. SDK is a root
+    folder, so its pages show only their own sidebar. After the migration:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme Docs",
+  basePath: "/docs",
+  navigation: {
+    sidebar: { display: "group" },
+    tabs: [{ label: "SDK", path: "/sdk", icon: "package" }],
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <CodeBlock
+    code={`import { defineMeta } from "blume";
+
+export default defineMeta({
+  title: "Guides",
+  icon: "book-open",
+  collapsed: false,
+  pages: ["install", "configure"],
+});`}
+    lang="ts"
+    title="docs/guides/meta.ts"
+  />
+  <CodeBlock
+    code={`import { defineMeta } from "blume";
+
+export default defineMeta({
+  title: "SDK",
+  icon: "package",
+});`}
+    lang="ts"
+    title="docs/sdk/meta.ts"
+  />
+  <CodeBlock
+    code={`---
+title: Install the SDK
+description: Add the Acme SDK to a Node.js project.
+icon: download
+---
+
+:::warning[Node.js 20 or later]
+The SDK uses the built-in \`fetch\`.
+:::
+
+## Install the package
+
+\`\`\`package-install
+npm install @acme/sdk
+\`\`\`
+
+## Create a client [#create-client]
+
+<Tabs>
+<Tab title="TypeScript">
+
+\`\`\`ts
+import { Acme } from "@acme/sdk";
+
+export const acme = new Acme({ apiKey: process.env.ACME_API_KEY });
+\`\`\`
+
+</Tab>
+<Tab title="JavaScript">
+
+\`\`\`js
+const { Acme } = require("@acme/sdk");
+
+module.exports.acme = new Acme({ apiKey: process.env.ACME_API_KEY });
+\`\`\`
+
+</Tab>
+</Tabs>
+
+<CardGroup>
+  <Card icon="key-round" title="Configure the client" href="/docs/guides/configure">
+    Set your API key and region.
+  </Card>
+</CardGroup>`}
+    lang="mdx"
+    title="docs/guides/install.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Release notes for the team
+sidebar:
+  hidden: true
+---`}
+    lang="yaml"
+    title="docs/guides/internal-notes.mdx"
+  />
+  <p>What changed, and why:</p>
+  <ul>
+    <li>
+      <strong>The tab path skips <code>/docs</code>.</strong> Blume adds the{" "}
+      <code>basePath</code>, so the tab opens <code>/docs/sdk</code>. The
+      folder's <code>description</code> is gone, since <code>meta.ts</code> has
+      no such field.
+    </li>
+    <li>
+      <strong><code>display: "group"</code> keeps folders collapsible.</strong>{" "}
+      Fumadocs folders collapse by default. Blume's default is flat headers,
+      where <code>collapsed</code> does nothing, so check that your config
+      sets it.
+    </li>
+    <li>
+      <strong>The imports are gone.</strong> Blume's components need none. The
+      card's icon is a name, and its description moved into the card body.
+    </li>
+    <li>
+      <strong>The card's link keeps <code>/docs</code>.</strong> Blume doesn't
+      add the <code>basePath</code> twice, so links written with it still work.
+    </li>
+    <li>
+      <strong><code>internal-notes</code> is hidden by frontmatter</strong>,
+      because Blume lists the pages a <code>meta.ts</code> leaves out.
+    </li>
+  </ul>
+
+  <h2>Review the diff</h2>
+  <p>
+    Start with <code>git diff --stat</code>, run <code>npx blume dev</code>, and
+    open <code>http://localhost:4321/docs</code>. Then check each area:
+  </p>
+  <ul>
+    <li>
+      <strong>Config.</strong> The title should match your header's{" "}
+      <code>nav.title</code> from <code>lib/layout.shared.tsx</code>, or your{" "}
+      <code>package.json</code> name if the header set none. That file's{" "}
+      <code>githubUrl</code> becomes <code>github: {"{ owner, repo }"}</code>,
+      for the repository and edit links, and its header links become{" "}
+      <code>navigation.actions</code>.
+    </li>
+    <li>
+      <strong>Sidebar.</strong> Click through every folder and tab. A{" "}
+      <code>---Section---</code> separator should now be a{" "}
+      <code>(Section)</code> folder holding its pages, and an extracted folder
+      stays a group.
+    </li>
+    <li>
+      <strong>Icons.</strong> Every sidebar, tab, and card icon should render.
+    </li>
+    <li>
+      <strong>Components.</strong> Open a page that uses each component in your
+      count.
+    </li>
+    <li>
+      <strong>Translations.</strong> A loader with <code>i18n</code> becomes
+      Blume's <code>i18n</code>. Locale folders work as they are, and suffixed
+      files like <code>install.cn.mdx</code> work with{" "}
+      <a href="/docs/content/i18n#filename-suffixes">parser: "dot"</a>. One{" "}
+      <code>meta.ts</code> then serves every language, so folder titles from a{" "}
+      <code>meta.cn.json</code> don't carry over.
+    </li>
+    <li>
+      <strong>API reference.</strong> It needs a tab in{" "}
+      <code>navigation.tabs</code> pointing at its route, and its operation URLs
+      come from each operation's tag and ID, so old ones may need redirects. See{" "}
+      <a href="/guides/openapi-documentation-website">Generate API docs from an OpenAPI spec</a>.
+    </li>
+  </ul>
+
+  <h3>Pages your sidebar used to hide</h3>
+  <p>
+    Fumadocs hides a page two ways: a <code>pages</code> list without{" "}
+    <code>"..."</code> leaves out every page it doesn't name, and a{" "}
+    <code>"!name"</code> entry excludes one page from <code>"..."</code>. Blume
+    appends the pages a <code>meta.ts</code> doesn't name, so each of those
+    pages should now carry <code>sidebar.hidden: true</code>. It stays built
+    and reachable by URL, as before. Compare the sidebar with the old site,
+    and hide any page that came back.
+  </p>
+
+  <h3>Your own components</h3>
+  <p>
+    Components registered in <code>components/mdx.tsx</code>, or imported from
+    your own code, need a new home before that file goes. An interactive one
+    becomes an <a href="/docs/content/islands">island</a>: a file in{" "}
+    <code>islands/</code> whose name is the tag, used in any page with no
+    import. A static one can be an <code>.astro</code> component registered in{" "}
+    <a href="/docs/configuration/customization#component-overrides">components.ts</a>.
+    Uses of <code>next/link</code> and <code>next/image</code> become plain
+    Markdown links and images.
+  </p>
+
+  <h2>Keep your docs at /docs</h2>
+  <p>
+    <code>basePath: "/docs"</code> mounts every page under <code>/docs</code>,
+    as your loader's <code>baseUrl</code> did, without adding a Docs group to
+    the sidebar. In config, write tab paths, links, and redirects as if the docs
+    lived at the root, and Blume adds the prefix. The URLs, canonical tags,
+    sitemap, and search index all follow it.
+  </p>
+  <p>
+    Your site root is the one URL it doesn't cover. In Fumadocs,{" "}
+    <code>app/(home)/page.tsx</code> answered <code>/</code>, and it goes with
+    the rest of <code>app/</code>. Rebuild it as a{" "}
+    <a href="/docs/advanced/custom-pages">custom page</a>. Blume serves{" "}
+    <code>pages/index.astro</code> at <code>/</code>, outside the{" "}
+    <code>basePath</code>, with the site header and search:
+  </p>
+  <CodeBlock
+    code={`---
+import PageLayout from "blume/components/layout/PageLayout.astro";
+import data from "blume:data";
+
+const { config } = data;
+---
+
+<PageLayout
+  site={{ title: config.title, description: config.description }}
+  logo={config.logo}
+  banner={config.banner}
+  analytics={config.analytics}
+  favicon={config.favicon}
+  navigation={data.navigation}
+  fontCssVars={data.fontCssVars}
+  themeMode={config.theme.mode}
+  searchEnabled={config.search.enabled}
+  siteUrl={config.site}
+  ogEnabled={config.og.enabled}
+  page={{ title: config.title, description: config.description }}
+>
+  <section class="mx-auto max-w-3xl px-6 py-24 text-center">
+    <h1 class="text-3xl font-semibold">Acme Docs</h1>
+    <p class="mt-4">Guides and reference for the Acme SDK.</p>
+    <a class="mt-6 inline-block underline" href="/docs">Read the docs</a>
+  </section>
+</PageLayout>`}
+    lang="astro"
+    title="pages/index.astro"
+  />
+  <p>
+    A custom page's links are plain HTML, so this one spells out{" "}
+    <code>/docs</code>. To serve the docs from the root instead, drop{" "}
+    <code>basePath</code> and add one pattern redirect, which also covers{" "}
+    <code>/docs</code> itself. The docs' index page becomes your home page:
+  </p>
+  <CodeBlock
+    code={`redirects: [{ from: "/docs/:slug*", to: "/:slug*", status: 308 }],`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+
+  <h2>Check every old URL</h2>
+  <p>
+    With <code>npx blume dev</code> running, walk the list you saved and print
+    every old URL that no longer reaches a page:
+  </p>
+  <CodeBlock
+    code={`while read -r route; do
+  code=$(curl -sL -o /dev/null -w "%{http_code}" "http://localhost:4321$route")
+  [ "$code" = "200" ] || echo "$code $route"
+done < ../old-urls.txt`}
+    lang="bash"
+  />
+  <p>
+    Redirects count as passing, since <code>-L</code> follows them. For each
+    path it prints, add a redirect, written without the <code>/docs</code>{" "}
+    prefix, and run it again until it prints nothing. Run it once more against
+    the preview deployment once it's up. For status codes, patterns, and
+    what each host does with them, see{" "}
+    <a href="/guides/documentation-url-migration-redirects">Move documentation URLs while preserving old links</a>.
+  </p>
+
+  <h2>Build and validate</h2>
+  <p>Stop the dev server, then build the site and check its links:</p>
+  <CodeBlock
+    code={`npx blume build
+npx blume validate --strict`}
+    lang="bash"
+  />
+  <p>
+    <code>blume build</code> fails on any page, route, or config error,
+    including unknown frontmatter keys. <code>blume validate --strict</code>{" "}
+    checks every internal link, heading anchor, and asset, and fails on
+    warnings too. Fix what they report rather than passing{" "}
+    <code>--no-strict</code>, which drops the pages that fail.
+  </p>
+
+  <h2>Deploy and switch over</h2>
+  <p>
+    If your Fumadocs site runs on Vercel, the Blume site can stay in the same
+    project. Add the <code>vercel()</code> adapter, so redirects are answered
+    with real HTTP status codes:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { vercel } from "blume/deploy";
+
+export default defineConfig({
+  // ...everything the migration wrote
+  deployment: vercel(),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The project uses Vercel's Next.js framework preset, which no longer fits.
+    A preset change in the dashboard applies to every branch, including
+    production builds of your main branch, which is still Fumadocs. Instead,
+    commit a <code>vercel.json</code> beside <code>package.json</code>. It
+    overrides the preset for the deployments that include it, and{" "}
+    <code>null</code> selects the Other preset:
+  </p>
+  <CodeBlock
+    code={`{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "npm run build"
+}`}
+    lang="json"
+    title="vercel.json"
+  />
+  <p>
+    Check that the project's Node.js version is 22 or later, push the branch,
+    and run the URL check against its preview URL. If Vercel Authentication
+    protects your previews, <code>curl</code> gets a login page, so check a
+    sample in the browser and run the full loop after the switch. For other
+    hosts, including a static export, see{" "}
+    <a href="/docs/deployment">Deployment</a>.
+  </p>
+  <p>
+    When the preview looks right, merge. Production builds with Blume at the
+    same domain, and Vercel's Instant Rollback can return it to the last
+    Fumadocs deployment if something breaks.
+  </p>
+  <Callout type="info">
+    Blume serves Markdown copies of every page at <code>.md</code> URLs on any
+    host. Answering an <code>Accept: text/markdown</code> request at the page's
+    own URL, as the template's <code>proxy.ts</code> did, needs a server build
+    on Vercel or Cloudflare, which <code>vercel()</code> gives you.
+  </Callout>
+
+  <h2>Troubleshooting</h2>
+  <h3>A page's URL lost its leading number</h3>
+  <p>
+    Blume reads a numeric prefix like <code>01-</code> in a file or folder name
+    as sort order and drops it from the URL, so <code>01-intro.mdx</code> moves
+    from <code>/docs/01-intro</code> to <code>/docs/intro</code>. Fumadocs keeps
+    the number in the URL. The agent adds a redirect for each prefixed name;
+    add one for any the URL check still prints.
+  </p>
+  <h3>An icon is missing</h3>
+  <p>
+    Blume reads kebab-case Lucide names, so a lucide-react name like{" "}
+    <code>BookOpen</code> or <code>HomeIcon</code> renders nothing. Navigation
+    icons warn with <code>BLUME_UNKNOWN_ICON</code>, but a card icon fails
+    silently. Strip any <code>Icon</code> suffix, kebab-case the rest, and look
+    the name up on <a href="https://lucide.dev/icons">lucide.dev</a>.
+  </p>
+  <h3>The build fails on a page's frontmatter</h3>
+  <p>
+    <code>BLUME_FRONTMATTER_INVALID</code> names the page and key. Replace{" "}
+    <code>full: true</code> with <code>mode: wide</code>. A page with{" "}
+    <code>_openapi</code> is a generated API page, so delete it. If you extended
+    Fumadocs' page schema with keys of your own, declare them under{" "}
+    <code>frontmatter.extend</code> in <code>blume.config.ts</code>, which takes
+    the same Zod schemas.
+  </p>
+  <h3>A meta.ts fails to load</h3>
+  <p>
+    <code>BLUME_META_INVALID</code> means a key from <code>meta.json</code>{" "}
+    survived. A <code>meta.ts</code> takes only <code>title</code>,{" "}
+    <code>icon</code>, <code>order</code>, <code>collapsed</code>,{" "}
+    <code>display</code>, <code>directory</code>, and <code>pages</code>, so
+    remove <code>description</code>, <code>root</code>,{" "}
+    <code>defaultOpen</code>, or <code>collapsible</code>.
+  </p>
+  <h3>Math shows dollar signs</h3>
+  <p>
+    Blume renders math in <code>.mdx</code> pages with no plugin to configure,
+    but only between two dollar signs: <code>$$</code> lines for a block, or{" "}
+    <code>$$x^2$$</code> inside a sentence for inline math. A single{" "}
+    <code>$</code> stays literal text, so rewrite each inline{" "}
+    <code>$x$</code> as <code>$$x$$</code>, inside its sentence rather than on
+    a line of its own.
+  </p>
+  <h3>A redirect fails the build</h3>
+  <p>
+    <code>BLUME_REDIRECT_MATCHES_PAGE</code> means a redirect pattern also
+    covers a page you kept. Narrow it to the URLs that moved. As a warning,
+    which fails <code>blume validate --strict</code>, it means an exact
+    redirect starts at a page you kept: the redirect takes the URL over, so the
+    page never publishes. Delete the page if it moved, or remove the redirect.
+  </p>
+</GuidePage>

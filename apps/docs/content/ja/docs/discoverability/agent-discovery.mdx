@@ -1,7 +1,7 @@
 ---
 title: エージェントによる検出
 description: >-
-  エージェントが推測に頼らず、機械可読なサーフェスを見つける方法 — エージェント可読性マニフェスト、Link ヘッダー、RFC 9727 API カタログ、WebMCP、公開されたスキル、DNS ベースの検出、そして Web Bot Auth キー。
+  エージェントが推測に頼らず、機械可読なサーフェスを見つける方法 — エージェント可読性マニフェスト、Link ヘッダー、RFC 9727 API カタログ、WebMCP、サイト用に生成されるスキルと公開されたスキル、DNS ベースの検出、そして Web Bot Auth キー。
 ---
 
 `llms.txt`、Markdown ミラー、JSON API、MCP サーバーを公開しても、それは仕事の半分に過ぎません — エージェントはそれらを見つけなければならないからです。Blume は、エージェントが実際に探索する規約を通じてサーフェス全体を告知します。サイトルートのマニフェスト、`Link` ヘッダーと `<link>` タグ、well-known ファイル、そしてブラウザ自身のモデルコンテキストです。ここに書かれているものはすべてデフォルトで有効になっており、すでに有効にしている機能から導出されます。
@@ -229,6 +229,33 @@ agents: {
 }
 ```
 
+## サイトのスキル [#your-sites-skill]
+
+すべてのビルドは、ドキュメント用の[エージェントスキル](https://agentskills.io)を書き出します — コーディングエージェントがインストールしてあなたの製品を扱えるようにする `SKILL.md` です。これは `/skill.md` で配信され、[スキルインデックス](#skills-discovery)に列挙されます。Blume はモデルを呼び出すことなく、サイトについてすでに把握している情報からこれを構築するため、コストはかからず、ドキュメントが変わるたびに更新されます。内容は次のとおりです:
+
+- サイトのタイトルと説明、そしてエージェントがそのスキルを使うべきタイミング
+- 任意のページを Markdown として読む方法に加え、サイトが配信している場合は `llms.txt`、`llms-full.txt`、[MCP サーバー](/docs/discoverability/mcp)、JSON API、変更履歴
+- API リファレンス
+- サイドバー順のドキュメントマップ。各ページの Markdown へのリンクと 1 行の説明（`llms.txt` と同様に、ページのメタディスクリプション）付きです
+
+スキルの名前はサイトの `title` から付けられます（`Acme Docs` は `acme-docs` になります）。対象はデフォルト言語の現行バージョンで、API オペレーションページと変更履歴エントリは除外され（それぞれマップの上に専用の 1 行があります）、`llms.txt` が除外するページ（下書き、非表示ページと `noindex` ページ、そして [`ai.exclude`](/docs/discoverability/llms-txt#excluding-a-page) が指定されたページ）もスキップし、最大 200 ページまでを列挙し、残りについては `llms.txt` を案内します。リンクは絶対 URL のため、スキルには [`deployment.site`](/docs/deployment) が必要です。設定されていないビルドではスキップされます。
+
+生成されるスキルはドキュメントへのガイドであり、製品の要約ではありません。エージェントに製品そのもの — セットアップ、コアコンセプト、よくあるタスク、注意点 — を教えるスキルが必要な場合は、コーディングエージェントにドキュメントから書かせてください:
+
+```bash
+blume skill --claude   # or --codex
+```
+
+`blume skill` は Claude Code または Codex を [`blume-write-skill`](/docs/advanced/skills#writing-your-sites-skill) スキルで起動します。このスキルは [`agents.skills`](#skills-discovery) フォルダ（未設定の場合は `./skills` を使い、設定にも追加します）の下に、サイト名にちなんだ名前の `SKILL.md` を書き出すため、生成されたスキルを置き換えます。他のファイルと同様にレビューしてコミットしてください。エージェントのトークンを消費するのは一度だけで、ビルドのたびではありません。手書きのスキルは自動では更新されないため、ドキュメントを大きく変更した後はもう一度実行してください。フラグなしの場合、`blume skill` はスキルの配置先と、別のエージェントにそれを指示する方法を出力します。
+
+`agents.skills` 内に同じ名前のスキルがあれば、どのように書かれたものであっても、インデックス内の生成されたスキルを置き換えます。それが `SKILL.md` 単体のスキルであれば、`/skill.md` でも置き換えます。自分で配置した `public/skill.md` はその両方より優先されます。スキルを無効にするには:
+
+```ts blume.config.ts lineNumbers
+agents: {
+  skillMd: false,
+}
+```
+
 ## スキルの検出 [#skills-discovery]
 
 プロジェクトが[エージェントスキル](https://agentskills.io)を同梱している場合 — [Blume リポジトリ自体がそうです](/docs/advanced/skills) — `agents.skills` をそれらを含むディレクトリに向けると、ビルドは [Agent Skills Discovery RFC](https://github.com/cloudflare/agent-skills-discovery-rfc) に従ってそれらを検出用に公開します:
@@ -241,7 +268,7 @@ agents: {
 
 パスはプロジェクトルートを基準に解決され、`SKILL.md` を含む各サブディレクトリが公開スキルになります。`SKILL.md` 単体のスキルは `/.well-known/agent-skills/<name>/SKILL.md` にそのままコピーされます（`type: "skill-md"`）。補助リソース（`scripts/`、`references/`、`assets/`）を持つスキルは、展開後に相対参照が解決できるよう決定論的な `.tar.gz` にバンドルされ（`type: "archive"`）、スクリプトの実行ビットも保持されます。`/.well-known/agent-skills/index.json` にある検出インデックスには v0.2.0 の `$schema` と、スキルごとに名前、タイプ、説明（`SKILL.md` のフロントマターから）、成果物の URL、そしてクライアントがダウンロードを検証するための SHA-256 ダイジェストが含まれます。
 
-`name`/`description` が欠けている、または仕様に反しているスキルは、壊れた状態で公開される代わりにビルド警告とともにスキップされます。また、自分で配置した `public/.well-known/agent-skills/index.json` はサーフェス全体を引き継ぎます。公開されたスキルは [`llms.txt`](/docs/discoverability/llms-txt#generated-sections) にも列挙されます。
+`name`/`description` が欠けている、または仕様に反しているスキルは、壊れた状態で公開される代わりにビルド警告とともにスキップされます。また、自分で配置した `public/.well-known/agent-skills/index.json` はサーフェス全体を引き継ぎます。公開されたスキルは、[サイト独自のスキル](#your-sites-skill)も含めて、[`llms.txt`](/docs/discoverability/llms-txt#generated-sections) にも列挙されます。
 
 ## DNS ベースの検出（DNS-AID） [#dns-based-discovery-dns-aid]
 

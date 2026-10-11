@@ -1,16 +1,23 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 
 import { basename, dirname, join, normalize, relative, resolve } from "pathe";
 
-import { stripBasePath, withBasePath } from "./base-path.ts";
-import {
-  isRelativeImageTarget,
-  resolveRelativeImage,
-} from "./content-assets.ts";
+import { isInternalPath, stripBasePath, withBasePath } from "./base-path.ts";
+import { locatePath } from "./diagnostics.ts";
 import type { LocaleRouting } from "./i18n.ts";
 import { localizeLinkPath } from "./locale-links.ts";
 import { gradeExternal, probeAll } from "./probe.ts";
-import { isPatternPath, pathsUnderPattern } from "./redirect-patterns.ts";
+import {
+  destinationPrefix,
+  isPatternPath,
+  pathsUnderPattern,
+} from "./redirect-patterns.ts";
+import {
+  isRelativeImageTarget,
+  resolveRelativeFile,
+  resolveRelativeImage,
+} from "./relative-files.ts";
+import { staticFileResolver } from "./static-files.ts";
 import type {
   ContentGraph,
   Diagnostic,
@@ -21,6 +28,22 @@ import type {
 const HTTP = /^https?:\/\//iu;
 const PROTOCOL_RELATIVE = /^\/\//u;
 const SCHEME = /^[a-z][a-z0-9+.-]*:/iu;
+
+/**
+ * Link schemes only one docs platform understands: ReadMe resolves
+ * `doc:slug`, `ref:slug`, `page:slug`, `changelog:slug`, and `blog:slug` to
+ * its own pages, but no browser or app handles them, so each ships as a dead
+ * `href`. A denylist, not an allowlist of web schemes: an app's deep link
+ * (`vscode:`, `cursor://`, `slack://`) is as real a link as `mailto:`, and
+ * which apps a reader has installed can't be known here.
+ */
+const PLATFORM_SCHEMES = new Set([
+  "blog:",
+  "changelog:",
+  "doc:",
+  "page:",
+  "ref:",
+]);
 
 /** Percent-decode a link piece; malformed sequences stay verbatim. */
 const decodePercent = (value: string): string => {
@@ -78,6 +101,9 @@ interface LinkContext {
   anchors: Map<string, Set<string>>;
   /** Site-wide route mount point (`""` or `/seg`); routes carry it, assets don't. */
   basePath: string;
+  /** The route a root-relative link to a content file (`/guide/new.md`)
+   * lands on, when it names one (see `resolveRootFileHref`). */
+  rootFileRoute: (href: string) => string | undefined;
   /** Servable routes outside the graph (custom pages, generated routes); their
    * headings are unknown, so anchors there are accepted unchecked. */
   extraRoutes: Set<string>;
@@ -85,20 +111,18 @@ interface LinkContext {
   fileRoutes: FileRouteIndex;
   /** Locale routing, when the site is multi-locale; drives served-route resolution. */
   i18n: LocaleRouting | null;
-  publicDir: string | null;
   /** Normalized `redirect.from` paths — valid targets that resolve at runtime. */
   redirects: Set<string>;
   /** Pattern `redirect.from`s (`/beta/:slug*`), based like `redirects`. */
   redirectPatterns: string[];
   routes: Set<string>;
+  /** Whether a base-less path is a `public/` file (a folder's `index.html`
+   * included) or a file Blume generates (see `staticFileResolver`). */
+  servesFile: (path: string) => boolean;
 }
 
-/** Whether a resolved asset path exists under `public/`. */
-const assetIsPresent = (resolved: string, ctx: LinkContext): boolean =>
-  ctx.publicDir !== null && existsSync(join(ctx.publicDir, resolved));
-
 /** Outcome of classifying one link target. */
-type LinkResult = Diagnostic | "asset-unchecked" | null;
+type LinkResult = Diagnostic | null;
 
 // Mirrors the ordering-prefix strip in `sources/normalize.ts`: route mapping
 // drops the prefix before recognizing `index`, so `01-index.mdx` is an index.
@@ -173,6 +197,10 @@ export interface RelativeLinkBase {
 /** A root-relative path, a bare `#fragment` or `?query`, or any scheme. */
 const NOT_RELATIVE = /^(?:[#?/]|[a-z][a-z0-9+.-]*:)/iu;
 
+/** The same file under the other Markdown extension: `x.md` ↔ `x.mdx`. */
+const otherDocExtension = (path: string): string =>
+  /x$/iu.test(path) ? path.slice(0, -1) : `${path}x`;
+
 /**
  * Where a relative page link written on `from` lands: a root-relative route
  * with the authored `?query#hash` kept — or `undefined` when `href` isn't a
@@ -188,7 +216,9 @@ const NOT_RELATIVE = /^(?:[#?/]|[a-z][a-z0-9+.-]*:)/iu;
  * `/install`. A `.md`/`.mdx` target is a file link: `resolveFile` maps its
  * decoded path, relative to the linking file, to the route that file
  * publishes at, so a target with its own `slug` or an ordering prefix still
- * lands on its page instead of on its raw Markdown source. Without
+ * lands on its page instead of on its raw Markdown source. A file renamed
+ * from `.md` to `.mdx`, or back, is found under its other extension first,
+ * so a link written before the rename keeps that slug or prefix. Without
  * `resolveFile`, or for a file it doesn't know, the target resolves
  * route-relative with the extension dropped.
  *
@@ -212,10 +242,80 @@ export const resolveRelativeHref = (
     const route = toRoute(resolveRelative(from.route, path, from.isIndex));
     return hasRoute?.(decodePercent(route)) ? `${route}${suffix}` : undefined;
   }
+  const file = decodePercent(path);
   const fileRoute = DOC_EXT.test(path)
-    ? resolveFile?.(decodePercent(path))
+    ? (resolveFile?.(file) ?? resolveFile?.(otherDocExtension(file)))
     : undefined;
   return `${fileRoute ?? toRoute(resolveRelative(from.route, path, from.isIndex))}${suffix}`;
+};
+
+/**
+ * Where a relative page link in a raw HTML `<a href>` written on `route`
+ * lands, with the authored `?query#hash` kept, or `undefined` when `href`
+ * isn't a relative page link (see {@link resolveRelativeHref}). The Markdown
+ * pipeline leaves a raw element as written, so the browser resolves it
+ * against the page's slashless URL, as `blume validate` reads it: its parent
+ * directory, even on an index page, and a `.md` target is that path's
+ * Markdown copy rather than a file link.
+ */
+export const resolveRawRelativeHref = (
+  href: string,
+  route: string,
+  hasRoute: (route: string) => boolean
+): string | undefined => {
+  if (href === "" || NOT_RELATIVE.test(href)) {
+    return undefined;
+  }
+  const suffixAt = href.search(/[?#]/u);
+  const path = suffixAt === -1 ? href : href.slice(0, suffixAt);
+  const resolved = resolveRelative(route, path, false);
+  if (
+    FILE_EXT.test(path) &&
+    !DOC_EXT.test(path) &&
+    !hasRoute(decodePercent(resolved))
+  ) {
+    return undefined;
+  }
+  return `${resolved}${suffixAt === -1 ? "" : href.slice(suffixAt)}`;
+};
+
+/**
+ * Where a root-relative link to a content file (`/guide/new.md`, the way
+ * VitePress, Docsify, and TypeDoc write one) lands: the route of the source
+ * file it names under the content root, with the authored `?query#hash`
+ * kept, or `undefined` when it names no source file (or isn't a root-relative
+ * `.md`/`.mdx` link at all). It's read as written from the content root, or,
+ * when it starts with `deployment.base`, as including the base (see
+ * `withBasePath`). `routeOfFile` maps an absolute source path to the route
+ * that file publishes at. A link that names no source file is left alone:
+ * `/guide/new.md` is also the URL of a page's Markdown copy, which a link may
+ * mean on purpose.
+ */
+export const resolveRootFileHref = (
+  href: string,
+  options: {
+    contentRoot: string;
+    deployBase: string;
+    routeOfFile: (file: string) => string | undefined;
+  }
+): string | undefined => {
+  if (!isInternalPath(href)) {
+    return undefined;
+  }
+  const suffixAt = href.search(/[?#]/u);
+  const path = suffixAt === -1 ? href : href.slice(0, suffixAt);
+  if (!DOC_EXT.test(path)) {
+    return undefined;
+  }
+  const route = options.routeOfFile(
+    join(
+      options.contentRoot,
+      stripBasePath(options.deployBase, decodePercent(path))
+    )
+  );
+  return route === undefined
+    ? undefined
+    : `${route}${suffixAt === -1 ? "" : href.slice(suffixAt)}`;
 };
 
 /**
@@ -300,6 +400,124 @@ const servedRoute = (
       })
     : authored;
 
+/**
+ * The fix for a relative link to a content file that exists but is a
+ * partial: a name starting with `_`, or a file under such a folder, which
+ * the default `content.exclude` leaves unpublished. Undefined for any other
+ * link, whose file is missing or was left out for another reason.
+ */
+const partialLinkHint = (
+  link: PageLink,
+  page: PageRecord
+): string | undefined => {
+  const path = decodePercent(link.target.split(/[?#]/u)[0] ?? "");
+  if (
+    link.raw ||
+    !page.sourcePath ||
+    path.startsWith("/") ||
+    !DOC_EXT.test(path) ||
+    !path.split("/").some((segment) => segment.startsWith("_")) ||
+    !existsSync(resolve(dirname(page.sourcePath), path))
+  ) {
+    return undefined;
+  }
+  return `${path} exists, but a name starting with "_" marks a partial, which isn't published as a page. Splice it in with <include> instead, rename it to publish it, or add "!**/_*" to content.exclude to publish every underscore file.`;
+};
+
+const HTML_EXT = /\.html?$/iu;
+
+/**
+ * The page an `.html` link means, when one is served there: `/guides/setup`
+ * for `/guides/setup.html`, `/guides` for `/guides/index.html`. A page is
+ * served at its route, never at an `.html` URL (only a `public/` file is),
+ * so the link 404s, and this is the route to link instead. Resolved like
+ * any page link: based unless raw, then moved into the reader's locale.
+ */
+const htmlPageRoute = (
+  resolved: string,
+  page: PageRecord,
+  link: PageLink,
+  ctx: LinkContext
+): string | undefined => {
+  if (!HTML_EXT.test(resolved)) {
+    return undefined;
+  }
+  const path = resolved.replace(HTML_EXT, "");
+  const authored = toRoute(link.raw ? path : withBasePath(ctx.basePath, path));
+  const route = servedRoute(authored, page, ctx);
+  return ctx.routes.has(route) || ctx.extraRoutes.has(route)
+    ? authored
+    : undefined;
+};
+
+/**
+ * Validate a link to a file (`./spec.pdf`, `/logo.png`, `![](./a.png)`) that
+ * no route, redirect, or public file answers: an image embed or a link
+ * beside the page, or else a missing file.
+ */
+const checkFileLink = (
+  resolved: string,
+  assetPath: string,
+  page: PageRecord,
+  link: PageLink,
+  site: LinkSite,
+  ctx: LinkContext,
+  via: string
+): LinkResult => {
+  // A colocated image embed (`![](./diagram.png)`) is resolved from beside
+  // the page source and emitted to `_astro/` by the image pipeline, so it
+  // never lands in `public/`. The *raw* target goes through the same
+  // resolver that decides what the `/blume-assets/content` endpoint serves,
+  // so a reference the rewriter skips (a `?v=2` suffix, a double-encoded
+  // name) is reported here, not accepted.
+  if (link.image && page.sourcePath && isRelativeImageTarget(link.target)) {
+    if (resolveRelativeImage(dirname(page.sourcePath), link.target)) {
+      return null;
+    }
+    // A partial-origin image was rebased into the page's directory for
+    // resolution but reports against the partial — cite the path as
+    // authored there, so file, path, and "next to" agree.
+    const authored = link.file
+      ? authoredImageTarget(link.target, page.sourcePath, link.file)
+      : link.target;
+    return {
+      ...site,
+      code: "BLUME_BROKEN_ASSET",
+      message: `Image ${authored} was not found next to ${basename(link.file ?? page.sourcePath)}.`,
+      severity: "warning",
+      suggestion: "Add the file next to the page source or fix the reference.",
+    };
+  }
+  // A relative link to any other file beside the page (`./spec.pdf`) is
+  // published with it and pointed at its served copy, by the same resolver
+  // (see `core/content-assets.ts`); an image embed of one isn't.
+  if (
+    !link.image &&
+    page.sourcePath &&
+    resolveRelativeFile(dirname(page.sourcePath), link.target)
+  ) {
+    return null;
+  }
+  const pageRoute = htmlPageRoute(resolved, page, link, ctx);
+  if (pageRoute !== undefined) {
+    return {
+      ...site,
+      code: "BLUME_BROKEN_ASSET",
+      message: `Link ${link.target}${via} points at ${assetPath}, which public/ doesn't have, and pages aren't served at .html URLs.`,
+      severity: "warning",
+      suggestion: `Link the page at ${pageRoute} instead.`,
+    };
+  }
+  // With no `public/` folder at all, the site ships no such file either.
+  return {
+    ...site,
+    code: "BLUME_BROKEN_ASSET",
+    message: `Asset ${assetPath} was not found in the public directory.`,
+    severity: "warning",
+    suggestion: `Add the file at public${assetPath} or fix the link.`,
+  };
+};
+
 /** Validate a resolved internal path: asset, route, then optional anchor. */
 const checkPathLink = (
   resolved: string,
@@ -312,10 +530,13 @@ const checkPathLink = (
 ): LinkResult => {
   // Page routes carry the site-wide base; an absolute author path is written
   // as if mounted at root, so base it for the route lookup (idempotent — a
-  // relative link already resolved against the based `page.route`). A real
-  // route always wins over the asset-extension heuristic, so a dotted route
-  // (e.g. `/releases/v1.0`) isn't misread as a missing asset.
-  const authoredRoute = toRoute(withBasePath(ctx.basePath, resolved));
+  // relative link already resolved against the based `page.route`). A raw
+  // `<a href>` ships unbased, so it's looked up as written. A real route
+  // always wins over the asset-extension heuristic, so a dotted route (e.g.
+  // `/releases/v1.0`) isn't misread as a missing asset.
+  const authoredRoute = toRoute(
+    link.raw ? resolved : withBasePath(ctx.basePath, resolved)
+  );
   const route = servedRoute(authoredRoute, page, ctx);
   if (ctx.routes.has(route)) {
     return fragment ? checkAnchor(route, fragment, site, ctx, via) : null;
@@ -339,50 +560,15 @@ const checkPathLink = (
   }
 
   // Assets live in `public/` at the site root, unaffected by the base, so strip
-  // it back off before probing the filesystem.
+  // it back off before probing the filesystem. Blume's own generated files
+  // (`/llms.txt`, `/sitemap.xml`) sit beside them, and a `public/` folder
+  // with an `index.html` is served at its path, as a static host serves it.
   const assetPath = stripBasePath(ctx.basePath, resolved);
+  if (ctx.servesFile(assetPath)) {
+    return null;
+  }
   if (FILE_EXT.test(assetPath) && !DOC_EXT.test(assetPath)) {
-    if (assetIsPresent(assetPath, ctx)) {
-      return null;
-    }
-    // A colocated image embed (`![](./diagram.png)`) is resolved from beside
-    // the page source and emitted to `_astro/` by the image pipeline, so it
-    // never lands in `public/`. The *raw* target goes through the same
-    // resolver that decides what the `/blume-assets/content` endpoint serves,
-    // so a reference the rewriter skips (a `?v=2` suffix, a double-encoded
-    // name) is reported here, not accepted. Plain links to the same path stay
-    // on the public-dir probe — an href resolves as a site route, and only
-    // image nodes are rewritten.
-    if (link.image && page.sourcePath && isRelativeImageTarget(link.target)) {
-      if (resolveRelativeImage(dirname(page.sourcePath), link.target)) {
-        return null;
-      }
-      // A partial-origin image was rebased into the page's directory for
-      // resolution but reports against the partial — cite the path as
-      // authored there, so file, path, and "next to" agree.
-      const authored = link.file
-        ? authoredImageTarget(link.target, page.sourcePath, link.file)
-        : link.target;
-      return {
-        ...site,
-        code: "BLUME_BROKEN_ASSET",
-        message: `Image ${authored} was not found next to ${basename(link.file ?? page.sourcePath)}.`,
-        severity: "warning",
-        suggestion:
-          "Add the file next to the page source or fix the reference.",
-      };
-    }
-    // Nowhere to look: no `public/` directory.
-    if (ctx.publicDir === null) {
-      return "asset-unchecked";
-    }
-    return {
-      ...site,
-      code: "BLUME_BROKEN_ASSET",
-      message: `Asset ${assetPath} was not found in the public directory.`,
-      severity: "warning",
-      suggestion: `Add the file at public${assetPath} or fix the link.`,
-    };
+    return checkFileLink(resolved, assetPath, page, link, site, ctx, via);
   }
 
   return {
@@ -390,7 +576,54 @@ const checkPathLink = (
     code: "BLUME_BROKEN_LINK",
     message: `Broken link to ${link.target}${via}: no page resolves to ${route}.`,
     severity: "error",
-    suggestion: "Check the path, or create the target page.",
+    suggestion:
+      partialLinkHint(link, page) ??
+      "Check the path, or create the target page.",
+  };
+};
+
+/**
+ * Validate a media element's `src` (`<img src>`, `<video src>`), which
+ * `resolved` reads the way the browser does: a file the site serves at that
+ * URL (in `public/`, or one Blume generates), or a relative path naming a
+ * file beside the page, which the build publishes and points the `src` at
+ * (see `core/content-assets.ts`). A partial's was rebased onto the page when
+ * its file sits beside the partial.
+ */
+const checkSourceLink = (
+  rawPath: string,
+  resolved: string,
+  page: PageRecord,
+  link: PageLink,
+  site: LinkSite,
+  ctx: LinkContext,
+  via: string
+): LinkResult => {
+  if (ctx.servesFile(resolved)) {
+    return null;
+  }
+  const sourceFile = link.file ?? page.sourcePath;
+  if (rawPath.startsWith("/") || sourceFile === undefined) {
+    return {
+      ...site,
+      code: "BLUME_BROKEN_ASSET",
+      message: `<${link.src} src="${link.target}">${via} points at ${resolved}, which isn't in the public directory.`,
+      severity: "warning",
+      suggestion: `Add the file at public${resolved} or fix the src.`,
+    };
+  }
+  if (
+    page.sourcePath &&
+    resolveRelativeFile(dirname(page.sourcePath), link.target)
+  ) {
+    return null;
+  }
+  return {
+    ...site,
+    code: "BLUME_BROKEN_ASSET",
+    message: `<${link.src} src="${link.target}">${via} points at ${resolved}, which isn't in the public directory, and there's no ${rawPath} next to ${basename(sourceFile)} either.`,
+    severity: "warning",
+    suggestion: "Fix the path, or add the file.",
   };
 };
 
@@ -436,6 +669,12 @@ export interface FileRouteIndex {
    * into the reader's locale onto the fallback copy.
    */
   byDefaultNavPath: Map<string, string>;
+  /**
+   * A staged page's entry id (`<source>/<ref>`) → its route. A remote
+   * source's files have no path on disk, so a file link between two of them
+   * (`./02-errors.mdx`) resolves by entry id, as the rendered link does.
+   */
+  byEntryId: Map<string, string>;
 }
 
 /** The linking side of a file link: where the page's source lives. */
@@ -450,12 +689,19 @@ export const buildFileRouteIndex = (
 ): FileRouteIndex => {
   const bySource = new Map<string, string>();
   const byDefaultNavPath = new Map<string, string>();
+  const byEntryId = new Map<string, string>();
   for (const page of pages) {
-    const { sourcePath } = page;
-    if (!sourcePath || page.fallback) {
+    const { entryId, sourcePath } = page;
+    if (page.fallback) {
       continue;
     }
     const isDefault = page.locale === i18n?.defaultLocale;
+    if (entryId && (!byEntryId.has(entryId) || isDefault)) {
+      byEntryId.set(entryId, page.route);
+    }
+    if (!sourcePath) {
+      continue;
+    }
     if (!bySource.has(sourcePath) || isDefault) {
       bySource.set(sourcePath, page.route);
     }
@@ -463,7 +709,7 @@ export const buildFileRouteIndex = (
       byDefaultNavPath.set(normalize(page.navPath), page.route);
     }
   }
-  return { byDefaultNavPath, bySource };
+  return { byDefaultNavPath, byEntryId, bySource };
 };
 
 /**
@@ -480,6 +726,18 @@ export const routeOfLinkedFile = (
   index.byDefaultNavPath.get(normalize(join(dirname(from.navPath), path)));
 
 /**
+ * The route a file link written on a staged page lands on: the linked
+ * entry's, by its path under the staging dir (`entryId`), as the rendered
+ * link resolves it.
+ */
+export const routeOfLinkedEntry = (
+  index: FileRouteIndex,
+  entryId: string,
+  path: string
+): string | undefined =>
+  index.byEntryId.get(normalize(join(dirname(entryId), path)));
+
+/**
  * The path a relative link on `page` resolves to — the same reading the
  * Markdown pipeline rewrites the rendered `href` to (see
  * {@link resolveRelativeHref}), so what's checked is what ships. A relative
@@ -492,16 +750,41 @@ const relativeTarget = (
   ctx: LinkContext
 ): string => {
   const base = { isIndex: isIndexPage(page), route: page.route };
-  const { navPath, sourcePath } = page;
-  const resolveFile = sourcePath
-    ? (path: string) =>
-        routeOfLinkedFile(ctx.fileRoutes, { navPath, sourcePath }, path)
-    : undefined;
+  const { entryId, navPath, sourcePath } = page;
+  let resolveFile: ((path: string) => string | undefined) | undefined;
+  if (sourcePath) {
+    resolveFile = (path) =>
+      routeOfLinkedFile(ctx.fileRoutes, { navPath, sourcePath }, path);
+  } else if (entryId) {
+    resolveFile = (path) => routeOfLinkedEntry(ctx.fileRoutes, entryId, path);
+  }
   return (
     resolveRelativeHref(rawPath, base, resolveFile, (route) =>
       ctx.routes.has(route)
     ) ?? resolveRelative(page.route, rawPath, base.isIndex)
   );
+};
+
+/** The path a decoded, suffix-less internal link on `page` lands on. */
+const resolveLinkPath = (
+  page: PageRecord,
+  link: PageLink,
+  rawPath: string,
+  ctx: LinkContext
+): string => {
+  if (!rawPath.startsWith("/")) {
+    // A raw `<a href>` isn't rewritten, so the browser resolves it against
+    // the page's slashless URL: its parent directory, even on an index page.
+    return link.raw
+      ? resolveRelative(page.route, rawPath, false)
+      : relativeTarget(page, rawPath, ctx);
+  }
+  // A root-relative link naming a content file lands on that file's page,
+  // as the Markdown pipeline rewrites it; one naming no file stays as
+  // written (a page's Markdown copy, say).
+  return link.raw || link.image
+    ? rawPath
+    : (ctx.rootFileRoute(rawPath) ?? rawPath);
 };
 
 /** Classify a single link, queueing external refs via `onExternal`. */
@@ -527,9 +810,19 @@ const classifyLink = (
     });
     return null;
   }
-  if (SCHEME.test(target)) {
-    // mailto:, tel:, and other non-HTTP schemes are not validated.
-    return null;
+  const scheme = SCHEME.exec(target)?.[0];
+  if (scheme !== undefined) {
+    // mailto:, tel:, and other non-HTTP schemes are not validated — except a
+    // platform's own, which no browser follows.
+    return PLATFORM_SCHEMES.has(scheme.toLowerCase())
+      ? {
+          ...site,
+          code: "BLUME_UNSUPPORTED_LINK_SCHEME",
+          message: `Link ${target} uses ReadMe's ${scheme} scheme, which browsers can't follow, so it ships as a dead link.`,
+          severity: "warning",
+          suggestion: "Link the page by its path instead, like /guides/setup.",
+        }
+      : null;
   }
 
   const hashIndex = target.indexOf("#");
@@ -555,10 +848,113 @@ const classifyLink = (
     return fragment ? checkAnchor(page.route, fragment, site, ctx, via) : null;
   }
 
-  const resolved = rawPath.startsWith("/")
-    ? rawPath
-    : relativeTarget(page, rawPath, ctx);
+  const resolved = resolveLinkPath(page, link, rawPath, ctx);
+  if (link.src) {
+    return checkSourceLink(rawPath, resolved, page, link, site, ctx, via);
+  }
   return checkPathLink(resolved, fragment, page, link, site, ctx, via);
+};
+
+/**
+ * Whether an exact redirect target lands somewhere the site serves: a page, a
+ * custom or generated route, a `public/` or generated file, or another
+ * redirect (a chain, which `blume audit` reports on the built site). `self`
+ * is the redirect's own based `from`, which leads nowhere but back.
+ */
+const redirectLands = (
+  path: string,
+  self: string,
+  ctx: LinkContext
+): boolean => {
+  const route = toRoute(withBasePath(ctx.basePath, path));
+  const redirected =
+    ctx.redirects.has(route) ||
+    ctx.redirectPatterns.some(
+      (from) => pathsUnderPattern(from, [route]).length > 0
+    );
+  return (
+    ctx.routes.has(route) ||
+    ctx.extraRoutes.has(route) ||
+    (route !== self && redirected) ||
+    ctx.servesFile(stripBasePath(ctx.basePath, path))
+  );
+};
+
+/**
+ * Whether anything the site serves sits under a pattern target's literal
+ * start (`/guides/` for `/guides/:slug*`): a page, a custom or generated
+ * route, a redirect, or a `public/` folder. Which path a capture fills in
+ * can't be known before a request, so the prefix is what's checked.
+ */
+const redirectLandsUnder = (
+  prefix: string,
+  ctx: LinkContext,
+  publicDir: string | null
+): boolean => {
+  const based = withBasePath(ctx.basePath, prefix);
+  const folder = prefix.slice(0, prefix.lastIndexOf("/") + 1);
+  return (
+    [...ctx.routes, ...ctx.extraRoutes, ...ctx.redirects].some((route) =>
+      `${route}/`.startsWith(based)
+    ) ||
+    (publicDir !== null &&
+      statSync(join(publicDir, folder), {
+        throwIfNoEntry: false,
+      })?.isDirectory() === true)
+  );
+};
+
+/**
+ * Warn about each internal redirect `to` that lands nowhere, located at its
+ * `to` in the config file when the redirects are written there. `blume audit`
+ * follows redirects through the built site; this catches a dead end before
+ * the build. External targets aren't checked.
+ */
+const redirectTargetDiagnostics = (
+  redirects: readonly { from: string; to: string }[],
+  ctx: LinkContext,
+  options: { configFile?: string; publicDir: string | null }
+): Diagnostic[] => {
+  const { configFile, publicDir } = options;
+  let source: string | undefined;
+  return redirects.flatMap((redirect, index): Diagnostic[] => {
+    if (!isInternalPath(redirect.to)) {
+      return [];
+    }
+    const path = decodePercent(redirect.to.split(/[?#]/u)[0] ?? "");
+    const prefix = destinationPrefix(path);
+    const lands =
+      prefix === undefined
+        ? redirectLands(
+            path,
+            toRoute(withBasePath(ctx.basePath, redirect.from)),
+            ctx
+          )
+        : redirectLandsUnder(prefix, ctx, publicDir);
+    if (lands) {
+      return [];
+    }
+    if (configFile && source === undefined) {
+      source = readFileSync(configFile, "utf-8");
+    }
+    const position = source
+      ? locatePath(source, ["redirects", index, "to"])
+      : undefined;
+    return [
+      {
+        code: "BLUME_BROKEN_REDIRECT",
+        column: position?.column,
+        file: configFile,
+        line: position?.line,
+        message:
+          prefix === undefined
+            ? `The redirect from ${redirect.from} sends readers to ${redirect.to}, which no page, file, or other redirect serves.`
+            : `The redirect from ${redirect.from} sends readers to ${redirect.to}, but nothing is served under ${prefix}.`,
+        severity: "warning",
+        suggestion: "Point `to` at a page that exists, or remove the redirect.",
+      },
+    ];
+  });
 };
 
 /**
@@ -578,22 +974,45 @@ export const validateLinks = async (
      * full-route-set resolution in `nav-diagnostics.ts`/`generateRuntime`.
      */
     extraRoutes?: string[];
+    /**
+     * The files the build generates beside `public/` (`/llms.txt`,
+     * `/sitemap.xml`; see `deploy/generated-files.ts`), base-less: links to
+     * them resolve like links to `public/` files.
+     */
+    generatedFiles?: string[];
     /** Locale routing when i18n is on; links then resolve into the page's locale. */
     i18n?: LocaleRouting | null;
+    /** The project's `public/` folder, or `null` when it has none (and so
+     * ships no public files). */
     publicDir: string | null;
     checkExternal?: boolean;
-    /** Configured redirects; their `from` paths count as valid link targets. */
-    redirects?: { from: string }[];
+    /** External URLs not to request (`--ignore`). Internal links are always checked. */
+    ignore?: (url: string) => boolean;
+    /**
+     * Configured redirects: their `from` paths count as valid link targets,
+     * and an internal `to` must land somewhere the site serves.
+     */
+    redirects?: { from: string; to: string }[];
+    /** The config file the redirects are written in, for their positions. */
+    configFile?: string;
+    /**
+     * The `docs` collection's content root, which a root-relative link to a
+     * content file (`/guide/new.md`) is read from.
+     */
+    contentRoot?: string;
+    /** `deployment.base` (`""` or `/seg`), which such a link may start with. */
+    deployBase?: string;
   }
 ): Promise<Diagnostic[]> => {
   const basePath = options.basePath ?? "";
+  const fileRoutes = buildFileRouteIndex(graph.pages, options.i18n ?? null);
+  const { contentRoot } = options;
   const ctx: LinkContext = {
     anchors: buildAnchorIndex(graph.pages),
     basePath,
     extraRoutes: new Set((options.extraRoutes ?? []).map(toRoute)),
-    fileRoutes: buildFileRouteIndex(graph.pages, options.i18n ?? null),
+    fileRoutes,
     i18n: options.i18n ?? null,
-    publicDir: options.publicDir,
     redirectPatterns: (options.redirects ?? []).flatMap((redirect) =>
       isPatternPath(redirect.from)
         ? [withBasePath(basePath, redirect.from)]
@@ -604,33 +1023,40 @@ export const validateLinks = async (
         toRoute(withBasePath(basePath, redirect.from))
       )
     ),
+    rootFileRoute: (href) =>
+      contentRoot === undefined
+        ? undefined
+        : resolveRootFileHref(href, {
+            contentRoot,
+            deployBase: options.deployBase ?? "",
+            routeOfFile: (file) => fileRoutes.bySource.get(file),
+          }),
     routes: new Set(graph.routes.keys()),
+    servesFile: staticFileResolver(options.publicDir, options.generatedFiles),
   };
   const diagnostics: Diagnostic[] = [];
   const external: ExternalRef[] = [];
-  let uncheckedAssets = 0;
 
   for (const page of graph.pages) {
     for (const link of page.links) {
       const result = classifyLink(page, link, ctx, (ref) => external.push(ref));
-      if (result === "asset-unchecked") {
-        uncheckedAssets += 1;
-      } else if (result) {
+      if (result) {
         diagnostics.push(result);
       }
     }
   }
+  diagnostics.push(
+    ...redirectTargetDiagnostics(options.redirects ?? [], ctx, {
+      configFile: options.configFile,
+      publicDir: options.publicDir,
+    })
+  );
 
-  if (uncheckedAssets > 0) {
-    diagnostics.push({
-      code: "BLUME_ASSETS_UNCHECKED",
-      message: `${uncheckedAssets} asset link(s) not checked: no public/ directory found.`,
-      severity: "info",
-    });
-  }
-
-  if (options.checkExternal && external.length > 0) {
-    diagnostics.push(...(await checkExternalLinks(external)));
+  // `--ignore` names URLs that can't be checked from where this runs: a
+  // placeholder host, a local server, a site that turns bots away.
+  const probed = external.filter((ref) => !options.ignore?.(ref.url));
+  if (options.checkExternal && probed.length > 0) {
+    diagnostics.push(...(await checkExternalLinks(probed)));
   }
 
   // A partial spliced into several pages (or every locale of one) yields the

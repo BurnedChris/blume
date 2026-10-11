@@ -1,0 +1,537 @@
+---
+// Collect documentation feedback and turn it into fixes: checked against the
+// page feedback, analytics, consent, search analytics, and last-modified docs,
+// and the source on main (core/schema.ts feedbackConfigSchema,
+// components/layout/PageFeedback.astro and page-feedback.ts,
+// components/layout/analytics-client.ts, analytics/posthog.ts,
+// core/i18n-ui.ts); PostHog's SQL editor, SQL expressions, and reverse proxy
+// docs; GA4's collection limits; Mixpanel's property data types; and Vercel's
+// custom events limits. Ran: a headless Chromium script against the docs'
+// running `blume dev` with `window.posthog` stubbed, which rated a page "No"
+// and submitted a comment through a copy of the `comments: true` form markup
+// (both events reached `posthog.capture` and `blume:track` with the
+// properties shown here; a 1,200-character comment arrived as 1,000); and the
+// report query's aggregation, written in plain ClickHouse SQL, over synthetic
+// events in chDB, which produced the sample output below; and Node's
+// timingSafeEqual length error, quoted in a synthetic comment. The HogQL itself
+// was not run against a PostHog project. Review: rechecked the adapter table
+// against analytics-client.ts, Vercel's custom-events limits and pricing pages
+// (no custom events on Hobby, 2 properties on Pro), Mixpanel's data types page,
+// and PostHog's {filters} docs; `feedback.comments` and `consent` are pending
+// changesets, not in the npm release (publish with it). Not yet run end to end.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import Callout from "blume/components/content/Callout.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("documentation-feedback-analytics")}>
+  <p>
+    Every Blume docs page ends with a "Was this page helpful?" rating, and it's
+    on by default. Blume doesn't store the answers. Each rating goes out as a{" "}
+    <code>feedback</code> event through your analytics adapters, so to find the
+    pages that confuse readers you need three things: an adapter that records
+    event properties, a comment box that asks readers what went wrong, and a
+    query that ranks pages by how often readers said no.
+  </p>
+  <p>
+    This guide sets that up with PostHog. You turn on written feedback, confirm
+    the events arrive, build a page-level helpfulness report in SQL, read the
+    comments behind the worst pages, and ship a fix with a record of why. The
+    same events reach Mixpanel, Segment, Google Analytics, and most other
+    adapters, with the limits covered below.
+  </p>
+  <p>
+    Without an analytics adapter, the widget still shows and thanks the reader,
+    but the answer goes nowhere. Add an adapter or set{" "}
+    <code>feedback: false</code>. And if you need to reply to the person who
+    wrote in, this is the wrong tool: the widget is anonymous and has no reply
+    path, so send those readers to your support channel instead.
+  </p>
+
+  <h2>What the widget sends</h2>
+  <p>
+    A reader clicks <strong>Yes</strong> or <strong>No</strong>, and with
+    comments on, a "Tell us more (optional)" box appears under the thank-you.
+    That produces up to two events:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Event</th>
+        <th scope="col">Sent when</th>
+        <th scope="col">Properties</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>feedback</code></td>
+        <td>The reader rates the page</td>
+        <td>
+          <code>helpful</code> (<code>"yes"</code> or <code>"no"</code>),{" "}
+          <code>path</code>, <code>title</code>
+        </td>
+      </tr>
+      <tr>
+        <td><code>feedback_comment</code></td>
+        <td>The reader sends a comment after rating</td>
+        <td>
+          The same three, plus <code>comment</code>, cut at 1,000 characters
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    <code>path</code> is the URL path the reader was on, like{" "}
+    <code>/docs/webhooks/verify-signatures</code>, and <code>title</code> is the
+    browser tab title, like "Verify signatures - Acme Docs". An empty comment
+    sends nothing. Both events also fire as a <code>blume:track</code> event on{" "}
+    <code>window</code>, which is how you'll check them locally.
+  </p>
+
+  <h2>Choose a provider that keeps the comment</h2>
+  <p>
+    Every adapter with an event API gets these events, but not every provider
+    keeps what you need. A rating is useless without its <code>helpful</code>{" "}
+    value, and a comment is only as good as the part that survives:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Adapter</th>
+        <th scope="col">What you get</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>posthog()</code>, <code>segment()</code></td>
+        <td>Ratings and whole comments</td>
+      </tr>
+      <tr>
+        <td><code>mixpanel()</code></td>
+        <td>
+          Ratings, and comments up to Mixpanel's 255-byte limit on string
+          values
+        </td>
+      </tr>
+      <tr>
+        <td><code>vercel()</code></td>
+        <td>
+          Nothing on Hobby, which has no custom events. Pro keeps two
+          properties per event, fewer than a rating sends; Web Analytics Plus
+          keeps eight. Values over 255 characters aren't allowed
+        </td>
+      </tr>
+      <tr>
+        <td><code>googleAnalytics()</code></td>
+        <td>Ratings, and comments cut at 100 characters</td>
+      </tr>
+      <tr>
+        <td><code>plausible()</code></td>
+        <td>
+          Ratings; comments are grouped by identical value, so it suits ratings
+          better
+        </td>
+      </tr>
+      <tr>
+        <td><code>fathom()</code>, <code>clarity()</code>, <code>hotjar()</code></td>
+        <td>The event name only: a count of ratings, with no yes or no</td>
+      </tr>
+      <tr>
+        <td>
+          <code>cloudflare()</code>, <code>clearbit()</code>, <code>clics()</code>
+        </td>
+        <td>Nothing: they have no event API for Blume to call</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Heap, Amplitude, Hightouch, LogRocket, Adobe, Google Tag Manager, Databuddy,
+    Pirsch, and OneDollarStats get the full properties too, so check that
+    provider's own limit on property length. This guide uses PostHog because it
+    keeps comments whole and lets you query events with SQL.
+  </p>
+
+  <h2>Turn on comments and PostHog</h2>
+  <p>
+    Add the adapter with your PostHog project API key, and switch{" "}
+    <code>feedback</code> from its default to an object with{" "}
+    <code>comments</code> on:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { posthog } from "blume/analytics";
+
+export default defineConfig({
+  title: "Acme Docs",
+  analytics: [
+    posthog({
+      key: "phc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      host: "https://us.i.posthog.com",
+    }),
+  ],
+  feedback: { comments: true },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The project key is the public, browser-side one from PostHog's install
+    snippet, so it's safe to commit. For PostHog EU Cloud, set{" "}
+    <code>host</code> to <code>https://eu.i.posthog.com</code>. Any other
+    option you pass goes to <code>posthog.init</code> as it is, as long as it's
+    a JSON value: functions fail config validation.
+  </p>
+
+  <h3>Consent and personal details</h3>
+  <p>
+    If you need to ask readers before analytics runs, add a{" "}
+    <a href="/docs/configuration/consent">consent adapter</a>:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { posthog } from "blume/analytics";
+import { native } from "blume/consent";
+
+export default defineConfig({
+  title: "Acme Docs",
+  analytics: [
+    posthog({
+      key: "phc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      host: "https://us.i.posthog.com",
+    }),
+  ],
+  consent: native({ policy: "/privacy" }),
+  feedback: { comments: true },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    With consent on, the rating stays hidden until the reader allows analytics,
+    since from anyone else the answer would go nowhere. Your report then covers
+    only readers who said yes, which is a smaller and possibly different group.
+    Keep that in mind before you compare numbers with a period when consent
+    was off.
+  </p>
+  <p>
+    The comment box takes free text, so readers will sometimes type an email
+    address, an account ID, or an API key. Treat comments as personal data:
+    limit who can open the PostHog project, mention the feedback box in your
+    privacy policy, and never paste raw comments into a public issue or pull
+    request.
+  </p>
+
+  <h2>Check that events arrive</h2>
+  <p>
+    Analytics loads in production builds only, so <code>blume dev</code> never
+    sends anything to PostHog. The <code>blume:track</code> event still fires
+    there, so you can check the widget before you deploy. Run{" "}
+    <code>npx blume dev</code>, open any docs page, and paste this into the
+    browser console:
+  </p>
+  <CodeBlock
+    code={`addEventListener("blume:track", (event) => console.log(event.detail));`}
+    lang="js"
+  />
+  <p>
+    Click <strong>No</strong> at the foot of the page (with consent on, accept
+    the banner first), type a comment, and send it. The console logs both
+    events:
+  </p>
+  <CodeBlock
+    code={`{ event: "feedback", props: { helpful: "no", path: "/docs/webhooks/verify-signatures", title: "Verify signatures - Acme Docs" } }
+{ event: "feedback_comment", props: { comment: "Test comment", helpful: "no", path: "/docs/webhooks/verify-signatures", title: "Verify signatures - Acme Docs" } }`}
+    lang="txt"
+  />
+  <p>
+    After you deploy, rate a page on the live site, then open PostHog's SQL
+    editor and look for your events:
+  </p>
+  <CodeBlock
+    code={`SELECT timestamp, event, properties.path, properties.helpful, properties.comment
+FROM events
+WHERE event IN ('feedback', 'feedback_comment')
+  AND timestamp > now() - INTERVAL 1 DAY
+ORDER BY timestamp DESC
+LIMIT 20`}
+    lang="sql"
+  />
+  <p>
+    Custom properties like <code>path</code> have no <code>$</code> prefix in
+    PostHog; the <code>$</code> ones are PostHog's own.
+  </p>
+
+  <h2>Build a page-level report</h2>
+  <p>
+    Once ratings have built up, this query ranks pages by how many readers
+    said no, with the rate and comment count beside it:
+  </p>
+  <CodeBlock
+    code={`SELECT
+  properties.path AS page,
+  countIf(event = 'feedback') AS ratings,
+  countIf(event = 'feedback' AND properties.helpful = 'no') AS not_helpful,
+  round(100 * countIf(event = 'feedback' AND properties.helpful = 'no') / countIf(event = 'feedback')) AS not_helpful_pct,
+  countIf(event = 'feedback_comment') AS comments
+FROM events
+WHERE event IN ('feedback', 'feedback_comment')
+  AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY page
+HAVING ratings >= 10
+ORDER BY not_helpful DESC, not_helpful_pct DESC
+LIMIT 25`}
+    lang="sql"
+  />
+  <p>
+    Here's the kind of output it gives, from made-up events for the Acme docs:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">page</th>
+        <th scope="col">ratings</th>
+        <th scope="col">not_helpful</th>
+        <th scope="col">not_helpful_pct</th>
+        <th scope="col">comments</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>/docs/messages/send-sms</code></td>
+        <td>50</td>
+        <td>13</td>
+        <td>26</td>
+        <td>7</td>
+      </tr>
+      <tr>
+        <td><code>/docs/webhooks/verify-signatures</code></td>
+        <td>31</td>
+        <td>11</td>
+        <td>35</td>
+        <td>9</td>
+      </tr>
+      <tr>
+        <td><code>/docs/quickstart</code></td>
+        <td>152</td>
+        <td>11</td>
+        <td>7</td>
+        <td>6</td>
+      </tr>
+      <tr>
+        <td><code>/docs/authentication</code></td>
+        <td>76</td>
+        <td>9</td>
+        <td>12</td>
+        <td>2</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Read it both ways. The count favors busy pages: the quickstart has as many
+    "no" ratings as the webhook page, but out of five times the ratings, so 7%
+    is close to background noise. The rate favors quiet pages, which is why{" "}
+    <code>HAVING ratings &gt;= 10</code> drops any page with too few ratings to
+    mean anything. Lower that floor on a small site, and raise it on a busy
+    one. Here, the webhook page is where to start: over a third of its ratings
+    are no, and it has the most comments to read.
+  </p>
+  <p>
+    Save the query as an insight so the team can reopen it. If you'd rather
+    pick the window from the insight's date range, replace the{" "}
+    <code>timestamp</code> condition with <code>AND {"{filters}"}</code>, and
+    the same insight gives you before and after numbers later.
+  </p>
+
+  <h2>Read the comments behind a page</h2>
+  <p>Pull every comment for the page you picked:</p>
+  <CodeBlock
+    code={`SELECT timestamp, properties.helpful AS helpful, properties.comment AS comment
+FROM events
+WHERE event = 'feedback_comment'
+  AND properties.path = '/docs/webhooks/verify-signatures'
+  AND timestamp > now() - INTERVAL 30 DAY
+ORDER BY timestamp DESC`}
+    lang="sql"
+  />
+  <p>
+    Then sort each one by what it points to. Here are six of the page's nine
+    comments. They're synthetic, but typical of what the box collects:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Rating</th>
+        <th scope="col">Comment</th>
+        <th scope="col">Points to</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>no</td>
+        <td>Where do I get the signing secret? The page never says.</td>
+        <td>A missing step</td>
+      </tr>
+      <tr>
+        <td>no</td>
+        <td>signing secret??</td>
+        <td>The same missing step</td>
+      </tr>
+      <tr>
+        <td>no</td>
+        <td>
+          The Node example throws "Input buffers must have the same byte length"
+        </td>
+        <td>A broken example</td>
+      </tr>
+      <tr>
+        <td>no</td>
+        <td>I wanted SMS delivery receipts, not webhooks</td>
+        <td>The wrong page</td>
+      </tr>
+      <tr>
+        <td>no</td>
+        <td>Webhooks sometimes arrive twice</td>
+        <td>The product, not the page</td>
+      </tr>
+      <tr>
+        <td>yes</td>
+        <td>Would love a Python version</td>
+        <td>A request</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>Each kind leads somewhere different:</p>
+  <ul>
+    <li>
+      <strong>Wrong or broken.</strong> Reproduce it first. Node's{" "}
+      <code>crypto.timingSafeEqual</code> throws exactly that error when its two
+      buffers differ in length, so a signature of the wrong length crashes the
+      example instead of failing the check. Fix the example.
+    </li>
+    <li>
+      <strong>Missing.</strong> When more than one comment asks the same
+      question, the page needs the answer. Check the product for where the
+      secret really lives before you write it down.
+    </li>
+    <li>
+      <strong>Wrong page.</strong> The reader landed on a page that isn't what
+      its title or search result promised. Look at the title, the sidebar
+      label, and what readers search for (the{" "}
+      <a href="/guides/documentation-search-analytics">search analytics guide</a>{" "}
+      covers that), and link to the page they wanted.
+    </li>
+    <li>
+      <strong>Product problems.</strong> Duplicate deliveries are a bug report.
+      Send it to the product team; rewriting the page won't fix it.
+    </li>
+    <li>
+      <strong>Requests and noise.</strong> Log requests where you plan docs
+      work, and skip comments with nothing to act on.
+    </li>
+  </ul>
+  <Callout type="warning">
+    A "no" says something went wrong for one reader, not what to change. Look
+    for a theme across several comments, confirm it against the product, and
+    then edit. Don't pipe comments into an agent that rewrites pages on its
+    own: comments can be wrong, can hold personal details, and can contain text
+    written to steer a model. If an agent helps with the edit, give it your
+    confirmed finding, not the raw comments.
+  </Callout>
+
+  <h2>Ship the fix and record why</h2>
+  <p>
+    Make the change in a pull request whose description carries the evidence,
+    so a reviewer can check the reasoning and a later reader can find out why
+    the page changed. Paraphrase the comments and count them; don't quote
+    them:
+  </p>
+  <CodeBlock
+    code={`Fix signature verification page after reader feedback
+
+Feedback on /docs/webhooks/verify-signatures, last 30 days:
+31 ratings, 11 not helpful (35%), 9 comments.
+
+Themes (paraphrased):
+- 2 comments: readers can't find the signing secret.
+- 1 comment: the Node example throws when signature lengths differ.
+  Reproduced locally.
+
+Not changed here:
+- Duplicate deliveries: reported to the platform team.
+- Python example: added to the docs backlog.
+
+Changes:
+- New "Find your signing secret" section, checked against the dashboard.
+- The Node example compares lengths before timingSafeEqual.
+
+Follow-up: rerun the feedback report for this page once it has
+about as many new ratings as this window.`}
+    lang="md"
+  />
+  <p>
+    If you set <code>lastModified: "git"</code> in your config, the page's
+    "Last updated on" line moves once the fix deploys, so readers can see it
+    changed too. See{" "}
+    <a href="/docs/configuration#last-modified">Last modified</a> for the
+    shallow-clone setting your CI needs.
+  </p>
+  <p>
+    Once the page has collected a similar number of new ratings, run the
+    report again for the window since the deploy. A lower rate with fewer
+    comments on the same theme is a good sign. Small samples swing, though, so
+    treat one window as a signal, and keep reading the comments that still
+    come in.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>Nothing shows up in PostHog</h3>
+  <p>
+    Check that you're looking at a production build: <code>blume dev</code>{" "}
+    never loads analytics. On the live site, run the console listener from{" "}
+    <a href="#check-that-events-arrive">Check that events arrive</a>. If{" "}
+    <code>blume:track</code> fires but PostHog gets nothing, a browser
+    extension is likely blocking PostHog's script. PostHog's{" "}
+    <a href="https://posthog.com/docs/advanced/proxy">reverse proxy docs</a>{" "}
+    cover sending events through your own domain; point <code>host</code> at
+    the proxy.
+  </p>
+  <h3>The comment box never appears</h3>
+  <p>
+    The box only shows after the reader rates the page, and only with{" "}
+    <code>feedback: {"{ comments: true }"}</code>. Setting{" "}
+    <code>enabled: false</code> in the same object turns off the rating and
+    the box together.
+  </p>
+  <h3>Comments arrive cut short</h3>
+  <p>
+    Blume sends up to 1,000 characters. Anything shorter than that in your
+    dashboard is the provider's limit: 100 characters in Google Analytics, 255
+    bytes in Mixpanel (fewer characters for non-Latin text), and 255
+    characters in Vercel. Move comments to PostHog or Segment, or bridge the{" "}
+    <code>blume:track</code> event to your own store with a{" "}
+    <a href="/docs/configuration/analytics#custom-scripts">script()</a>{" "}
+    adapter.
+  </p>
+  <h3>Ratings show up without yes or no</h3>
+  <p>
+    Fathom, Clarity, and Hotjar take a bare event name, so they count ratings
+    without the <code>helpful</code> value. Add an adapter from the table above
+    alongside them.
+  </p>
+  <h3>Some readers never see the rating</h3>
+  <p>
+    With a consent adapter set, the rating stays hidden until the reader allows
+    analytics, and a reader who declines never sees it. That's expected, and it
+    means your numbers only describe readers who opted in.
+  </p>
+  <h3>One page shows up under several paths</h3>
+  <p>
+    <code>path</code> is the URL the reader was on, so each locale and each
+    frozen version of a page reports separately, like{" "}
+    <code>/fr/docs/quickstart</code> next to <code>/docs/quickstart</code>.
+    That's usually what you want, since a translation can be wrong where the
+    source is right. To see them together, filter on the part of the path they
+    share.
+  </p>
+</GuidePage>

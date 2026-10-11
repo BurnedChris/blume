@@ -69,6 +69,8 @@ export default defineConfig({
     llmsTxt: true,
     // AI Catalog / ARD manifest at /.well-known/ai-catalog.json (needs deployment.site)
     catalog: true,
+    // Your site's agent skill at /skill.md (needs deployment.site)
+    skillMd: true,
     // MCP server (needs server output)
     mcp: {
       enabled: false,
@@ -100,6 +102,7 @@ export default defineConfig({
 | `description` | — | Standard-Meta-Beschreibung, wird für SEO und OG verwendet. |
 | `logo` | — | Bildmarke und/oder Wortmarke, die im Header angezeigt wird. |
 | `banner` | — | Websiteweite Ankündigungsleiste über dem Header. |
+| `footer` | — | Eine Copyright-Zeile, eine Reihe von Links und Social-Profil-Icons unterhalb des Inhalts. |
 
 ### Logo
 
@@ -186,6 +189,43 @@ banner: {
 
 Ist `dismissible` aktiviert, zeigt die Leiste eine Schließen-Schaltfläche und bleibt für diese Besucherin bzw. diesen Besucher danach ausgeblendet. Der Schlüssel für das Ausblenden basiert standardmäßig auf dem Inhaltstext, sodass eine Bearbeitung der Nachricht das Banner zurückbringt; setze eine feste `id`, damit es über Bearbeitungen hinweg ausgeblendet bleibt.
 
+Auf einer [mehrsprachigen](/docs/content/i18n) Website akzeptieren `content` und der `text` des Links auch eine Zuordnung von Sprachcode zu Text. Jede Seite zeigt den Eintrag ihrer eigenen Sprache an und greift andernfalls auf den der Standardsprache zurück, und der Link wandert in die Sprache der Leserin bzw. des Lesers, sofern diese Sprache die Seite bereitstellt:
+
+```ts blume.config.ts lineNumbers
+banner: {
+  content: { en: "Version 2.0 is here!", fr: "La version 2.0 est là !" },
+  link: {
+    text: { en: "Read the release notes", fr: "Lire les notes de version" },
+    href: "/changelog",
+  },
+},
+```
+
+Bei einem übersetzten Banner basiert der Schlüssel für das Ausblenden auf dem Text der Standardsprache, sodass ein einmaliges Schließen es in jeder Sprache ausblendet.
+
+### Footer
+
+Jede Seite endet mit einem Footer: einer Zeile, so hoch wie der Header, mit deinen Links auf der einen Seite, Social-Profil-Icons auf der anderen und einer Copyright-Zeile mittig dazwischen. Der Footer ist der einzige Ort, an dem Blume deine Social-Profile und dein Repository verlinkt, deshalb steht das [`github`](#github)-Repository unter den Icons an erster Stelle, sofern es gesetzt ist. `footer` ergänzt den Rest:
+
+```ts blume.config.ts lineNumbers
+footer: {
+  copyright: "© 2026 Acme, Inc.",
+  links: [
+    { label: "Pricing", href: "https://acme.dev/pricing" },
+    { label: "Changelog", href: "/changelog" },
+    { label: "Blog", href: "https://acme.dev/blog" },
+  ],
+  socials: {
+    x: "https://x.com/acme",
+    discord: "https://discord.gg/acme",
+  },
+},
+```
+
+`copyright` ist reiner Text, schreibe also `©` direkt statt `&copy;`. Für eine Jahreszahl, die sich selbst aktuell hält, verwende ein Template-Literal: `` `© ${new Date().getFullYear()} Acme, Inc.` ``. `links` erscheinen in der Reihenfolge, in der du sie angibst. Schreibe interne Links so, als wäre die Website im Stammverzeichnis eingehängt; ein externer Link öffnet sich in einem neuen Tab. Auf einer [mehrsprachigen](/docs/content/i18n#per-locale-navigation) Website können `copyright` und ein `label` jeweils eine Zuordnung von Sprachcode zu Text sein, und ein interner Link wandert in die Sprache der Leserin bzw. des Lesers, sofern diese Sprache die Seite bereitstellt. `socials` ordnet einer Plattform ihre Profil-URL zu, und die Icons erscheinen in der Reihenfolge, in der du sie angibst. Die verfügbaren Plattformen sind `bluesky`, `discord`, `facebook`, `github`, `hacker-news`, `instagram`, `linkedin`, `medium`, `podcast`, `reddit`, `slack`, `telegram`, `threads`, `website`, `x` und `youtube`. Ein `github`-Eintrag unter `socials` ersetzt den Repository-Link; blende diesen Link mit [`navigation.repo`](/docs/content/navigation#repository-link) aus.
+
+Eine Website ohne Copyright, Links, Profile oder Repository hat keinen Footer. Benutzerdefinierte Seiten, die auf `PageLayout` aufbauen, zeigen ihn ebenfalls an, sofern sie nicht den eigenen `footer`-Slot des Layouts befüllen. Um ihn vollständig zu ersetzen, überschreibe den [`Footer`-Layout-Slot](/docs/configuration/customization#layout-slots).
+
 ## Inhalte [#content]
 
 Wo deine Inhalte liegen und wie Blume sie findet. Unter [Seiten](/docs/content) erfährst du, wie aus Dateien Routen werden.
@@ -200,7 +240,7 @@ content: {
 | --- | --- | --- |
 | `root` | `"docs"` | Ordner, den Blume nach Inhalten durchsucht. Kurzform für eine einzelne `filesystem()`-Quelle; nicht zusammen mit `sources` erlaubt. |
 | `include` | `["**/*.{md,mdx}"]` | Globs, die auf Inhaltsdateien passen. Kurzform, wie `root`. |
-| `exclude` | `["**/_*", "**/.*"]` | Zu ignorierende Globs (Dateien mit Unterstrich und Punkt am Anfang). Kurzform, wie `root`. |
+| `exclude` | `["**/_*", "**/.*"]` | Zu ignorierende Globs. Deine Einträge ergänzen die Standardwerte, die Dateien mit Unterstrich und Punkt am Anfang überspringen; ein `!`-Eintrag entfernt ein Muster, sodass `"!**/_*"` Dateien mit `_`-Präfix veröffentlicht. Kurzform, wie `root`. |
 | `sources` | eine `filesystem()` | Adapter für Inhaltsquellen aus `blume/sources`, die die Kurzform ersetzen. Siehe [Inhaltsquellen](/docs/content/sources). |
 | `pages` | `"pages"` | Ordner für benutzerdefinierte `.astro`-Seiten. |
 | `defaultType` | `"doc"` | Seiten-`type`, der verwendet wird, wenn das Frontmatter ihn weglässt. |
@@ -273,7 +313,7 @@ Ein Schlüssel kann websiteweit oder pro Typ deklariert werden, nicht beides. Wi
 
 ## GitHub
 
-Verweise Blume mit `github` auf dein Repository. Das versorgt den [Repository-Link](/docs/content/navigation#repository-link) im Header sowie die [Seitenaktion](/docs/content/navigation#page-actions) **Edit on GitHub**:
+Verweise Blume mit `github` auf dein Repository. Das versorgt den [Repository-Link](/docs/content/navigation#repository-link) im Footer sowie die [Seitenaktion](/docs/content/navigation#page-actions) **Edit on GitHub**:
 
 ```ts blume.config.ts lineNumbers
 github: {
@@ -327,7 +367,7 @@ lastModified: "git",
 | `"git"` | Datum aus der Git-Historie lesen (Commit-Daten). |
 | `"frontmatter"` | Git nie ausführen — ausschließlich das Frontmatter-Feld `lastModified` verwenden. |
 
-Die Git-Quelle liest den jüngsten Commit, der die jeweilige Datei berührt hat, funktioniert also in jedem Git-Repository — auch in Monorepos — und benötigt die Historie des Repositorys zur Build-Zeit. CI-Plattformen checken üblicherweise einen flachen Klon aus, wodurch die meisten Daten stillschweigend verloren gehen (der Build warnt in diesem Fall mit `BLUME_SHALLOW_GIT_HISTORY`): Setze auf Vercel die Umgebungsvariable `VERCEL_DEEP_CLONE=true`; bei `actions/checkout` setze `fetch-depth: 0`. Das seiteneigene `lastModified`-Frontmatter gewinnt immer, was praktisch ist, um ein Datum festzuschreiben oder für Dateien, die noch nicht committet sind:
+Die Git-Quelle liest den jüngsten Commit, der die jeweilige Datei berührt hat, funktioniert also in jedem Git-Repository — auch in Monorepos — und benötigt die Historie des Repositorys zur Build-Zeit. Sie folgt Umbenennungen, so wie es `git log --follow` tut: Wird `page.md` in `page.mdx` umbenannt oder eine Datei in einen anderen Ordner unterhalb desselben Inhalts-Stammverzeichnisses verschoben, bleibt das Datum der Seite erhalten, solange der Commit ihren Inhalt unverändert lässt. Eine Umbenennung, bei der die Datei zugleich bearbeitet wird, datiert die Seite auf diesen Commit — ebenso das Hereinverschieben einer Datei von außerhalb des Inhalts-Stammverzeichnisses. CI-Plattformen checken üblicherweise einen flachen Klon aus, wodurch die meisten Daten stillschweigend verloren gehen (der Build warnt in diesem Fall mit `BLUME_SHALLOW_GIT_HISTORY`): Setze auf Vercel die Umgebungsvariable `VERCEL_DEEP_CLONE=true`; bei `actions/checkout` setze `fetch-depth: 0`. Das seiteneigene `lastModified`-Frontmatter gewinnt immer, was praktisch ist, um ein Datum festzuschreiben oder für Dateien, die noch nicht committet sind:
 
 ```mdx page.mdx
 ---
@@ -340,7 +380,7 @@ Ist die Funktion aktiviert, wird das Datum außerdem als schema.org-`dateModifie
 
 ## Datumsformat [#date-format]
 
-Sowohl der Stempel „Zuletzt aktualisiert“ als auch die Zeitleiste des [Changelogs](/docs/advanced/changelog) rendern ihre Daten über dasselbe `dateFormat`, damit sie sich gleich lesen. Daten werden immer in der Sprache der Website gerendert; `dateFormat` steuert die _Form_. Standardmäßig wird die lange Form verwendet (`21. Juli 2026`, `2026年7月21日`):
+Sowohl der Stempel „Zuletzt aktualisiert“ als auch die Zeitleiste des [Changelogs](/docs/advanced/changelog) rendern ihre Daten über dasselbe `dateFormat`, damit sie sich gleich lesen. Daten werden immer in der Sprache der Website gerendert; `dateFormat` steuert die _Form_. Standardmäßig wird die lange Form verwendet (`July 21, 2026`, `2026年7月21日`):
 
 ```ts blume.config.ts
 dateFormat: { dateStyle: "long" },
@@ -421,7 +461,21 @@ export default defineConfig({
 });
 ```
 
-Die Antwort einer Leserin bzw. eines Lesers wird als `feedback`-[Custom Event](/docs/configuration/analytics#custom-events) gesendet — mit `helpful` (`"yes"` oder `"no"`), `path` und `title` —, und zwar über jeden konfigurierten Analytics-Adapter, der eine Event-API besitzt, sowie als `blume:track`-Event auf `window`. Ohne Analytics-Adapter wird die Antwort nirgendwo erfasst. Die Frage und der Dankestext sind UI-Zeichenketten, die du mit [`i18n.ui`](/docs/content/i18n#translated-ui) übersetzen kannst.
+Die Antwort einer Leserin bzw. eines Lesers wird als `feedback`-[Custom Event](/docs/configuration/analytics#custom-events) gesendet — mit `helpful` (`"yes"` oder `"no"`), `path` und `title` —, und zwar über jeden konfigurierten Analytics-Adapter, der eine Event-API besitzt, sowie als `blume:track`-Event auf `window`. Fathom, Microsoft Clarity und Hotjar erfassen nur den Namen eines Events, ohne dessen Properties — sie zählen Bewertungen also, können ein Ja aber nicht von einem Nein unterscheiden. Ohne Analytics-Adapter wird die Antwort nirgendwo erfasst, und ist die [Cookie-Einwilligung](/docs/configuration/consent) aktiviert, wird die Bewertung nur Lesenden angezeigt, die Analytics erlaubt haben, da eine Antwort von allen anderen ohnehin nirgendwo ankäme. Die Frage und der Dankestext sind UI-Zeichenketten, die du mit [`i18n.ui`](/docs/content/i18n#translated-ui) übersetzen kannst.
+
+### Schriftliches Feedback [#written-feedback]
+
+Wenn du mehr als Ja oder Nein erfahren möchtest, aktiviere Kommentare. Nach der Bewertung einer Seite erhält die Leserin bzw. der Leser ein Textfeld, um zu sagen, was geholfen hat oder was fehlt:
+
+```ts blume.config.ts
+export default defineConfig({
+  feedback: { comments: true },
+});
+```
+
+Ein Kommentar wird als `feedback_comment`-Event gesendet — mit denselben Werten für `helpful`, `path` und `title` wie die Bewertung, plus dem `comment` der Leserin bzw. des Lesers (bis zu 1.000 Zeichen). Er läuft über dieselben Adapter wie die Bewertung, du liest Kommentare also dort, wo du auch deine Events liest. Anbieter begrenzen die Länge von Property-Werten, daher kann ein langer Kommentar gekürzt ankommen: Google Analytics behält 100 Zeichen, Mixpanel 255 Bytes (weniger Zeichen bei einer Schrift, die mehrere Bytes pro Zeichen benötigt, etwa Japanisch), und Vercel Web Analytics nimmt Werte bis zu 255 Zeichen entgegen, während PostHog und Segment Kommentare vollständig übernehmen. Fathom, Clarity und Hotjar erhalten überhaupt keinen Kommentartext. Plausible gruppiert identische Werte, statt jeden Kommentar einzeln aufzulisten, und eignet sich daher besser für Bewertungen als für Kommentare. Lesende können beliebigen Text in das Feld schreiben, behandle Kommentare also so, als könnten sie personenbezogene Daten enthalten.
+
+Die Beschriftung und die Schaltfläche des Felds sind ebenfalls UI-Zeichenketten (`feedback.comment` und `feedback.send`).
 
 ## Funktionsoptionen [#feature-options]
 
@@ -433,13 +487,18 @@ Zu jeder dieser Optionen gibt es eine eigene Anleitung. Das Konfigurationsfeld i
 | `navigation` | Explizite Seitenleiste und Header-Tabs | [Navigation](/docs/content/navigation) |
 | `search` | Anbieter (Orama, Pagefind, Algolia und weitere) und Indizierung | [Suche](/docs/configuration/search) |
 | `markdown` | Optionen für das Markdown-Rendering — Codeblöcke, Überschriftenanker, Bildzoom | [Syntax](/docs/content/syntax) |
-| `agents` | `llms.txt`, Markdown-Spiegel, die JSON-API, der gehostete MCP-Server, Skills und Discovery-Manifeste für Coding-Agents | [SEO und AEO](/docs/discoverability) |
+| `agents` | `llms.txt`, Markdown-Spiegel, die JSON-API, der gehostete MCP-Server, Skills und Discovery-Manifeste für Coding-Agents | [SEO und GEO](/docs/discoverability) |
 | `ai` | Der Assistent direkt auf der Seite und die Aktion „Open in chat“ | [Assistent](/docs/configuration/assistant) |
+| `rateLimit` | Wie oft eine einzelne Leserin bzw. ein einzelner Leser den Assistenten, den Playground-Proxy und die serverseitige Suche aufrufen kann, mit einem Adapter aus `blume/ratelimit` (standardmäßig aktiviert) | [Rate Limiting](/docs/configuration/rate-limiting) |
+| `narration` | Der Player „Diese Seite anhören“, mit Browserstimmen oder beim Build generierten Stimmen | [Vorlesen](/docs/configuration/narration) |
 | `reference` | API-Referenzen: die Adapter `openapi()`, `asyncapi()`, `graphql()` und `scalar()` aus `blume/reference` | [OpenAPI](/docs/references/openapi), [AsyncAPI](/docs/references/asyncapi), [GraphQL](/docs/references/graphql), [Scalar](/docs/references/scalar) |
+| `api` | Server, Authentifizierung und das Try-it-Panel handgeschriebener Endpunktseiten | [Handgeschriebene API-Seiten](/docs/references/api-pages) |
 | `analytics` | Adapter aus `blume/analytics` — PostHog, Google Analytics, Plausible, Mixpanel, Segment und weitere — plus benutzerdefinierte Skripte | [Analytics](/docs/configuration/analytics) |
-| `seo` | Metadaten, OG-Bilder, Feeds, strukturierte Daten, Sitemap, robots | [SEO und AEO](/docs/discoverability) |
+| `consent` | Ein Cookie-Einwilligungs-Adapter aus `blume/consent` — Blumes eigenes Banner, Osano oder Ethyca —, der Analytics zurückhält, bis die Leserin bzw. der Leser zustimmt | [Cookie-Einwilligung](/docs/configuration/consent) |
+| `seo` | Metadaten, OG-Bilder, Feeds, strukturierte Daten, Sitemap, robots | [SEO und GEO](/docs/discoverability) |
 | `deployment` | Ein Host-Adapter aus `blume/deploy` oder `{ site, base }` für einen statischen Build | [Deployment](/docs/deployment) |
 | `redirects` | Permanente und temporäre Weiterleitungen | [Deployment](/docs/deployment#redirects) |
+| `poweredBy` | Der Response-Header `X-Powered-By: Blume` (Standard `true`) | [Deployment](/docs/deployment#powered-by-header) |
 | `integrations` | Astro-Integrationen, die nach Blumes eingebauten angehängt werden | [Anpassung](/docs/configuration/customization#astro-integrations) |
 | `basePath` | Ein Pfad, unter dem jede generierte Route eingehängt wird (z. B. `/docs`), unsichtbar für die Seitenleiste | [Deployment](/docs/deployment#mount-the-docs-under-a-path) |
 | `i18n` | Sprachen, die Standardsprache und übersetzte UI-Zeichenketten | [Internationalisierung](/docs/content/i18n) |
@@ -447,7 +506,9 @@ Zu jeder dieser Optionen gibt es eine eigene Anleitung. Das Konfigurationsfeld i
 | `export` | PDF- und EPUB-Downloads für Lesende | [Export](/docs/configuration/export) |
 | `examples` | Wo die Beispielvorschauen für `<Component path>` liegen und welches CSS in ihre Frames eingefügt wird | [Component](/docs/content/components#component) |
 | `react` | Verhalten von React-Islands — die automatische Memoisierung des React Compilers | [Islands](/docs/content/islands#frameworks) |
-| `feedback` | Die Bewertung „War diese Seite hilfreich?“ am Ende jeder Seite (Standard `true`) | [Seiten-Feedback](#page-feedback) |
+| `variables` | Werte, die `{{name}}` auf jeder Seite ausliest | [Variablen](/docs/content/variables) |
+| `feedback` | Die Bewertung „War diese Seite hilfreich?“ am Ende jeder Seite (Standard `true`) und optionale schriftliche Kommentare im Anschluss daran | [Seiten-Feedback](#page-feedback) |
+| `changelog` | Titel und Beschreibung des generierten `/changelog`-Index, jeweils als Zeichenkette oder als Zuordnung pro Sprache | [Changelogs](/docs/advanced/changelog#the-index-page) |
 
 ## Rangfolge [#precedence]
 

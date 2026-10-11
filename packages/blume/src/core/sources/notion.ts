@@ -3,7 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import pLimit from "p-limit";
 import { join } from "pathe";
 
-import { parseYouTubeId } from "../../components/content/youtube.ts";
+import { youtubeEmbedSrc } from "../../components/content/youtube.ts";
 import { BlumeError } from "../diagnostics.ts";
 import matter from "../frontmatter.ts";
 import { nodeRequire } from "../node-require.ts";
@@ -22,8 +22,10 @@ import {
   image,
   linkParts,
   renderInline,
+  renderInlineMdx,
 } from "./lower.ts";
 import { slugify, slugifyPath } from "./normalize.ts";
+import { missingSecretError } from "./remote.ts";
 import type {
   ContentSource,
   SourceContext,
@@ -142,6 +144,14 @@ export interface NotionSourceOptions {
    * Status/select property are always imported as published.
    */
   publishedValue?: string;
+  /**
+   * Read the text of text blocks (paragraphs, headings, list items, quotes,
+   * callouts) as MDX source, so a component, expression, or Markdown typed in
+   * Notion renders instead of showing as written. MDX runs code at build
+   * time, so this hands everyone who can edit the database the site's build:
+   * set it only when you trust them with that. Default false.
+   */
+  mdx?: boolean;
   /** Opt-in dev polling interval (seconds); omit to freeze for the session. */
   pollInterval?: number;
   /** Injected for tests; otherwise built from `@notionhq/client`. */
@@ -173,9 +183,10 @@ interface LinkedRuns {
  * itself instead of opening a JSX expression, a tag, or emphasis, a code run
  * keeps its text verbatim inside a long-enough code span, neighbors share
  * their marks' delimiters, and neighbors that link to one `href` share one
- * link.
+ * link. With `mdx`, the text goes in as typed instead (see
+ * `NotionSourceOptions.mdx`).
  */
-const richToMarkdown = (rich: NotionRichText[] = []): string => {
+const richToMarkdown = (rich: NotionRichText[] = [], mdx = false): string => {
   const linked: LinkedRuns[] = [];
   for (const { annotations = {}, href, plain_text: text } of rich) {
     const run: InlineRun = {
@@ -194,10 +205,17 @@ const richToMarkdown = (rich: NotionRichText[] = []): string => {
       linked.push({ href: href ?? undefined, runs: [run] });
     }
   }
-  return renderInline(
-    linked.flatMap(({ href, runs }) => linkParts(runs, href))
-  );
+  const parts = linked.flatMap(({ href, runs }) => linkParts(runs, href, mdx));
+  return mdx ? renderInlineMdx(parts) : renderInline(parts);
 };
+
+/**
+ * A text block's rich text: Markdown that renders as written, guarded at its
+ * block start — or, with `mdx`, MDX source as typed, which an `.mdx` file's
+ * own block starts (`import`, `#`, indentation) read the same way.
+ */
+const blockText = (rich: NotionRichText[] | undefined, mdx: boolean): string =>
+  mdx ? richToMarkdown(rich, true) : guardBlockStart(richToMarkdown(rich));
 
 const isBlockPayload = (
   value: NotionBlockPayload | boolean | string | undefined
@@ -298,12 +316,13 @@ const FRAME_ESCAPED = /\\(?=[<>])/gu;
 
 const YOUTUBE_HOST = /(?:^|\.)(?:youtube(?:-nocookie)?\.com|youtu\.be)$/u;
 
-// `parseYouTubeId` is host-agnostic on purpose (the component accepts bare
+// `youtubeEmbedSrc` is host-agnostic on purpose (the component accepts bare
 // ids), so gate on the hostname first: `https://cdn.example.com/live/promo.mp4`
-// matches its `/live/<11 chars>` shape but is a media file, not an embed.
+// matches its `/live/<11 chars>` shape but is a media file, not an embed. A
+// playlist URL embeds too.
 const isYouTubeUrl = (url: string): boolean => {
   const host = URL.parse(url)?.hostname ?? "";
-  return YOUTUBE_HOST.test(host) && parseYouTubeId(url) !== null;
+  return YOUTUBE_HOST.test(host) && youtubeEmbedSrc(url) !== null;
 };
 
 /**
@@ -339,9 +358,9 @@ const renderVideo = (data: NotionBlockPayload): string => {
 };
 
 /** Render a leaf (non-container) block to Markdown, or null for containers. */
-const renderLeaf = (block: NotionBlock): string | null => {
+const renderLeaf = (block: NotionBlock, mdx: boolean): string | null => {
   const data = payloadOf(block) ?? {};
-  const text = guardBlockStart(richToMarkdown(blockField(block)));
+  const text = blockText(blockField(block), mdx);
   switch (block.type) {
     case "paragraph": {
       return text;
@@ -397,6 +416,7 @@ export const notionSource = (
   ctx?: SourceContext
 ): ContentSource => {
   const props = options.properties ?? {};
+  const textAsMdx = options.mdx ?? false;
   // A FIFO semaphore: at most N calls run at once, the rest queue. Notion's
   // rate limit is per-integration (an average of 3 req/s), and a large
   // database fans out one block-children request per page plus one per nested
@@ -446,7 +466,12 @@ export const notionSource = (
         severity: "error",
       });
     }
-    return new Client({ auth: options.token ?? process.env.NOTION_TOKEN });
+    // Every Notion API call needs the integration token.
+    const auth = options.token ?? process.env.NOTION_TOKEN;
+    if (!auth) {
+      throw missingSecretError(options.name, "NOTION_TOKEN");
+    }
+    return new Client({ auth });
   };
 
   const childrenOf = (
@@ -475,7 +500,7 @@ export const notionSource = (
 
     if (block.type === "callout") {
       const body = [
-        guardBlockStart(richToMarkdown(blockField(block))),
+        blockText(blockField(block), textAsMdx),
         await children(block),
       ]
         .filter(Boolean)
@@ -503,7 +528,7 @@ export const notionSource = (
   ): Promise<string> => {
     const parts = await Promise.all(
       blocks.map(async (block) => {
-        const leaf = renderLeaf(block);
+        const leaf = renderLeaf(block, textAsMdx);
         if (leaf === null) {
           return renderContainer(client, block, renderBlocks);
         }

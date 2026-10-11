@@ -4,17 +4,29 @@ description: >-
   Die sitemap.xml und robots.txt, die Blume für Crawler schreibt, und die Content-Signal-Zeile, die KI-Crawlern mitteilt, wie sie deine Dokumentation verwenden dürfen.
 ---
 
-Suchmaschinen-Crawler und KI-Crawler starten beide bei denselben zwei Dateien im Stammverzeichnis deiner Website. Blume schreibt beide bei jedem Build, und die `robots.txt` enthält die Signale zur Inhaltsnutzung, nach denen KI-Crawler suchen — hier treffen also die Such- und die Agenten-Seite der Auffindbarkeit aufeinander.
+Suchmaschinen-Crawler und KI-Crawler starten beide bei denselben zwei Dateien im Stammverzeichnis deiner Website. Blume schreibt beide bei jedem Build, und die `robots.txt` enthält die Signale zur Inhaltsnutzung, nach denen KI-Crawler suchen, sodass hier die Such- und die Agenten-Seite der Auffindbarkeit aufeinandertreffen.
 
 ## Sitemap
 
-Blume schreibt zur Build-Zeit eine `sitemap.xml` mit allen indexierbaren Seiten. Dafür wird eine absolute [`deployment.site`](/docs/deployment) benötigt, und es werden alle Seiten aufgelistet außer Entwürfen, versteckten und [`noindex`](/docs/discoverability/metadata#per-page-overrides)-Seiten. Auf einer [versionierten](/docs/content/versioning) Website bleiben auch archivierte Seiten außen vor, deren Canonical auf ihr Live-Pendant zeigt — die Live-Seite ist diejenige, die indexiert werden soll. Standardmäßig aktiviert:
+Blume schreibt zur Build-Zeit eine `sitemap.xml` mit allen indexierbaren Seiten. Dafür wird eine absolute [`deployment.site`](/docs/deployment) benötigt, und es werden alle Seiten aufgelistet außer Entwürfen, [versteckten](/docs/content/navigation#hidden-pages) und [`noindex`](/docs/discoverability/metadata#per-page-overrides)-Seiten sowie Seiten, deren `seo.canonical` eine andere URL angibt. Auf einer [versionierten](/docs/content/versioning) Website bleiben auch archivierte Seiten außen vor, deren Canonical auf ihr Live-Pendant zeigt — die Live-Seite ist diejenige, die indexiert werden soll. Standardmäßig aktiviert:
 
 ```ts blume.config.ts lineNumbers
 seo: {
   sitemap: true,
 }
 ```
+
+### Sprachalternativen [#locale-alternates]
+
+Aktiviere alternative Links in der Sitemap einer mehrsprachigen Website:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  sitemap: { alternates: true },
+}
+```
+
+Jede übersetzte Seite listet ihre Übersetzungen, sich selbst eingeschlossen, als `xhtml:link`-Elemente auf, dazu einen `x-default`-Link, wenn die Standardsprache die Seite enthält. Das sind dieselben `hreflang`-Links, die auch der Seitenkopf enthält: Eine Übersetzung mit `noindex`, eine versteckte oder eine, deren Canonical auf eine andere URL zeigt, taucht in keinem von beiden auf. Eine Seite, die in weniger als zwei der aufgeführten Sprachen vorliegt, bekommt keine alternativen Links. Die URLs enthalten den Basispfad des Deployments. `sitemap: true` und `sitemap: {}` lassen die Alternativen deaktiviert; `sitemap: false` deaktiviert die Sitemap.
 
 Liefere deine eigene `public/sitemap.xml` aus, um die Kontrolle zu übernehmen — Blume überschreibt niemals eine Datei, die du in `public/` ablegst.
 

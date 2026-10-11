@@ -1,7 +1,7 @@
 ---
 title: Dados estruturados
 description: >-
-  O JSON-LD do schema.org que toda página carrega — nós WebSite, article e breadcrumb — mais os blocos opcionais Organization e SoftwareApplication que contam aos motores de busca e agentes quem você é.
+  O JSON-LD do schema.org que toda página carrega — nós WebSite, de página e breadcrumb — mais os blocos opcionais Organization e SoftwareApplication que contam aos motores de busca e agentes quem você é.
 ---
 
 O Blume emite JSON-LD do [schema.org](https://schema.org) no `<head>` de todas as páginas para que os motores de busca entendam seu conteúdo. Ativado por padrão:
@@ -15,10 +15,12 @@ seo: {
 Cada página inclui:
 
 - um nó **WebSite** para a identidade do site,
-- a página como um **article** — `BlogPosting` para posts do blog, `TechArticle` para changelog e docs — com sua descrição e data de publicação,
-- uma **BreadcrumbList** construída a partir da trilha de navegação.
+- a própria página, com sua descrição, idioma e data de publicação: uma **WebPage** na página inicial e um **article** em todas as outras — `BlogPosting` para posts do blog, `TechArticle` para changelog e docs,
+- em um article, uma **BreadcrumbList** construída a partir da trilha de navegação.
 
-As URLs são absolutas quando [`deployment.site`](/docs/deployment) está definido. Páginas marcadas com [`seo.noindex`](/docs/discoverability/metadata#per-page-overrides) são ignoradas. Quando [`lastModified`](/docs/configuration#last-modified) está ativo, a data de cada página também é emitida como `dateModified`.
+A página inicial é a raiz da navegação, então a página inicial de cada idioma (`/fr`) e a raiz de um [`basePath`](/docs/deployment#mount-the-docs-under-a-path) também são WebPages.
+
+As URLs são absolutas quando [`deployment.site`](/docs/deployment) está definido. Sem ele, elas são relativas à rota, e o nó WebSite, que precisa de um identificador absoluto, fica de fora. Páginas marcadas com [`seo.noindex`](/docs/discoverability/metadata#per-page-overrides) são ignoradas. Quando [`lastModified`](/docs/configuration#last-modified) está ativo, a data de cada página também é emitida como `dateModified`, e a data visível de "Última atualização" é marcada como um `<time datetime>`, para que os motores de busca leiam essa data e não alguma outra data da página.
 
 ## Identidade do site [#site-identity]
 
@@ -43,10 +45,54 @@ seo: {
 }
 ```
 
-`organization` adiciona um nó **Organization** a todas as páginas — os nós WebSite e article o citam como `publisher` — com o e-mail e o telefone como um `ContactPoint` (`contactType` tem como padrão `"customer support"`) e o endereço como um `PostalAddress`, os dois campos que as verificações de validação de negócio procuram. `name` e `url` assumem por padrão os do site; um `logo` relativo à raiz é absolutizado como qualquer URL de página.
+`organization` adiciona um nó **Organization** a todas as páginas — os nós WebSite e de página o citam como `publisher` — com o e-mail e o telefone como um `ContactPoint` (`contactType` tem como padrão `"customer support"`) e o endereço como um `PostalAddress`, os dois campos que as verificações de validação de negócio procuram. `name` e `url` assumem por padrão os do site; um `logo` relativo à raiz é absolutizado como qualquer URL de página.
 
 `software` adiciona um nó **SoftwareApplication** à página inicial: o nome e a descrição do produto (assumindo por padrão os do site), `applicationCategory` (padrão `"DeveloperApplication"`), sistema operacional, licença, um `Offer` quando `price` está definido, e as URLs do registro ou repositório em `sameAs`. Passe `software: true` para aceitar todos os padrões. A organização, quando configurada, é citada como seu `publisher`.
 
+## Identificadores de entidade compartilhados [#shared-entity-identifiers]
+
+Quando a documentação fica dentro de outro site (`example.com/docs`), aponte para as entidades que esse site já define em vez de defini-las de novo:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  jsonLd: {
+    websiteId: "https://example.com/#website",
+    organizationId: "https://example.com/#organization",
+  },
+}
+```
+
+Toda página indica `websiteId` como seu `isPartOf`, e o Blume deixa de emitir o próprio nó WebSite, cujo nome e URL descreveriam a documentação em vez do site. Defina `website: true` para emiti-lo mesmo assim com esse id, ou `website: false` para omitir o nó WebSite da própria documentação sem compartilhar um id. `organizationId` passa a ser o publisher de todas as páginas. Com [`seo.organization`](#site-identity) também definido, o nó Organization usa esse id e carrega apenas os campos que você configurar: o título e a URL da documentação não substituem o nome e a URL dele. Por padrão, o Blume emite o nó WebSite e usa a URL do site mais `#website` e `#organization`. Os identificadores precisam ser URLs absolutas, então eles funcionam mesmo sem uma URL do site.
+
+## Autor e publisher da página [#page-author-and-publisher]
+
+Referencie entidades existentes em todas as páginas:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  jsonLd: {
+    author: { "@id": "https://example.com/#author" },
+    publisher: { "@id": "https://example.com/#publisher" },
+  },
+}
+```
+
+Essas referências se aplicam ao nó WebPage ou article, e `publisher` substitui a organização como seu publisher. O Blume não define as entidades para as quais elas apontam. O front matter [`authors`](/docs/content/frontmatter) da própria página tem prioridade sobre `author`: cada um é creditado como uma `Person`.
+
+## Data de publicação a partir do Git [#publication-date-from-git]
+
+Date as páginas pelo commit que adicionou o arquivo de conteúdo delas:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  datePublished: "git",
+}
+```
+
+`date` ou `changelog.date` no front matter continuam tendo prioridade. O Git data o restante, através do mesmo `git log` usado por [`lastModified`](/docs/configuration#last-modified). Renomeações só são seguidas quando o conteúdo não mudou, então uma página nova nunca herda o histórico de uma parecida que foi excluída no mesmo commit. Páginas de fontes que não são o sistema de arquivos e arquivos sem commit não recebem data do git. Um shallow clone não data nenhuma página e emite um aviso em vez disso, já que o commit mais antigo dele é onde o clone foi cortado. Busque o histórico completo no CI (`VERCEL_DEEP_CLONE=true` na Vercel, `fetch-depth: 0` para `actions/checkout`).
+
+A [imagem Open Graph](/docs/discoverability/open-graph) resolvida também é incluída como `image` do nó da página, venha ela do frontmatter, de um padrão do site ou de um card gerado.
+
 ## Páginas personalizadas [#custom-pages]
 
-Uma [página `.astro`](/docs/advanced/custom-pages) personalizada renderizada através do `PageLayout` emite o mesmo grafo `WebSite`, então uma página inicial de marketing não fica sendo a única URL sem dados estruturados. Passe `structuredDataEnabled={config.structuredData}` para mantê-la em sincronia com essa configuração, ou `structuredDataEnabled={false}` para desativá-la apenas naquela página.
+Uma [página `.astro`](/docs/advanced/custom-pages) personalizada renderizada através do `PageLayout` emite o mesmo grafo, então uma página inicial de marketing não fica sendo a única URL sem dados estruturados. Uma página personalizada não tem um arquivo de conteúdo de onde tirar a data, então passe `lastModified` para dar a ela um `dateModified`. Passe `structuredDataEnabled={config.structuredData}` para mantê-la em sincronia com essa configuração, ou `structuredDataEnabled={false}` para desativá-la apenas naquela página.

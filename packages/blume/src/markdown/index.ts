@@ -1,22 +1,31 @@
+import { fileURLToPath } from "node:url";
+
 import { satteri } from "@astrojs/markdown-satteri";
 import {
   transformerMetaHighlight,
   transformerNotationDiff,
+  transformerNotationErrorLevel,
   transformerNotationFocus,
   transformerNotationHighlight,
   transformerNotationWordHighlight,
 } from "@shikijs/transformers";
 import { escape as escapeHtml } from "html-escaper";
+import { resolve } from "pathe";
 import { codeToHtml } from "shiki";
 
-import { hasVariables } from "../core/variables.ts";
+import { withIncludedDefinitions } from "../core/includes.ts";
+import { escapePinnedIds } from "../core/pinned-ids.ts";
+import { hasVariables, substituteVariables } from "../core/variables.ts";
 import type { ContentVariables } from "../core/variables.ts";
 import { apiRailPlugin } from "./api-rail.ts";
 import { baseLinksPlugin } from "./base-links.ts";
 import { codeTitleTransformer } from "./code-title.ts";
+import { contentAssetsPlugin } from "./content-assets.ts";
 import { directiveToCalloutPlugin } from "./directives.ts";
 import { externalLinksPlugin } from "./external-links.ts";
 import { MARKDOWN_BODY_FEATURES, MDX_BODY_FEATURES } from "./features.ts";
+import { fenceLanguagePlugin } from "./fence-language.ts";
+import { githubAlertsPlugin } from "./github-alerts.ts";
 import { headingAnchorPlugin } from "./heading-anchors.ts";
 import { includePlugin } from "./include.ts";
 import { inlineCodeHighlightPlugin } from "./inline-code.ts";
@@ -24,12 +33,16 @@ import { languageIconTransformer } from "./language-icon.ts";
 import { mathPlugin } from "./math.ts";
 import { mermaidPlugin } from "./mermaid.ts";
 import { packageInstallPlugin } from "./package-install.ts";
+import { promptTextPlugin } from "./prompt-text.ts";
 import { relativeLinksPlugin } from "./relative-links.ts";
+import { svgFallbackPlugin } from "./svg-fallback.ts";
 import { tableWrapPlugin } from "./table-wrap.ts";
 import { DEFAULT_CODE_THEMES } from "./themes.ts";
 import type { CodeThemes } from "./themes.ts";
+import { titleHeadingPlugin } from "./title-heading.ts";
 import { ts2jsPlugin } from "./ts2js.ts";
 import { variablesPlugin } from "./variables.ts";
+import { viewsPlugin } from "./views.ts";
 
 export type { CodeTheme, CodeThemes } from "./themes.ts";
 
@@ -93,29 +106,33 @@ const asShikiTransformer = (transformer: { name: string }): ShikiTransformer =>
  * (`[#custom-id]`, `[!toc]`, `[toc]`), which must parse regardless of config —
  * while `markdown.headingAnchors: false` only turns off the self-linking
  * anchor wrap on `<h2>`–`<h6>`. Inline code runs first so the anchor wrap
- * re-refs already-highlighted code. The external-link plugin is added only
- * when `markdown.externalLinks` is on, so off stays today's exact output.
+ * re-refs already-highlighted code. The title-heading plugin runs after the
+ * heading plugin has slugged every heading, so dropping an untitled page's
+ * title `<h1>` moves no other heading's id. The external-link plugin is added
+ * only when `markdown.externalLinks` is on, so off stays today's exact output.
  */
 const blumeHastPlugins = (options: BlumeMarkdownOptions): HastPlugin[] => [
   asHastPlugin(inlineCodeHighlightPlugin(options.codeThemes)),
   asHastPlugin(tableWrapPlugin()),
   asHastPlugin(headingAnchorPlugin({ wrap: options.headingAnchors !== false })),
+  asHastPlugin(titleHeadingPlugin()),
   ...(options.externalLinks ? [asHastPlugin(externalLinksPlugin())] : []),
 ];
 
 /**
- * Shiki transformers enabled by default for every code block. The four upstream
+ * Shiki transformers enabled by default for every code block. The upstream
  * notation transformers read GitHub-style comments and strip them from the
  * output: `// [!code highlight]`, `// [!code ++]` / `// [!code --]`,
- * `// [!code word:x]`, and `// [!code focus]`. The v3 match algorithm scopes a
+ * `// [!code word:x]`, `// [!code focus]`, and `// [!code error]` /
+ * `// [!code warning]`. The v3 match algorithm scopes a
  * notation to the line it sits on (or the next, for a trailing comment).
  * `transformerMetaHighlight` adds numeric range highlighting from the fence meta
  * (` ```ts {1,3-5} `), reusing the same `highlighted` class. Blume's own
  * {@link languageIconTransformer} prepends a brand icon, and
  * {@link codeTitleTransformer} runs last to promote fence-meta (title / line
  * numbers) to `<pre>` attributes. The theme styles the classes these emit
- * (`highlighted`, `diff add/remove`, `highlighted-word`, `focused`,
- * `blume-lang-icon`).
+ * (`highlighted`, `highlighted error/warning`, `diff add/remove`,
+ * `highlighted-word`, `focused`, `blume-lang-icon`).
  */
 export interface BlumeShikiOptions {
   /** Prepend a brand language icon to the header (`markdown.code.icons`). */
@@ -130,6 +147,15 @@ export const blumeShikiTransformers = (
     transformerNotationDiff({ matchAlgorithm: "v3" }),
     transformerNotationWordHighlight({ matchAlgorithm: "v3" }),
     transformerNotationFocus({ matchAlgorithm: "v3" }),
+    // Only the two levels the theme styles: upstream also maps `[!code info]`,
+    // which would otherwise strip the comment and leave a plain highlight.
+    transformerNotationErrorLevel({
+      classMap: {
+        error: ["highlighted", "error"],
+        warning: ["highlighted", "warning"],
+      },
+      matchAlgorithm: "v3",
+    }),
     transformerMetaHighlight(),
   ];
   if (options.icons !== false) {
@@ -304,17 +330,26 @@ export interface BlumeMarkdownOptions {
 }
 
 /**
- * MDAST plugins that apply to both `.md` and `.mdx`: relative page links
- * rewritten to the served URL of the route they mean, then the base-path link
- * rewrite for root-relative links (added only when a `basePath` or
- * `deployBase` is configured).
+ * MDAST plugins that apply to both `.md` and `.mdx`: an SVG Astro can't
+ * measure pointed at its served original, relative page links rewritten to
+ * the served URL of the route they mean, references to other files beside the
+ * page to their served copies, then the base-path link rewrite for
+ * root-relative links (added only when a `basePath` or `deployBase` is
+ * configured).
  */
 const blumeSharedMdastPlugins = (
   options: BlumeMarkdownOptions
 ): MdastPlugin[] => [
+  asMdastPlugin(svgFallbackPlugin()),
   asMdastPlugin(
     relativeLinksPlugin({
       contentRoot: options.contentRoot,
+      dataFile: options.dataFile,
+      deployBase: options.deployBase,
+    })
+  ),
+  asMdastPlugin(
+    contentAssetsPlugin({
       dataFile: options.dataFile,
       deployBase: options.deployBase,
     })
@@ -343,29 +378,94 @@ const blumeIncludePlugin = (options: BlumeMarkdownOptions): MdastPlugin =>
     })
   );
 
+/** A Sätteri processor, as `satteri()` builds one. */
+type SatteriProcessor = ReturnType<typeof satteri>;
+
+/**
+ * `processor`, rendering each page from the source its parse needs: with the
+ * link-reference definitions its includes write appended (see
+ * `withIncludedDefinitions`) — the include splice runs after the page is
+ * parsed, too late for the parse to resolve a reference in the page against
+ * a partial's definition — and with the punctuation in its pinned heading
+ * ids escaped (see `escapePinnedIds`), so smart punctuation leaves a
+ * `[#a--b]` pin as written. Pages with neither render their source as given.
+ */
+const withRenderSource = (
+  processor: SatteriProcessor,
+  options: BlumeMarkdownOptions
+): SatteriProcessor => {
+  const contentRoot = options.contentRoot
+    ? resolve(options.contentRoot)
+    : undefined;
+  const source = async (content: string, sourcePath: string) =>
+    substituteVariables(
+      await withIncludedDefinitions(content, { contentRoot, sourcePath }),
+      options.variables
+    );
+  const { createMdxRenderer, createRenderer } = processor;
+  const wrapped: SatteriProcessor = {
+    ...processor,
+    createRenderer: async (shared) => {
+      const renderer = await createRenderer(shared);
+      return {
+        render: async (content, renderOptions) =>
+          renderer.render(
+            escapePinnedIds(
+              renderOptions?.fileURL
+                ? await source(content, fileURLToPath(renderOptions.fileURL))
+                : content,
+              "markdown"
+            ),
+            renderOptions
+          ),
+      };
+    },
+  };
+  if (createMdxRenderer) {
+    wrapped.createMdxRenderer = async (shared, mdx) => {
+      const renderer = await createMdxRenderer(shared, mdx);
+      return {
+        process: async (content, filePath, frontmatter) =>
+          renderer.process(
+            escapePinnedIds(await source(content, filePath), "mdx"),
+            filePath,
+            frontmatter
+          ),
+      };
+    };
+  }
+  return wrapped;
+};
+
 /** Sätteri processor for plain `.md`, with Blume's curated feature set. */
 export const blumeMarkdownProcessor = (options: BlumeMarkdownOptions = {}) =>
-  satteri({
-    features: { ...MARKDOWN_BODY_FEATURES },
-    hastPlugins: blumeHastPlugins(options),
-    mdastPlugins: [
-      blumeIncludePlugin(options),
-      ...(hasVariables(options.variables)
-        ? [asMdastPlugin(variablesPlugin(options.variables))]
-        : []),
-      ...blumeSharedMdastPlugins(options),
-    ],
-  });
+  withRenderSource(
+    satteri({
+      features: { ...MARKDOWN_BODY_FEATURES },
+      hastPlugins: blumeHastPlugins(options),
+      mdastPlugins: [
+        blumeIncludePlugin(options),
+        asMdastPlugin(fenceLanguagePlugin()),
+        ...(hasVariables(options.variables)
+          ? [asMdastPlugin(variablesPlugin(options.variables))]
+          : []),
+        ...blumeSharedMdastPlugins(options),
+      ],
+    }),
+    options
+  );
 
 export type BlumeMdxOptions = BlumeMarkdownOptions;
 
 /**
  * Sätteri MDX processor: Blume's feature set plus the MDAST plugins that target
  * components — `package-install` → package-manager tabs, ` ```ts ts2js ` →
- * TypeScript/JavaScript tabs, `:::note` → `<Callout>`, ` ```mermaid ` → a
+ * TypeScript/JavaScript tabs, `:::note` and GitHub's `> [!NOTE]` alerts →
+ * `<Callout>`, ` ```mermaid ` → a
  * `<blume-mermaid>` element, block math
- * (`$$…$$`) → the `<Math>` component, and top-level `<RequestExample>` and
- * `<ResponseExample>` → the page's `<ApiRail>`. Used as the `processor` for
+ * (`$$…$$`) → the `<Math>` component, top-level `<RequestExample>` and
+ * `<ResponseExample>` → the page's `<ApiRail>`, and a `<Prompt>` body's text
+ * back to the punctuation its author typed. Used as the `processor` for
  * `@astrojs/mdx` so these apply to `.mdx` only (plain `.md` uses
  * {@link blumeMarkdownProcessor}).
  *
@@ -379,17 +479,24 @@ export type BlumeMdxOptions = BlumeMarkdownOptions;
  * Satteri's full `MdastPlugin` type at this single boundary.
  */
 export const blumeMdxProcessor = (options: BlumeMdxOptions = {}) =>
-  satteri({
-    features: { ...MDX_BODY_FEATURES },
-    hastPlugins: blumeHastPlugins(options),
-    mdastPlugins: [
-      blumeIncludePlugin(options),
-      asMdastPlugin(packageInstallPlugin()),
-      asMdastPlugin(ts2jsPlugin()),
-      asMdastPlugin(directiveToCalloutPlugin()),
-      asMdastPlugin(mermaidPlugin()),
-      asMdastPlugin(mathPlugin()),
-      ...blumeSharedMdastPlugins(options),
-      asMdastPlugin(apiRailPlugin()),
-    ],
-  });
+  withRenderSource(
+    satteri({
+      features: { ...MDX_BODY_FEATURES },
+      hastPlugins: blumeHastPlugins(options),
+      mdastPlugins: [
+        blumeIncludePlugin(options),
+        asMdastPlugin(fenceLanguagePlugin()),
+        asMdastPlugin(packageInstallPlugin()),
+        asMdastPlugin(ts2jsPlugin()),
+        asMdastPlugin(directiveToCalloutPlugin()),
+        asMdastPlugin(githubAlertsPlugin()),
+        asMdastPlugin(mermaidPlugin()),
+        asMdastPlugin(mathPlugin()),
+        ...blumeSharedMdastPlugins(options),
+        asMdastPlugin(apiRailPlugin()),
+        asMdastPlugin(viewsPlugin()),
+        asMdastPlugin(promptTextPlugin()),
+      ],
+    }),
+    options
+  );

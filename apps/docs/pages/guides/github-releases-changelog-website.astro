@@ -1,0 +1,594 @@
+---
+// GitHub releases as a changelog: checked against the GitHub Releases source
+// and changelog docs, githubReleases() and its engine
+// (sources/github-releases.ts, core/sources/github-releases.ts), the source
+// cache (core/sources/cache.ts), the changelog index and RSS feed
+// (astro/templates.ts, deploy/rss.ts), navigation tabs, and the
+// required-secrets check on main. Ran the engine with a stubbed fetch over
+// the fixture releases below (entry frontmatter, prerelease filtering, link
+// rewriting, the token header, and the failure paths with and without a
+// cache), and read /changelog, a release page, and /changelog/rss.xml from
+// useblume.dev's own dev server. GitHub's releases API, rate limits, token
+// permissions, release events, and GITHUB_TOKEN trigger rules checked against
+// GitHub's docs, and deploy hooks against Vercel's and Netlify's docs
+// (September 2026). Review: rechecked the source's failure path
+// (BLUME_SOURCE_UNAVAILABLE, build continues), feed, and edit-link label
+// against core/sources/github-releases.ts, deploy/rss.ts, and
+// core/i18n-ui.ts, and the Netlify build hook path against Netlify's docs.
+// Rechecked baseUrl, the Draft tag, and the feed item's description against
+// sources/github-releases.ts, core/sources/github-releases.ts, and
+// deploy/rss.ts, and the changelog config's title and description against
+// core/changelog-index.ts. Not yet run end to end against a real repository.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("github-releases-changelog-website")}>
+  <p>
+    Add Blume's <code>githubReleases()</code> content source. It reads a
+    repository's releases from the GitHub API each time the site builds, and
+    turns every release into a changelog entry. You write release notes once,
+    on GitHub, and your docs site gets a page per release, a timeline at{" "}
+    <code>/changelog</code>, and an RSS feed at{" "}
+    <code>/changelog/rss.xml</code>.
+  </p>
+  <p>
+    By the end of this guide you have that changelog beside your docs, with
+    prereleases handled the way you choose, and a GitHub Actions workflow that
+    rebuilds the site when you publish a release. That last part matters: Blume
+    builds the site ahead of time, so a new release shows up only after the next
+    build.
+  </p>
+  <p>
+    If you'd rather keep release notes as files in your docs repository, you
+    don't need this source. Any page with <code>type: changelog</code> in its
+    frontmatter joins the same timeline and feed (see{" "}
+    <a href="/docs/advanced/changelog">Changelogs</a>). The source reads
+    GitHub's REST API, from <code>api.github.com</code> unless you point its{" "}
+    <code>baseUrl</code> at a GitHub Enterprise Server, so releases on GitLab
+    need another route. The examples use a fictional{" "}
+    <code>acme/sdk</code> repository and a docs site at{" "}
+    <code>docs.acme.example</code>.
+  </p>
+
+  <h2>Add the releases source</h2>
+  <p>
+    By default, Blume reads one folder of Markdown. To add releases beside it,
+    list both sources in your config:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { filesystem, githubReleases } from "blume/sources";
+
+export default defineConfig({
+  title: "Acme",
+  deployment: {
+    site: "https://docs.acme.example",
+  },
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      githubReleases({
+        owner: "acme",
+        repo: "sdk",
+        prefix: "changelog",
+      }),
+    ],
+  },
+  navigation: {
+    tabs: [
+      { label: "Docs", path: "/" },
+      { label: "Changelog", path: "/changelog" },
+    ],
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <ul>
+    <li>
+      <strong>filesystem()</strong> keeps your existing docs. A{" "}
+      <code>sources</code> list replaces the default folder, so the folder needs
+      its own entry.
+    </li>
+    <li>
+      <strong>githubReleases()</strong> reads the releases of{" "}
+      <code>acme/sdk</code>. <code>prefix</code> puts each release page under{" "}
+      <code>/changelog/</code>, at a path made from its tag:{" "}
+      <code>v1.3.0</code> becomes <code>/changelog/v1-3-0</code>.
+    </li>
+    <li>
+      <strong>deployment.site</strong> gives the feed absolute links. A build
+      with no site URL emits no feed. On Vercel and Netlify, Blume detects the
+      URL, so you can leave it out there.
+    </li>
+    <li>
+      <strong>navigation.tabs</strong> adds a Changelog tab that opens the
+      timeline. Tabs also scope the sidebar, so release pages list releases and
+      your docs pages don't.
+    </li>
+  </ul>
+  <p>The source takes a few more options:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Option</th>
+        <th scope="col">Default</th>
+        <th scope="col">What it does</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>prereleases</code></td>
+        <td><code>false</code></td>
+        <td>Includes prereleases</td>
+      </tr>
+      <tr>
+        <td><code>drafts</code></td>
+        <td><code>false</code></td>
+        <td>Includes draft releases, tagged <code>Draft</code></td>
+      </tr>
+      <tr>
+        <td><code>limit</code></td>
+        <td><code>100</code></td>
+        <td>How many releases to include, newest first</td>
+      </tr>
+      <tr>
+        <td><code>pollInterval</code></td>
+        <td>none</td>
+        <td>Seconds between re-fetches while <code>blume dev</code> runs</td>
+      </tr>
+      <tr>
+        <td><code>baseUrl</code></td>
+        <td><code>https://api.github.com</code></td>
+        <td>
+          The REST API to read, like{" "}
+          <code>https://github.acme.example/api/v3</code> for a GitHub
+          Enterprise Server
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Give the build a GitHub token</h3>
+  <p>
+    A public repository works without a token. GitHub allows 60 unauthenticated
+    API requests an hour per IP address, and a build uses one request per 100
+    releases, so a shared build machine can still run out. Blume warns with{" "}
+    <code>BLUME_MISSING_SECRET</code> whenever <code>GITHUB_TOKEN</code> is
+    unset, public repository or not.
+  </p>
+  <p>
+    A private repository needs a token: without one, GitHub answers 404 and the
+    changelog comes out empty. Create a fine-grained personal access token for
+    that one repository, with <strong>Contents</strong> set to{" "}
+    <strong>Read-only</strong>. With <code>baseUrl</code> set, Blume sends the
+    token to that server, so create it on your GitHub Enterprise Server. For
+    local work, put it in{" "}
+    <code>.env.local</code>, which Blume loads from the project folder up to the
+    repository root. Keep that file out of Git.
+  </p>
+  <CodeBlock
+    code="GITHUB_TOKEN=github_pat_replace_me"
+    lang="bash"
+    title=".env.local"
+  />
+  <p>
+    Where the site builds, set <code>GITHUB_TOKEN</code> in the host's
+    environment variables. In GitHub Actions, the workflow's own token can read
+    the repository it runs in and any public one, so pass{" "}
+    <code>{"${{ secrets.GITHUB_TOKEN }}"}</code> to the build step. Releases in
+    another private repository need a personal access token saved as a secret
+    instead.
+  </p>
+
+  <h2>Preview the changelog</h2>
+  <CodeBlock code="npx blume dev" lang="bash" />
+  <p>
+    Open <code>http://localhost:4321/changelog</code>. The timeline lists every
+    release newest first, grouped by year, one row each with its title, a{" "}
+    <strong>Release</strong> or <strong>Prerelease</strong> tag, and its date.
+    Each row links to the release's own page, where the notes render in full.
+    Here's where each part comes from:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">On GitHub</th>
+        <th scope="col">On your site</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Release name, or the tag when it has none</td>
+        <td>Page title and timeline label</td>
+      </tr>
+      <tr>
+        <td>Tag</td>
+        <td>
+          Page path, and the version (<code>v1.3.0</code> becomes{" "}
+          <code>1.3.0</code>)
+        </td>
+      </tr>
+      <tr>
+        <td>Publish date</td>
+        <td>Timeline date and order, and the feed's date</td>
+      </tr>
+      <tr>
+        <td>Prerelease flag</td>
+        <td>The Release or Prerelease tag</td>
+      </tr>
+      <tr>
+        <td>Notes</td>
+        <td>
+          Page body, plus a meta description summarized from its text
+        </td>
+      </tr>
+      <tr>
+        <td>Release URL</td>
+        <td>The page's <strong>Edit on GitHub</strong> link</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Blume adjusts the notes on the way in. Headings move up so the top level is
+    an <code>h2</code> under the page title, since tools like Changesets open
+    sections at <code>### Patch Changes</code>. A link to your own{" "}
+    <code>deployment.site</code> becomes a root-relative path, so it keeps
+    working on preview deploys. A link that isn't a web, mail, phone, or
+    relative address, like <code>javascript:</code>, keeps only its text. Raw
+    HTML in the notes renders as written, so point the source only at
+    repositories you trust.
+  </p>
+  <p>
+    The feed is at <code>/changelog/rss.xml</code>. Each item carries the
+    release's title, page URL, summary, and publish date, newest first, up to
+    50 items.
+    Tune it under <a href="/docs/discoverability/rss">seo.rss</a>: raise{" "}
+    <code>limit</code>, or remove <code>"changelog"</code> from{" "}
+    <code>types</code> to keep the timeline without a feed. The timeline is
+    headed <strong>Changelog</strong>. To rename it or change the line below
+    the heading, set <code>changelog.title</code> and{" "}
+    <code>changelog.description</code> in <code>blume.config.ts</code> (see{" "}
+    <a href="/docs/advanced/changelog#the-index-page">The index page</a>). To
+    redesign the timeline itself, add a{" "}
+    <a href="/docs/advanced/custom-pages">custom page</a> at{" "}
+    <code>pages/changelog.astro</code>, and Blume stops generating its own.
+  </p>
+  <p>
+    The dev server fetches releases once, then serves that snapshot from{" "}
+    <code>.blume/cache/</code>, even after a restart. To pick up a release you
+    published while it runs, fetch again (the running server reloads):
+  </p>
+  <CodeBlock code="npx blume sync" lang="bash" />
+  <p>
+    Or set <code>pollInterval</code> on the source to re-fetch on a timer. A
+    build always fetches fresh.
+  </p>
+
+  <h2>Handle prereleases</h2>
+  <p>
+    Prereleases stay off the site by default. A beta you publish on GitHub
+    never gets a page, a timeline row, or a feed item. To show them, turn them
+    on:
+  </p>
+  <CodeBlock
+    code={`githubReleases({
+  owner: "acme",
+  repo: "sdk",
+  prefix: "changelog",
+  prereleases: true,
+}),`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Each prerelease then gets the Prerelease tag on the timeline and its own
+    page, named after its tag: <code>v1.4.0-beta.1</code> becomes{" "}
+    <code>/changelog/v1-4-0-beta-1</code>. The stable <code>v1.4.0</code> gets
+    a separate page when it ships. The feed includes prereleases too, so feed
+    readers see every beta. If you later turn prereleases off, their pages
+    disappear, so add a <a href="/docs/deployment#redirects">redirect</a> for
+    any beta page other sites link to.
+  </p>
+  <Callout type="warning">
+    Leave <code>drafts</code> off on a public site. GitHub lists draft releases
+    only to users with push access to the repository, so drafts need such a
+    token, and Blume publishes every draft it receives like any other
+    release, tagged <code>Draft</code>. <code>blume build --preview</code>{" "}
+    doesn't change what this source fetches.
+  </Callout>
+
+  <h2>Rebuild the site when you publish a release</h2>
+  <p>
+    Publishing a release on GitHub doesn't touch your docs site. The release
+    reaches readers on the next build, so give GitHub a way to start one. A
+    workflow on the <code>release</code> event does it. Its{" "}
+    <code>published</code> type fires for releases and prereleases,{" "}
+    <code>edited</code> for corrected notes, and <code>deleted</code> when you
+    remove one. Put the workflow in the repository that publishes the releases,
+    even when the docs live somewhere else.
+  </p>
+
+  <h3>When your host builds the site</h3>
+  <p>
+    Vercel and Netlify build when you push to Git, and a release isn't a push.
+    Create a deploy hook for your production branch instead. In Vercel, it's
+    under the project's <strong>Settings</strong>, then <strong>Git</strong>,
+    then <strong>Deploy Hooks</strong>. In Netlify, it's under{" "}
+    <strong>Project configuration</strong>, then{" "}
+    <strong>Developer settings</strong>, then{" "}
+    <strong>Continuous deployment</strong>, then{" "}
+    <strong>Build hooks</strong>. Anyone with the URL can start a build, so save it as a repository
+    secret named <code>DOCS_DEPLOY_HOOK_URL</code> and call it on each release:
+  </p>
+  <CodeBlock
+    code={`name: Rebuild docs on release
+
+on:
+  release:
+    types: [published, edited, deleted]
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call the docs deploy hook
+        run: curl -fsS -X POST "$DEPLOY_HOOK_URL"
+        env:
+          DEPLOY_HOOK_URL: \${{ secrets.DOCS_DEPLOY_HOOK_URL }}`}
+    lang="yaml"
+    title=".github/workflows/rebuild-docs.yml"
+  />
+  <p>
+    The hook builds your production branch as it is now, so the release's
+    notes arrive with your latest docs.
+  </p>
+
+  <h3>When GitHub Actions builds the site</h3>
+  <p>
+    If a workflow builds and deploys the site, as in the{" "}
+    <a href="/guides/markdown-docs-github-pages">GitHub Pages guide</a>, don't
+    add the <code>release</code> trigger to that workflow. A run started by a
+    release checks out the tagged commit, which would deploy your docs as they
+    were at that tag. Have the release start the docs workflow on{" "}
+    <code>main</code> instead:
+  </p>
+  <CodeBlock
+    code={`name: Rebuild docs on release
+
+on:
+  release:
+    types: [published, edited, deleted]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run the docs workflow on main
+        run: gh workflow run docs.yml --ref main --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: \${{ github.token }}`}
+    lang="yaml"
+    title=".github/workflows/rebuild-docs.yml"
+  />
+  <p>
+    The docs workflow needs <code>workflow_dispatch</code> in its{" "}
+    <code>on</code> block, and its build step needs the token. If the docs
+    build in another repository, name it in <code>--repo</code> and use a
+    personal access token with write access to that repository's Actions as{" "}
+    <code>GH_TOKEN</code>.
+  </p>
+  <CodeBlock
+    code={`      - name: Build docs
+        run: npx blume build
+        env:
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}`}
+    lang="yaml"
+  />
+
+  <h3>When a workflow publishes your releases</h3>
+  <p>
+    If a tool like Changesets creates releases from a workflow with the
+    workflow's own <code>GITHUB_TOKEN</code>, the workflow above never runs.
+    GitHub doesn't start workflows from events that token causes, apart from{" "}
+    <code>workflow_dispatch</code> and <code>repository_dispatch</code>. Start
+    the rebuild from the release workflow itself, after the step that
+    publishes. With <code>changesets/action</code> under the step id{" "}
+    <code>changesets</code>:
+  </p>
+  <CodeBlock
+    code={`      - name: Rebuild the docs
+        if: steps.changesets.outputs.published == 'true'
+        run: curl -fsS -X POST "$DEPLOY_HOOK_URL"
+        env:
+          DEPLOY_HOOK_URL: \${{ secrets.DOCS_DEPLOY_HOOK_URL }}`}
+    lang="yaml"
+  />
+  <p>
+    Blume's own <a href="/changelog">changelog</a> works this way: it's built
+    from Blume's GitHub releases, and the release workflow redeploys the site
+    after each publish.
+  </p>
+
+  <h2>Publish a test release</h2>
+  <p>
+    Write the notes as you would for readers. This file becomes the page body:
+  </p>
+  <CodeBlock
+    code={`SMS templates and a faster retry policy.
+
+### Features
+
+- Send SMS from a saved template with \`templates.render()\`. See [Templates](https://docs.acme.example/templates).
+
+### Fixes
+
+- Retries no longer resend a message the API already accepted.`}
+    lang="md"
+    title="notes.md"
+  />
+  <p>
+    Publish it with the GitHub CLI, then check that the rebuild workflow ran.
+    If the tag doesn't exist yet, <code>gh</code> creates it from the latest
+    commit on the default branch.
+  </p>
+  <CodeBlock
+    code={`gh release create v1.3.0 --repo acme/sdk --title "v1.3.0" --notes-file notes.md
+gh run list --repo acme/sdk --event release --limit 1`}
+    lang="bash"
+  />
+  <p>
+    Once the deploy finishes, the timeline's newest row reads{" "}
+    <strong>v1.3.0</strong>, tagged <strong>Release</strong>, and links to{" "}
+    <code>/changelog/v1-3-0</code>. From these notes, Blume builds the same
+    entry you'd get by writing this file by hand (shown for a release
+    published September 15, 2026 at 14:02 UTC):
+  </p>
+  <CodeBlock
+    code={`---
+changelog:
+  category: Release
+  version: 1.3.0
+date: '2026-09-15T14:02:11Z'
+seo:
+  description: >-
+    SMS templates and a faster retry policy. Send SMS from a saved template with
+    templates.render(). See Templates. Retries no longer resend a message the
+    API…
+title: v1.3.0
+type: changelog
+---
+SMS templates and a faster retry policy.
+
+## Features
+
+- Send SMS from a saved template with \`templates.render()\`. See [Templates](/templates).
+
+## Fixes
+
+- Retries no longer resend a message the API already accepted.`}
+    lang="md"
+  />
+  <p>And the feed gains an item:</p>
+  <CodeBlock
+    code={`<item>
+  <title>v1.3.0</title>
+  <link>https://docs.acme.example/changelog/v1-3-0</link>
+  <guid isPermaLink="true">https://docs.acme.example/changelog/v1-3-0</guid>
+  <description>SMS templates and a faster retry policy. Send SMS from a saved template with templates.render(). See Templates. Retries no longer resend a message the API…</description>
+  <pubDate>Tue, 15 Sep 2026 14:02:11 GMT</pubDate>
+</item>`}
+    lang="xml"
+  />
+  <p>
+    To try a prerelease, publish one with <code>--prerelease</code>. It
+    appears only if you set <code>prereleases: true</code>:
+  </p>
+  <CodeBlock
+    code={`gh release create v1.4.0-beta.1 --repo acme/sdk --prerelease --title "v1.4.0 beta 1" --notes "Try scheduled sends before they ship."`}
+    lang="bash"
+  />
+
+  <h2>When GitHub can't be reached</h2>
+  <p>
+    Every build fetches releases fresh. If that fetch fails, from a rate limit,
+    a missing token, or an outage, what ships depends on whether the build has a
+    snapshot from an earlier fetch in <code>.blume/cache/</code>:
+  </p>
+  <ul>
+    <li>
+      <strong>With a snapshot</strong>, Blume builds from it and warns with{" "}
+      <code>BLUME_SOURCE_OFFLINE</code>. Readers see the changelog as of the
+      last good fetch.
+    </li>
+    <li>
+      <strong>Without one</strong>, as on a fresh CI runner or any build that
+      starts without <code>.blume/</code>, the changelog comes out empty.
+      Blume warns with <code>BLUME_SOURCE_UNAVAILABLE</code> and the build
+      still succeeds: <code>/changelog</code> says "No changelog entries yet.",
+      the release pages are gone, and there's no feed.
+    </li>
+  </ul>
+  <p>
+    That's by design, so a changelog problem never blocks a docs deploy. If
+    you'd rather stop the deploy than ship an empty changelog, fail the build
+    step on the warning. In a GitHub Actions build:
+  </p>
+  <CodeBlock
+    code={`      - name: Build docs
+        shell: bash
+        run: npx blume build 2>&1 | tee build.log
+        env:
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stop if the changelog is empty
+        run: |
+          if grep -q BLUME_SOURCE_UNAVAILABLE build.log; then
+            echo "::error::GitHub releases could not be fetched."
+            exit 1
+          fi`}
+    lang="yaml"
+  />
+  <p>
+    <code>shell: bash</code> runs the step with <code>pipefail</code>, so a
+    failed build still fails the step through the pipe.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The changelog says "No changelog entries yet."</h3>
+  <p>
+    The fetch failed with no snapshot to fall back on. The{" "}
+    <code>BLUME_SOURCE_UNAVAILABLE</code> warning names the API URL and
+    GitHub's status code, like <code>-&gt; 404</code>. A 404 means a private
+    repository without a token, a token that can't see it, or a wrong{" "}
+    <code>owner</code> or <code>repo</code>. A 403 or 429 usually means a rate
+    limit: set <code>GITHUB_TOKEN</code>.
+  </p>
+  <h3>A new release doesn't appear</h3>
+  <p>
+    Check that a build ran after you published it: <code>gh run list</code>{" "}
+    shows whether the rebuild workflow fired. If the release came from a
+    workflow using <code>GITHUB_TOKEN</code>, it won't have: see{" "}
+    <a href="#rebuild-the-site-when-you-publish-a-release">Rebuild the site</a>.
+    In <code>blume dev</code>, run <code>npx blume sync</code>. If the
+    release is a prerelease or a draft, the source leaves it out unless you
+    turn that option on.
+  </p>
+  <h3>The build warns that GITHUB_TOKEN is not set</h3>
+  <p>
+    <code>BLUME_MISSING_SECRET</code> is a warning, not an error, and it shows
+    for public repositories too. The build goes on unauthenticated. Set the
+    token to silence it and to get GitHub's higher rate limit.
+  </p>
+  <h3>Issue numbers and @mentions don't link</h3>
+  <p>
+    GitHub turns <code>#123</code> and <code>@name</code> into links only on
+    its own pages. The API returns the notes as you wrote them, so on your site
+    they stay plain text. Write the full link, like{" "}
+    <code>[#123](https://github.com/acme/sdk/pull/123)</code>, where readers
+    need one.
+  </p>
+  <h3>The build fails with BLUME_DUPLICATE_ROUTE</h3>
+  <p>
+    A release page and another page share a path. That happens when your docs
+    folder also has a <code>changelog/</code> folder, like the one{" "}
+    <code>blume init</code>'s changelog template writes, with a file named after
+    a tag, or when another source under the same <code>prefix</code> has a
+    page at that path. Delete the hand-written entry or give one source another
+    prefix.
+  </p>
+  <h3>Older releases are missing</h3>
+  <p>
+    By default the source includes the 100 newest releases, counted after it
+    leaves out prereleases and drafts. Raise <code>limit</code> to include
+    more. Each further 100 releases costs one
+    more API request per build.
+  </p>
+</GuidePage>

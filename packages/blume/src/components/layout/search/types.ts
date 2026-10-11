@@ -1,5 +1,7 @@
 import { escape } from "html-escaper";
 
+import { accentInsensitive } from "../../../search/fold.ts";
+
 /** A single result rendered in the search dialog. */
 export interface SearchHit {
   url: string;
@@ -43,6 +45,18 @@ export type SearchFn = (
   }
 ) => Promise<SearchResult>;
 
+/** What a caller tells `createSearch` (`blume:search-client`) about its queries. */
+export interface SearchClientOptions {
+  /**
+   * The queries come from a reader typing, as in the search dialog, so each
+   * one supersedes the last. The server-proxied client (Mixedbread), whose
+   * endpoint is rate-limited, then waits for a pause in typing before it
+   * sends a query and aborts the one a newer query supersedes. Other
+   * providers ignore it.
+   */
+  typing?: boolean;
+}
+
 /** A document in the client-loaded `blume-search.json` index. */
 export interface IndexedDocument {
   route: string;
@@ -53,7 +67,27 @@ export interface IndexedDocument {
   section?: string;
   locale?: string;
   version?: string;
+  /** The page's relevance multiplier (`search.boost`). */
+  boost?: number;
+  /** Extra terms the page is found by (`search.keywords`). */
+  keywords?: string[];
 }
+
+/** Something ranked with a relevance score, and the page it belongs to. */
+export interface ScoredMatch<Match> {
+  boost?: number;
+  match: Match;
+  score: number;
+}
+
+/**
+ * Re-rank matches by score times their page's `search.boost`. The sort is
+ * stable, so equal scores keep the provider's order.
+ */
+export const byBoost = <Match>(scored: ScoredMatch<Match>[]): Match[] =>
+  scored
+    .toSorted((a, b) => b.score * (b.boost ?? 1) - a.score * (a.boost ?? 1))
+    .map(({ match }) => match);
 
 /** Max results surfaced in the dialog. */
 export const SEARCH_LIMIT = 12;
@@ -64,16 +98,19 @@ export const SEARCH_LIMIT = 12;
  */
 export const RESULT_POOL = 48;
 
-const REGEXP_SPECIAL = /[$()*+.?[\\\]^{|}]/gu;
 const WORD_BREAK = /\s+/u;
 
-/** Split a query into escaped, non-empty search tokens. */
+/**
+ * Split a query into non-empty search tokens, each a regex source that
+ * matches it whatever accents the text carries: the index folds Prüfung to
+ * prufung, so a page found by `prufung` is marked and excerpted there too.
+ */
 const queryTokens = (query: string): string[] =>
   query
     .trim()
     .split(WORD_BREAK)
     .filter(Boolean)
-    .map((token) => token.replaceAll(REGEXP_SPECIAL, String.raw`\$&`));
+    .map((token) => accentInsensitive(token));
 
 /**
  * Wrap query matches in `<mark>`, HTML-escaping the source text. Matching runs
@@ -127,7 +164,10 @@ export const sanitizeExcerpt = (html: string): string =>
     })
     .join("");
 
-/** First index in `text` where any query token matches (case-insensitive). */
+/**
+ * First index in `text` where any query token matches, ignoring case and
+ * accents.
+ */
 const matchIndex = (text: string, query: string): number => {
   const tokens = queryTokens(query);
   if (tokens.length === 0) {

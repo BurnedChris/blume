@@ -1,0 +1,536 @@
+---
+// Publish a tested agent skill for your SDK: checked against the agent
+// discovery and skills docs, the blume-write-skill skill, `blume skill`
+// (cli/commands/skill.ts, ai/write-skill.ts), the generated site skill
+// (ai/site-skill.ts), and skill publishing (ai/skills.ts, ai/llms.ts,
+// deploy/artifacts.ts) on main; Claude Code's and Codex's skills docs; and
+// the skills CLI 1.7.0 README and source. Ran: Blume's own collectSkills and
+// buildSkillsIndex over this guide's SKILL.md (the index shown is their
+// output), served locally, then `npx skills@1.7.0 add <url> --skill acme -a
+// claude-code -a codex -y` into the trial project (it lands in .agents/skills
+// with a .claude/skills symlink), `skills update acme -p -y`, and the
+// failures for a missing index, a digest mismatch, and a /skill.md URL; the
+// link loop; check-trial.mjs against a stand-in `@acme/messages` with a
+// correct and a broken integration (TypeScript 7.0.2, Node 24). Not yet run
+// end to end: no `blume skill` or `blume build` run, and no agent was given
+// the trial prompt.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("product-documentation-agent-skill")}>
+  <p>
+    To give coding agents a setup workflow for your SDK, write one{" "}
+    <code>SKILL.md</code> that walks through a single task step by step, with
+    every command and code sample copied from your docs and a link to the page
+    it came from. Put it in the folder <code>agents.skills</code> points at,
+    and <code>blume build</code> publishes it with your docs, where developers
+    install it with <code>npx skills add</code> and your docs URL. Then test it
+    the way a developer will meet it: install it in a fresh project, give an
+    agent the task, and check the result against outcomes you wrote down
+    first.
+  </p>
+  <p>
+    By the end, you have that skill, a trial project that installs it from your
+    docs site, and a script that checks what the agent built. The examples use
+    Acme Messages, the fictional email and SMS API from{" "}
+    <a href="/guides/openapi-documentation-website">Generate API docs from an OpenAPI spec</a
+    >, and its TypeScript SDK, <code>@acme/messages</code>. Swap in your own
+    product's names.
+  </p>
+  <p>
+    You may not need all of this. Every Blume build that knows your site's URL
+    already publishes a skill at <code>/skill.md</code>: a map of your pages,
+    generated without a model.
+    If you only want agents to find the right page, that covers it. And if your
+    skills already live in a GitHub repository, developers can install them
+    from there with <code>npx skills add owner/repo</code>, so publishing them
+    on your docs site is optional.
+  </p>
+
+  <h2>Pick one task and decide what done looks like</h2>
+  <p>
+    A skill that tries to cover your whole product turns into a worse copy of
+    your docs. Pick the one task developers most often start with or get wrong.
+    For most SDKs, that's setup. For Acme, it's adding the SDK to a Node.js
+    project and sending the welcome email.
+  </p>
+  <p>
+    Before you write the skill, write down what a correct result looks like,
+    as things a script can check:
+  </p>
+  <ul>
+    <li>
+      <code>@acme/messages</code> is in <code>dependencies</code>, not{" "}
+      <code>devDependencies</code>.
+    </li>
+    <li>
+      The API key comes from <code>ACME_API_KEY</code>, and no key is written
+      into the code.
+    </li>
+    <li>
+      The code sends with <code>acme.messages.send</code> and the{" "}
+      <code>welcome</code> template.
+    </li>
+    <li>The project type-checks.</li>
+  </ul>
+  <p>
+    Write down the prompt you'll give the agent, too, in a developer's words.
+    Leave out the package, the variable, and the method: supplying those is the
+    skill's job.
+  </p>
+  <CodeBlock
+    code="Add Acme to this project. Write src/send-welcome.ts, a script that sends our welcome email to the address passed as its first argument."
+    lang="text"
+  />
+
+  <h2>Draft the skill from your docs</h2>
+  <p>
+    Blume ships a skill for this job, <code>blume-write-skill</code>, and the{" "}
+    <code>blume skill</code> command opens a coding agent on it. At the root of
+    your docs project, run it without a flag first to see where the skill will
+    go:
+  </p>
+  <CodeBlock code="npx blume skill" lang="bash" />
+  <p>
+    It prints a path like <code>skills/acme/SKILL.md</code>. The name comes
+    from your site's <code>title</code> (<code>Acme</code> becomes{" "}
+    <code>acme</code>), which is also the name of the generated skill, so yours
+    takes its place. Then hand the job to an agent:
+  </p>
+  <CodeBlock code="npx blume skill --claude   # or --codex" lang="bash" />
+  <p>
+    The agent reads your config, sidebar, and pages, and writes a skill with
+    setup steps, core concepts, common tasks, gotchas, and a link to the page
+    behind each one. If your config doesn't set <code>agents.skills</code>, it
+    adds <code>"./skills"</code>. If it doesn't set{" "}
+    <code>deployment.site</code>, the agent asks for your site's URL, because
+    every link in the skill is absolute.
+  </p>
+  <p>
+    The session is interactive, so steer it toward your task: ask it to lead
+    with installing the SDK and sending a first message, and to end the setup
+    with how to verify it. Its closing report lists docs gaps, questions the
+    skill needed answered that no page does. Fix those in the docs as well,
+    since developers hit the same gaps.
+  </p>
+
+  <h2>Tighten it into a setup workflow</h2>
+  <p>
+    Review the draft like a code change. Every command, config key, and code
+    sample should appear in your docs as written. Then cut anything a capable
+    agent already knows, and anything it can read from a linked page when it
+    needs it. Here's the Acme skill after that pass:
+  </p>
+  <CodeBlock
+    code={`---
+name: acme
+description: Set up and use Acme Messages, the API and TypeScript SDK (@acme/messages) for sending transactional email and SMS. Use when adding Acme to a project, sending an email or SMS with Acme, checking a message's delivery status, or configuring ACME_API_KEY.
+---
+
+# Acme Messages
+
+Acme Messages sends transactional email and SMS from your backend. Use the \`@acme/messages\` SDK in a Node.js project, or call the REST API at \`https://api.acme.example/v1\` with a bearer token.
+
+## Set up the SDK
+
+1. Install the SDK as a runtime dependency:
+
+   \`\`\`bash
+   npm install @acme/messages
+   \`\`\`
+
+2. Read the API key from the \`ACME_API_KEY\` environment variable. Never write a key into code or commit one. If the project has a \`.env.example\`, add \`ACME_API_KEY=\` to it.
+3. Create one client in a server-side module and reuse it:
+
+   \`\`\`ts
+   import { Acme } from "@acme/messages";
+
+   export const acme = new Acme({ apiKey: process.env.ACME_API_KEY });
+   \`\`\`
+
+See [Quickstart](https://docs.acme.example/quickstart.md) and [Authentication](https://docs.acme.example/authentication.md).
+
+## Send a message
+
+\`\`\`ts
+const message = await acme.messages.send({
+  channel: "email",
+  to: "ada@example.com",
+  template: "welcome",
+});
+console.log(message.id);
+\`\`\`
+
+\`channel\` is \`"email"\` or \`"sms"\`. \`template\` is the ID of a template in the Acme dashboard. See [Send a message](https://docs.acme.example/messages/send.md) and [Templates](https://docs.acme.example/templates.md).
+
+## Check delivery
+
+\`\`\`ts
+const message = await acme.messages.get("msg_8f2k");
+console.log(message.status);
+\`\`\`
+
+See [Message status](https://docs.acme.example/messages/status.md).
+
+## Verify your work
+
+- Run the project's type check, such as \`npx tsc --noEmit\`.
+- Confirm no API key appears in the code or in a committed file.
+- Don't send a real message to test the integration unless the user asks. It reaches a real inbox or phone.
+
+## Gotchas
+
+- \`send\` resolves when Acme accepts the message, not when it's delivered. Read \`status\` for delivery.
+- For \`sms\`, \`to\` is an E.164 phone number, like \`+15551234567\`.
+- Keep the client on the server. Code that runs in the browser would expose the key.
+
+## Where to look
+
+- [API reference](https://docs.acme.example/api.md): every endpoint, with a page per operation.
+- [Errors](https://docs.acme.example/errors.md): each error code and what to do about it.
+- [llms.txt](https://docs.acme.example/llms.txt): every page with a one-line summary.`}
+    lang="md"
+    title="skills/acme/SKILL.md"
+  />
+  <p>A few choices in it matter more than the rest:</p>
+  <ul>
+    <li>
+      <strong>The description.</strong> Agents load a skill when a task matches
+      its <code>description</code>, so it names the product, the package, the
+      environment variable, and the tasks, in the words developers use. The
+      Agent Skills spec caps it at 1,024 characters.
+    </li>
+    <li>
+      <strong>Setup as numbered steps.</strong> The agent follows them in
+      order, and each step is a command or code sample it can copy.
+    </li>
+    <li>
+      <strong>A verify section.</strong> It tells the agent how to check its
+      own work, and it checks the same things as your list of outcomes.
+    </li>
+    <li>
+      <strong>Links to <code>.md</code> URLs.</strong> Every Blume page has a{" "}
+      <a href="/docs/discoverability/markdown#raw-markdown">Markdown mirror</a>{" "}
+      at its URL plus <code>.md</code>, which costs an agent fewer tokens than
+      the HTML.
+    </li>
+    <li>
+      <strong>One file.</strong> A skill folder that holds only{" "}
+      <code>SKILL.md</code> is published as it is and served at{" "}
+      <code>/skill.md</code>. Add <code>scripts/</code> or{" "}
+      <code>references/</code> and Blume publishes the folder as a{" "}
+      <code>.tar.gz</code> instead, which isn't served at <code>/skill.md</code>.
+    </li>
+  </ul>
+
+  <h2>Build it and check the links</h2>
+  <p>
+    <code>blume build</code> publishes skills; <code>blume dev</code> doesn't
+    serve them. These are the parts of the config the skill relies on:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  // ...the rest of your config
+  title: "Acme",
+  deployment: { site: "https://docs.acme.example" },
+  agents: { skills: "./skills" },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>Build the site and serve it the way a static host would:</p>
+  <CodeBlock
+    code={`npx blume build
+npx blume preview`}
+    lang="bash"
+  />
+  <p>The build log should include these two lines:</p>
+  <CodeBlock
+    code={`Published 1 agent skill(s) (.well-known/agent-skills/index.json)
+Generated skill.md (the "acme" skill)`}
+    lang="text"
+  />
+  <p>
+    One skill, not two: yours replaced the generated one because the names
+    match. In another terminal, fetch the discovery index from the preview
+    server, which listens on <code>http://localhost:4321</code> unless that
+    port is taken:
+  </p>
+  <CodeBlock
+    code="curl -s http://localhost:4321/.well-known/agent-skills/index.json"
+    lang="bash"
+  />
+  <CodeBlock
+    code={`{
+  "$schema": "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
+  "skills": [
+    {
+      "description": "Set up and use Acme Messages, the API and TypeScript SDK (@acme/messages) for sending transactional email and SMS. Use when adding Acme to a project, sending an email or SMS with Acme, checking a message's delivery status, or configuring ACME_API_KEY.",
+      "digest": "sha256:9aea5adea9a81d3f4d12347cdea17fdd49247f7b5ad7d83c6f848e729c2d626b",
+      "name": "acme",
+      "type": "skill-md",
+      "url": "/.well-known/agent-skills/acme/SKILL.md"
+    }
+  ]
+}`}
+    lang="json"
+  />
+  <p>
+    Your digest will differ. It's the SHA-256 of the published file, and
+    installers check each download against it. Next, request every docs link
+    in the skill from the preview and print any that doesn't return a page:
+  </p>
+  <CodeBlock
+    code={`grep -oE 'https://docs\\.acme\\.example[^) ]*' skills/acme/SKILL.md | sort -u |
+while read -r url; do
+  code=$(curl -sL -o /dev/null -w "%{http_code}" "http://localhost:4321\${url#https://docs.acme.example}")
+  [ "$code" = "200" ] || echo "$code $url"
+done`}
+    lang="bash"
+  />
+  <p>
+    Replace <code>docs.acme.example</code> with your domain in both places.
+    The loop prints nothing when every link works. Run it on each change:{" "}
+    <code>blume validate</code> checks the links in your pages, not the ones
+    in a skill. If you deploy with the <code>vercel()</code> or{" "}
+    <code>netlify()</code> adapter on server output, there's no{" "}
+    <a href="/docs/deployment#preview-locally">local preview</a>, so run these
+    checks against a preview deployment instead.
+  </p>
+
+  <h2>Install it in a fresh project</h2>
+  <p>
+    Now meet the skill the way a developer will: from your docs site, in a
+    project that has never seen your SDK. Outside your docs repository, create
+    a folder named <code>acme-trial</code> with these three files:
+  </p>
+  <CodeBlock
+    code={`{
+  "name": "acme-trial",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2"
+  }
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <CodeBlock
+    code={`{
+  "compilerOptions": {
+    "module": "nodenext",
+    "target": "es2022",
+    "strict": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["src"]
+}`}
+    lang="json"
+    title="tsconfig.json"
+  />
+  <p>The third is the check script, one test per outcome on your list:</p>
+  <CodeBlock
+    code={`// Checks the agent's Acme integration against the expected outcomes.
+import { execSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+const source = existsSync("src")
+  ? readdirSync("src", { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\\.[cm]?[jt]s$/.test(entry.name))
+      .map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf8"))
+      .join("\\n")
+  : "";
+
+const typeChecks = () => {
+  try {
+    execSync("npx tsc --noEmit", { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const checks = [
+  ["@acme/messages is a runtime dependency", Boolean(pkg.dependencies?.["@acme/messages"])],
+  ["the key is read from ACME_API_KEY", source.includes("process.env.ACME_API_KEY")],
+  ["no key is written into the code", !/apiKey:\\s*["'\`]/.test(source)],
+  ["it sends the welcome template", /messages\\.send\\(/.test(source) && /["'\`]welcome["'\`]/.test(source)],
+  ["the project type-checks", source !== "" && typeChecks()],
+];
+
+for (const [name, passed] of checks) {
+  console.log(\`\${passed ? "pass" : "FAIL"}  \${name}\`);
+}
+process.exitCode = checks.every(([, passed]) => passed) ? 0 : 1;`}
+    lang="js"
+    title="check-trial.mjs"
+  />
+  <p>
+    Install the dependencies, keep an untouched copy to compare against later,
+    and install the skill from the preview:
+  </p>
+  <CodeBlock
+    code={`cd acme-trial
+npm install
+cp -R ../acme-trial ../acme-baseline
+DISABLE_TELEMETRY=1 npx skills@1.7.0 add http://localhost:4321 --skill acme -a claude-code -a codex -y`}
+    lang="bash"
+  />
+  <p>
+    The skills CLI reads your site's discovery index, checks the file against
+    its digest, and writes it to <code>.agents/skills/acme/SKILL.md</code>,
+    where Codex looks, with a symlink at <code>.claude/skills/acme</code> for
+    Claude Code. It also writes <code>skills-lock.json</code>, which records
+    the source URL and digest. The version is pinned so reruns compare like
+    with like. <code>DISABLE_TELEMETRY=1</code> turns off the CLI's usage
+    telemetry, which can include the source URL and skill name for sources
+    outside GitHub.
+  </p>
+
+  <h2>Run the task and check the result</h2>
+  <p>
+    Start <code>claude</code> or <code>codex</code> in the trial folder. Run{" "}
+    <code>/skills</code> to confirm <code>acme</code> is listed, then give it
+    the prompt you wrote down. Don't mention the skill: whether the agent picks
+    it up from the description is part of the test. When it's done, run the
+    check:
+  </p>
+  <CodeBlock code="node check-trial.mjs" lang="bash" />
+  <CodeBlock
+    code={`pass  @acme/messages is a runtime dependency
+pass  the key is read from ACME_API_KEY
+pass  no key is written into the code
+pass  it sends the welcome template
+pass  the project type-checks`}
+    lang="text"
+  />
+  <p>
+    It exits non-zero on any <code>FAIL</code>, so you can script it later.
+    Then give the same prompt to an agent in <code>acme-baseline</code>, which
+    has no skill, and check that too. The difference between the two runs is
+    what your skill teaches. If the baseline passes as well, either the agent
+    already knows this task or your prompt gives the answer away.
+  </p>
+  <p>
+    When a check fails with the skill installed, find the step the agent
+    skipped or misread, and rewrite it in the skill. Rebuild, restart the
+    preview, update the installed copy, and run the task again:
+  </p>
+  <CodeBlock
+    code="DISABLE_TELEMETRY=1 npx skills@1.7.0 update acme -p -y"
+    lang="bash"
+  />
+  <p>
+    Agents don't give the same answer every time, so a single pass is a
+    sample. Before you trust it, run the trial a few times, each in a fresh
+    copy of <code>acme-baseline</code> with the skill installed.
+  </p>
+
+  <h2>Publish it and tell developers</h2>
+  <p>
+    Deploy your docs as usual. The skill is then served at{" "}
+    <code>/.well-known/agent-skills/acme/SKILL.md</code> and{" "}
+    <code>/skill.md</code>, listed in the discovery index and in{" "}
+    <code>llms.txt</code>, and, because <code>deployment.site</code> is set,
+    in your site's{" "}
+    <a href="/docs/discoverability/agent-discovery#ai-catalog">AI catalog</a>.
+    Run the install once more against production, from the site's root URL:
+  </p>
+  <CodeBlock
+    code="npx skills add https://docs.acme.example --skill acme"
+    lang="bash"
+  />
+  <p>
+    Then put that command where developers start: your quickstart page, your
+    SDK's README, and wherever you tell people to install the package. To
+    change the sample questions the AI catalog lists for the skill, key them
+    by <code>skill:</code> plus its name:
+  </p>
+  <CodeBlock
+    code={`agents: {
+  skills: "./skills",
+  catalog: {
+    queries: {
+      "skill:acme": ["set up the Acme SDK", "send an email with Acme"],
+    },
+  },
+},`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <Callout type="info">
+    Publishing makes the skill installable, not used. An agent reads it only in
+    a project where someone installed it, and nothing here decides whether a
+    registry lists it or an AI answer cites your docs. The install command in
+    your quickstart does most of the work.
+  </Callout>
+  <p>
+    A hand-written skill doesn't update itself. When your SDK or its docs
+    change, run <code>npx blume skill --claude</code> again, which updates the
+    existing file, then rerun the trial and deploy. Developers who installed
+    the skill get the new version with <code>npx skills update acme</code>.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>skills add finds no skills</h3>
+  <p>
+    The CLI prints <code>No well-known skills found; trying direct download...</code>{" "}
+    and then fails with{" "}
+    <code>Downloaded URL is not a valid SKILL.md file or supported archive</code>.
+    It found no usable index at that URL. Point it at a build (<code
+      >blume preview</code
+    > or a deployment), not <code>blume dev</code>, and check the build log for
+    a skills warning. A{" "}
+    <code>public/.well-known/agent-skills/index.json</code> of your own
+    replaces the generated index. The CLI also drops a skill whose bytes don't
+    match the index's digest, so a CDN serving a stale copy of one of the two
+    files fails the same way: purge both.
+  </p>
+  <h3>The build publishes no skill</h3>
+  <p>
+    The build log names the cause. A warning ending in{" "}
+    <code>which does not exist; no skills published</code> means the{" "}
+    <code>agents.skills</code> path is wrong; it resolves against the project
+    root. Each skill needs its own folder, like{" "}
+    <code>skills/acme/SKILL.md</code>: a <code>SKILL.md</code> directly in{" "}
+    <code>skills/</code> is ignored, and the build warns that there are no
+    publishable skills. A skill with no <code>name</code> or{" "}
+    <code>description</code> is skipped with a warning, and so is a name that
+    isn't lowercase letters, digits, and single hyphens, 64 characters at most.
+  </p>
+  <h3>/skill.md still shows the page map</h3>
+  <p>
+    Your skill's <code>name</code> must match the one{" "}
+    <code>npx blume skill</code> printed, which comes from the site's{" "}
+    <code>title</code>; change the title and the name changes with it. The
+    skill folder must hold only <code>SKILL.md</code>. A{" "}
+    <code>public/skill.md</code> of your own wins over both, and{" "}
+    <code>agents.skillMd: false</code> turns <code>/skill.md</code> off.
+  </p>
+  <h3>Installing from the /skill.md URL fails</h3>
+  <p>
+    <code>No skills found for the scoped path '/skill.md'</code> means the CLI
+    read the path as a scope and, by design, didn't fall back to the root
+    index. Install from the site's root URL instead, as above.
+  </p>
+  <h3>The agent ignores the skill</h3>
+  <p>
+    If <code>/skills</code> lists it but the agent works from memory, the
+    description doesn't match how the task was phrased. Add the words from
+    your prompt that developers actually use, rebuild, update, and rerun. To
+    test the steps on their own, invoke the skill directly: <code>/acme</code>{" "}
+    in Claude Code, <code>$acme</code> in Codex. If <code>/skills</code> doesn't
+    list it and <code>.claude/skills</code> didn't exist when the session
+    started, run <code>/reload-skills</code> in Claude Code, or restart Codex.
+  </p>
+</GuidePage>

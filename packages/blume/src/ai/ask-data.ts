@@ -14,7 +14,10 @@ import type { AskData } from "./ask-context.ts";
  * from the docs instead of declining.
  * The reader is an AI agent, so `<Visibility>` resolves for the agents audience
  * (web-only content removed, agents-only unwrapped) and components downlevel to
- * Markdown, both matching llms-full.txt.
+ * Markdown, both matching llms-full.txt. Its page links point at the pages
+ * they mean, as there, but as the routes this snapshot keys those pages by:
+ * without the `deployment.base`, like the excerpt headings, since the chat
+ * panel mounts every link it renders under the base.
  */
 export const buildAskData = async (project: BlumeProject): Promise<AskData> => {
   const documents = await buildSearchDocuments(project, {
@@ -35,6 +38,12 @@ export const buildAskData = async (project: BlumeProject): Promise<AskData> => {
       };
       if (versioned) {
         document.version = doc.version;
+      }
+      if (doc.boost !== undefined) {
+        document.boost = doc.boost;
+      }
+      if (doc.keywords) {
+        document.keywords = doc.keywords;
       }
       return document;
     }),

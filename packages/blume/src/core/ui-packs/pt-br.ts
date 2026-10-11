@@ -34,6 +34,7 @@ export const ptBR: UIStringsOverride = {
     error: "Desculpe, algo deu errado.",
     explainCode: "Explique este código.",
     label: "Faça uma pergunta",
+    open: "Abrir assistente",
     placeholder: "Faça uma pergunta…",
     rateLimited:
       "Você fez muitas perguntas. Tente novamente em alguns minutos.",
@@ -50,6 +51,7 @@ export const ptBR: UIStringsOverride = {
   banner: { dismiss: "Fechar o anúncio" },
   changelog: {
     description: "Atualizações do produto e notas de lançamento.",
+    empty: "Ainda não há entradas no registro de alterações.",
     title: "Registro de alterações",
   },
   consent: {
@@ -71,6 +73,7 @@ export const ptBR: UIStringsOverride = {
     preview: "Visualização",
     prop: "Propriedade",
     selectTab: "Selecionar aba",
+    selectView: "Selecionar visualização",
     showLess: "Mostrar menos",
     showMore: "Mostrar mais",
     stars: "Estrelas",

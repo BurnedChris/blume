@@ -1,0 +1,505 @@
+---
+// Reuse Markdown snippets and variables: checked against the includes,
+// variables, validate, and Markdown docs, and against core/includes.ts,
+// core/variables.ts, markdown/include.ts, core/project-graph.ts,
+// core/sources/filesystem.ts, and cli/commands/validate.ts on main. Ran the
+// Acme fixture shown here (three pages, two partials, two variables) through
+// scanProject, readExpandedEntryText (the text behind the .md mirrors), and
+// blumeMdxProcessor from the repo source with Bun: each page got its own
+// scope, the version, and the host, with no diagnostics, and a 1.4.0 to 1.5.0
+// bump reached all four pages. A forgotten prop (in prose and in inline code),
+// an include loop, a missing target, a code-file include with a prop, and a
+// variable in front matter behave as the guide says. The grep commands ran
+// against the fixture's docs folder. CODEOWNERS facts checked against
+// GitHub's docs. Not yet run end to end: no blume dev or blume build of the
+// fixture, so the dist/ greps rest on the prerendered [...slug].md endpoint
+// and this site's own build output. Updated for main: the
+// BLUME_INCLUDE_MALFORMED suggestion names lowercase, quoted attributes
+// (core/includes.ts, 922d680d); read in the source, not rerun.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const setupMdxCode = `## Set up the SDK
+
+Install version {{sdk-version}} of the Acme SDK:
+
+\`\`\`package-install
+npm install @acme/messages@{{sdk-version}}
+\`\`\`
+
+<include>./api-key.mdx</include>
+
+Then create a client. It sends every request to {{api-url}} with your key:
+
+\`\`\`ts acme.ts
+import { Acme } from "@acme/messages";
+
+export const acme = new Acme({ apiKey: process.env.ACME_API_KEY });
+\`\`\``;
+---
+
+<GuidePage guide={guideById("reuse-markdown-snippets")}>
+  <p>
+    To stop install steps and version strings drifting between pages, give
+    each one a single source. In Blume, shared instructions live in a partial:
+    a Markdown or MDX file whose name starts with an underscore, spliced into
+    any page by an <code>&lt;include&gt;</code> statement. The one value that
+    differs between pages goes on that statement as an attribute. Values that
+    repeat everywhere, like an SDK version or an API host, go under{" "}
+    <code>variables</code> in <code>blume.config.ts</code>. You change a line
+    once, and every page that uses it changes on the next build.
+  </p>
+  <p>
+    This guide builds that for three Acme guides that share a setup section:
+    send an email, send an SMS, and receive delivery webhooks. The webhook
+    guide needs an API key with a different scope, and that's the one
+    intentional variation. You end up with two partials, two variables, and a
+    way to list every page a change reaches before you ship it.
+  </p>
+  <p>
+    If only a version number repeats, variables alone cover it, and you can
+    skip the partials. Props replace text and nothing else: they can't show or
+    hide a block. When pages need different paragraphs rather than different
+    values, keep those paragraphs on the page, or use a{" "}
+    <a href="/docs/content/components#view">View</a> when one page serves
+    several audiences.
+  </p>
+
+  <h2>Start from what repeats</h2>
+  <p>
+    Here's the Acme docs project this guide works in. Each of the three guides
+    opens with the same setup: install the SDK at a pinned version, create an
+    API key, and create a client. Copied by hand, those sections drift. One
+    page gets the new version, another keeps the old one, and a reader copies
+    the stale command.
+  </p>
+  <CodeBlock
+    code={`docs/
+  _snippets/
+    setup.mdx
+    api-key.mdx
+  guides/
+    send-email.mdx
+    send-sms.mdx
+    delivery-webhooks.mdx
+  index.mdx
+blume.config.ts`}
+    lang="text"
+  />
+  <p>
+    Blume leaves any file or folder whose name starts with an underscore out
+    of routing, navigation, search, and the sitemap, so <code>_snippets/</code>{" "}
+    holds shared content without turning it into pages. The pages use{" "}
+    <code>.mdx</code> because the setup has a <code>package-install</code>{" "}
+    block, which renders as package manager tabs only in MDX.
+  </p>
+
+  <h2>Extract the setup into an MDX include</h2>
+  <p>
+    Move the setup section out of one of the pages, word for word, into a
+    partial:
+  </p>
+  <CodeBlock
+    code={`## Set up the SDK
+
+Install version 1.4.0 of the Acme SDK:
+
+\`\`\`package-install
+npm install @acme/messages@1.4.0
+\`\`\`
+
+Create an API key in the Acme dashboard with the **messages:write** scope, and
+export it in the shell that runs your code:
+
+\`\`\`bash
+export ACME_API_KEY="paste-your-key-here"
+\`\`\`
+
+Then create a client. It sends every request to https://api.acme.example/v1
+with your key:
+
+\`\`\`ts acme.ts
+import { Acme } from "@acme/messages";
+
+export const acme = new Acme({ apiKey: process.env.ACME_API_KEY });
+\`\`\``}
+    lang="mdx"
+    title="docs/_snippets/setup.mdx"
+  />
+  <p>
+    Then replace the section in each page with one include statement on a line
+    of its own:
+  </p>
+  <CodeBlock
+    code={`---
+title: Send your first email
+description: Send a transactional email with the Acme SDK.
+---
+
+<include>/_snippets/setup.mdx</include>
+
+## Send the email
+
+\`\`\`ts send-email.ts
+import { acme } from "./acme";
+
+const message = await acme.messages.send({
+  channel: "email",
+  to: "ada@example.com",
+  template: "welcome",
+});
+console.log(message.id);
+\`\`\``}
+    lang="mdx"
+    title="docs/guides/send-email.mdx"
+  />
+  <p>
+    A path that starts with <code>/</code> resolves from your content root
+    (<code>docs/</code>), so the same statement works at any folder depth. A
+    path without it, like <code>../_snippets/setup.mdx</code>, resolves from
+    the including file. Put the same statement at the top of{" "}
+    <code>send-sms.mdx</code> and <code>delivery-webhooks.mdx</code>. The SMS
+    page has the same shape as the email page, with <code>channel: "sms"</code>{" "}
+    and a phone number in <code>to</code>.
+  </p>
+  <p>
+    At build time the partial's text replaces the statement, as if you'd
+    written it inline. Its <code>## Set up the SDK</code> heading joins each
+    page's table of contents, search indexes it on each page, and it appears
+    in each page's <code>.md</code> mirror and in <code>llms-full.txt</code>.
+    Front matter in a partial is dropped, so the including page's own front
+    matter wins. With <code>blume dev</code> running, saving a partial reloads
+    every page that includes it.
+  </p>
+
+  <h3>Keep code samples in real files</h3>
+  <p>
+    A statement whose target isn't <code>.md</code> or <code>.mdx</code>{" "}
+    embeds that file as a code block, with the language taken from the
+    extension. A sample can then live as a real source file that your tests
+    import or typecheck, and the page shows exactly that file:
+  </p>
+  <CodeBlock
+    code={`<include meta='title="acme.ts"'>/_snippets/acme.ts</include>`}
+    lang="mdx"
+  />
+  <p>
+    The file still has to sit inside your content root. Keep placeholders out
+    of it: props on its own include statement don't reach it, and the file
+    has to stay valid code for your tests.
+  </p>
+
+  <h2>Pass the one thing that differs</h2>
+  <p>
+    The webhook guide registers an endpoint, so its key needs the{" "}
+    <code>webhooks:write</code> scope, not <code>messages:write</code>. As
+    written, the partial tells webhook readers the wrong thing. Rather than
+    copy the partial, pass the scope in as a prop.
+  </p>
+  <p>
+    While you're there, move the API key paragraph into a partial of its own,
+    so a page that only needs a key can include that part alone. Write the
+    scope as <code>{"{{scope}}"}</code>:
+  </p>
+  <CodeBlock
+    code={`Create an API key in the Acme dashboard with the **{{scope}}** scope, and
+export it in the shell that runs your code:
+
+\`\`\`bash
+export ACME_API_KEY="paste-your-key-here"
+\`\`\``}
+    lang="mdx"
+    title="docs/_snippets/api-key.mdx"
+  />
+  <p>
+    In <code>setup.mdx</code>, replace that paragraph and its code block with a
+    nested include. A relative path inside a partial resolves from the
+    partial's own folder:
+  </p>
+  <CodeBlock code={`<include>./api-key.mdx</include>`} lang="mdx" />
+  <p>Then give each page its scope as an attribute on the statement:</p>
+  <CodeBlock
+    code={`---
+title: Receive delivery webhooks
+description: Get a request each time a message is delivered or fails.
+---
+
+<include scope="webhooks:write">/_snippets/setup.mdx</include>
+
+## Register your endpoint
+
+\`\`\`ts register-webhook.ts
+import { acme } from "./acme";
+
+const webhook = await acme.webhooks.create({
+  url: "https://example.com/acme/webhooks",
+  events: ["message.delivered", "message.failed"],
+});
+console.log(webhook.id);
+\`\`\``}
+    lang="mdx"
+    title="docs/guides/delivery-webhooks.mdx"
+  />
+  <p>
+    In <code>send-email.mdx</code> and <code>send-sms.mdx</code>, the statement
+    becomes:
+  </p>
+  <CodeBlock
+    code={`<include scope="messages:write">/_snippets/setup.mdx</include>`}
+    lang="mdx"
+  />
+  <p>
+    Every attribute except <code>lang</code> and <code>meta</code> is a prop.
+    Attribute names are lowercase, and values are quoted plain text. A prop
+    applies to the included file and to
+    anything that file includes, which is how <code>scope</code> reaches{" "}
+    <code>api-key.mdx</code> through <code>setup.mdx</code>. A prop also wins
+    over a site-wide variable with the same name. A page that only needs the
+    key includes the smaller partial directly, with its own scope:
+  </p>
+  <CodeBlock
+    code={`<include scope="messages:read">/_snippets/api-key.mdx</include>`}
+    lang="mdx"
+  />
+  <p>
+    Write <code>{"{{scope}}"}</code> in prose, not inside backticks. Once the
+    site defines variables (next section), a reference in prose that nothing
+    fills fails the build, while one inside code is left as written with no
+    error. That difference matters when a page forgets the prop.
+  </p>
+
+  <h2>Move repeated values into variables</h2>
+  <p>
+    The SDK version and the API host are still literal text, in the partial
+    and anywhere else a page mentions them. Define them once in your config:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme Messages",
+  variables: {
+    "sdk-version": "1.4.0",
+    "api-url": "https://api.acme.example/v1",
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Then write <code>{"{{name}}"}</code> wherever a page needs the value.
+    Here's the setup partial in its final form:
+  </p>
+  <CodeBlock
+    code={setupMdxCode}
+    lang="mdx"
+    title="docs/_snippets/setup.mdx"
+  />
+  <p>
+    Pages outside the partial read the same values, so a version mentioned on
+    the home page can't fall behind the install command:
+  </p>
+  <CodeBlock
+    code={`---
+title: Acme Messages
+description: Send transactional email and SMS from your app.
+---
+
+These guides use version {{sdk-version}} of the Acme SDK.`}
+    lang="mdx"
+    title="docs/index.mdx"
+  />
+  <p>
+    References work in prose, headings, links, code blocks, inline code, and
+    component props, in pages and in the partials they include. Names take
+    letters, digits, <code>_</code>, and <code>-</code>, and each value is
+    plain text on one line. Blume replaces them before anything reads the
+    page, so the HTML, search, the <code>.md</code> mirrors, and{" "}
+    <code>llms-full.txt</code> all show the value. Front matter is the
+    exception: it stays as written, so keep variables out of titles and
+    descriptions.
+  </p>
+  <p>
+    Defining variables also turns on a check. A <code>{"{{name}}"}</code> in
+    prose that no variable or prop fills is a build error,{" "}
+    <code>BLUME_UNDEFINED_VARIABLE</code>, reported at its line. In a site
+    that defines no variables, the check is off.
+  </p>
+
+  <h2>Change a value and check every page</h2>
+  <p>When the next SDK release ships, the change is one line:</p>
+  <CodeBlock
+    code={`   variables: {
+-    "sdk-version": "1.4.0",
++    "sdk-version": "1.5.0",
+     "api-url": "https://api.acme.example/v1",
+   },`}
+    lang="diff"
+    title="blume.config.ts"
+  />
+  <p>
+    Check the sources before you build. <code>blume validate</code> scans every
+    page with its includes expanded, so it reports a missing include target,
+    an include loop, an undefined variable, and a broken link inside a
+    partial, all without a build:
+  </p>
+  <CodeBlock code="npx blume validate" lang="bash" />
+  <p>
+    It exits non-zero when it finds an error, so the same command works as a
+    CI step.
+  </p>
+
+  <h3>Find every page that uses a partial</h3>
+  <p>To see which pages a partial reaches, search for its file name:</p>
+  <CodeBlock code={`grep -rn "setup.mdx" docs`} lang="bash" />
+  <p>
+    That lists the statements that include it directly, here the three guides.
+    For a nested partial, the search finds the partial that includes it, so
+    repeat it for that file: <code>grep -rn "api-key.mdx" docs</code> points
+    at <code>setup.mdx</code>, which points at the three guides.
+  </p>
+  <p>
+    The built site gives the complete answer, because every page's{" "}
+    <code>.md</code> mirror has its includes spliced in and its variables
+    filled. Build, then list the pages that contain the setup heading and
+    confirm that none still carries the old version:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+grep -rl --include="*.md" "## Set up the SDK" dist
+grep -rn --include="*.md" "@acme/messages@1.4.0" dist`}
+    lang="bash"
+  />
+  <p>
+    The first search lists each page that includes the setup, directly or
+    through another partial, so compare it with the pages you expect. The
+    second should print nothing. With <code>blume dev</code> running, you can
+    read a single page the same way at its <code>.md</code> URL, like{" "}
+    <code>http://localhost:4321/guides/delivery-webhooks.md</code>.
+  </p>
+
+  <h2>Give shared files an owner</h2>
+  <p>
+    Single-source documentation moves risk as well as text: an edit to{" "}
+    <code>setup.mdx</code> now changes three pages at once. Keep each kind of
+    change in one home, so a reviewer can tell from the diff what it reaches:
+  </p>
+  <ul>
+    <li>
+      <strong>Values</strong> live in <code>blume.config.ts</code>, under{" "}
+      <code>variables</code>.
+    </li>
+    <li>
+      <strong>Shared prose</strong> lives in <code>docs/_snippets/</code>.
+    </li>
+    <li>
+      <strong>Variations</strong> live on the page that needs them, as props on
+      its include statement.
+    </li>
+  </ul>
+  <p>
+    Blume's diagnostics follow the same split. A broken link inside a partial
+    is reported against the partial, not against each page that includes it,
+    and an undefined name is reported at the line that uses it, even when that
+    line is in a partial. You fix each problem in the file that owns it.
+  </p>
+  <p>
+    On GitHub, a <code>CODEOWNERS</code> file requests a review from the right
+    team whenever a pull request touches those files:
+  </p>
+  <CodeBlock
+    code={`/docs/_snippets/ @acme/docs
+/blume.config.ts @acme/docs`}
+    lang="text"
+    title=".github/CODEOWNERS"
+  />
+  <p>
+    GitHub reads the file from <code>.github/</code>, the repository root, or{" "}
+    <code>docs/</code>, uses the first one it finds, and lets the last matching
+    line win. The team needs write access to the repository. To block merges
+    without that review, turn on "Require review from Code Owners" in the
+    branch's protection rule.
+  </p>
+  <p>
+    If your site is translated, <code>blume translate</code> doesn't translate
+    partials, since every locale shares them. Keep partials language-neutral,
+    like code and tables, or write one partial per locale and include it from
+    that locale's pages.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The build fails with BLUME_UNDEFINED_VARIABLE in a partial</h3>
+  <p>
+    A page included the partial without its prop. The error points at the
+    partial's line, like <code>docs/_snippets/api-key.mdx:1</code>, not at the
+    page that forgot the prop. To find that page, list the statements that
+    include the partial without the attribute:
+  </p>
+  <CodeBlock
+    code={`grep -rn "_snippets/setup.mdx" docs | grep -v 'scope='`}
+    lang="bash"
+  />
+  <p>
+    A reference inside inline code or a code block isn't checked, so a missing
+    prop there ships as literal braces. The check also needs at least one
+    variable defined in the config.
+  </p>
+
+  <h3>A title shows the braces instead of the value</h3>
+  <p>
+    Variables don't apply to front matter, so a <code>title</code> or{" "}
+    <code>description</code> with <code>{"{{sdk-version}}"}</code> shows it as
+    written. Move the version into the page body, or write it out in the title.
+  </p>
+
+  <h3>BLUME_INCLUDE_NOT_FOUND or BLUME_INCLUDE_OUTSIDE_ROOT</h3>
+  <p>
+    The path points at a file that isn't there. Relative paths resolve from the
+    file that holds the statement, which for a nested include is the partial,
+    not the page. A leading <code>/</code> means the content root, not the
+    repository root. <code>BLUME_INCLUDE_OUTSIDE_ROOT</code> means the target
+    sits outside <code>docs/</code>, like a sample in your source tree: Blume
+    refuses it because version snapshots and ejected projects wouldn't have
+    the file. Move it under <code>docs/</code>. Both errors fail{" "}
+    <code>blume build</code>; in <code>blume dev</code>, the page shows an
+    include error where the partial should be.
+  </p>
+
+  <h3>BLUME_INCLUDE_CYCLE</h3>
+  <p>
+    A partial includes itself, directly or through another partial. The error
+    prints the chain from the page through each partial, like this one for a
+    loop between the two Acme partials:
+  </p>
+  <CodeBlock
+    code="Circular include: guides/send-email.mdx -> _snippets/setup.mdx -> _snippets/api-key.mdx -> _snippets/setup.mdx."
+    lang="text"
+  />
+  <p>
+    Remove the statement that closes the loop. Blume reports the loop once for
+    each page that reaches it.
+  </p>
+
+  <h3>The page shows the raw include tag</h3>
+  <p>
+    An include is block-level, so it needs a line of its own, not a place
+    inside a sentence. A statement a formatter wraps over several lines still
+    works, as long as no blank line splits it. An attribute needs a lowercase
+    name and a quoted value, so <code>Scope="webhooks:write"</code> or{" "}
+    <code>scope=webhooks:write</code> breaks the statement too. A line that
+    starts <code>&lt;include</code> but doesn't close into a statement raises
+    a <code>BLUME_INCLUDE_MALFORMED</code> warning at that line, and its
+    suggestion spells out these rules.
+  </p>
+
+  <h3>A partial shows up as its own page</h3>
+  <p>
+    Its file or folder name doesn't start with an underscore, or your config
+    sets <code>content.exclude</code>, which replaces the default{" "}
+    <code>["**/_*", "**/.*"]</code> instead of adding to it. Rename the folder,
+    or add <code>"**/_*"</code> back to the list. A partial built as a page
+    usually fails with <code>BLUME_UNDEFINED_VARIABLE</code> too, since no prop
+    fills its <code>{"{{scope}}"}</code> there.
+  </p>
+</GuidePage>

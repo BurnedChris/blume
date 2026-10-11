@@ -1,13 +1,30 @@
+import { customCodeSamples } from "../components/openapi/code-samples.ts";
 import { mountBasePath, normalizeBasePath } from "../core/base-path.ts";
-import type { ApiOperationRef, OpenApiData } from "../openapi/model.ts";
-import { operationOf, specAddresses, specOf } from "../openapi/model.ts";
+import type {
+  ApiDocument,
+  ApiOperationRef,
+  OpenApiData,
+} from "../openapi/model.ts";
+import {
+  operationObject,
+  operationOf,
+  specAddresses,
+  specOf,
+} from "../openapi/model.ts";
 import { asSentence } from "../openapi/sentence.ts";
 import { operationSignature } from "../openapi/signature.ts";
 import type {
   ComponentMarkdown,
   EvaluatedValue,
 } from "./component-markdown.ts";
-import { inlineCode, isString, linkDestination } from "./component-markdown.ts";
+import {
+  fencedBlock,
+  inlineCode,
+  isString,
+  linkDestination,
+} from "./component-markdown.ts";
+import { operationDetails } from "./operation-details.ts";
+import type { OperationParts } from "./operation-details.ts";
 
 /**
  * Spec-authored prose as one line of inline Markdown. Unlike the props the
@@ -59,10 +76,13 @@ const listItem = (
  * Each serializer emits what its component renders and no more: the endpoint
  * in the spec kind's own notation ({@link operationSignature}), the version and
  * addresses the overview shows ({@link specAddresses}), the linked list a tag
- * section shows. Parameters, schemas and responses are deliberately left out:
- * those are `operation-model.ts` plus each component's own preparation, and a
- * second implementation here would be free to disagree with the page. The
- * endpoint and what it does is the part that was missing altogether.
+ * section shows. The spec's own `x-codeSamples` come along, as fenced code:
+ * they're text the spec wrote out (often an SDK call no agent could derive
+ * from the endpoint), read through the same `customCodeSamples` the page
+ * renders. So do an OpenAPI operation's request body and responses, with
+ * their examples ({@link operationDetails}), built from the helpers the
+ * page's components use so the two can't disagree; parameters and nested
+ * schemas are left to the page.
  *
  * `specs` is the parsed `blume:openapi` data — empty when the project has no
  * API reference, in which case every serializer declines. `deployBase` is the
@@ -142,7 +162,27 @@ export const openapiComponentSerializers = (
           : "",
         operation.deprecated ? "**Deprecated.**" : "",
       ].filter(Boolean);
-      return [signature, ...notes].join("\n\n");
+      // The spec's own `x-codeSamples`, labeled as their tabs are.
+      const object =
+        data.kind === "openapi" ? operationObject(data, operation) : undefined;
+      const samples = customCodeSamples({
+        "x-code-samples": object?.["x-code-samples"],
+        "x-codeSamples": object?.["x-codeSamples"],
+      }).map(
+        (sample) =>
+          `**${inlineText(sample.label)}**\n\n${fencedBlock(sample.lang, sample.source)}`
+      );
+      // SAFETY: an operation object only resolves out of an OpenAPI spec,
+      // whose document is the OpenAPI shape; its bodies and responses are
+      // the JSON `OperationParts` views, which the helpers read defensively.
+      const details = object
+        ? operationDetails(
+            data.document as ApiDocument,
+            object as OperationParts,
+            operation.webhook === true
+          )
+        : [];
+      return [signature, ...notes, ...samples, ...details].join("\n\n");
     },
   } satisfies Record<string, ComponentMarkdown>;
 };

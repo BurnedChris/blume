@@ -87,6 +87,7 @@ import {
 import { buildReferenceFiles } from "../openapi/scalar.ts";
 import { isOpenApiSource } from "../openapi/source.ts";
 import { buildSearchDocuments } from "../search/documents.ts";
+import { sourcePages } from "../search/source-pages.ts";
 import {
   examplesEntryTemplate,
   tailwindEntryTemplate,
@@ -527,12 +528,15 @@ const examplesPreviewFiles = (
  * eject declares the ones its generated files import directly: the AI SDK the
  * assistant route streams through (unless `ai.assistant.endpoint` points
  * elsewhere, when no route is written) and the EPUB generator's browser bundle
- * `features.ts` loads (only named there when `export.epub` is on).
+ * `features.ts` loads (only named there when `export.epub` is on). The
+ * narration provider's SDK (`openai()`'s `@ai-sdk/openai`) is no runtime
+ * import, but the ejected app's `astro build` loads it to generate the clips.
  */
 const ejectDependencies = (
   options: Parameters<typeof runtimeDependencies>[0]
 ): string[] => {
   const { assistant } = options.config.ai;
+  const { narration } = options.config;
   return [
     ...new Set([
       "astro",
@@ -543,6 +547,7 @@ const ejectDependencies = (
       ...runtimeDependencies(options),
       ...(options.needsReact ? ["react", "react-dom"] : []),
       ...(assistant?.enabled && !assistant.endpoint ? ["ai"] : []),
+      ...(narration.enabled ? (narration.provider?.runtimeDeps ?? []) : []),
       ...(options.config.export.epub ? ["epub-gen-memory"] : []),
     ]),
   ];
@@ -753,7 +758,7 @@ export const eject = async (
         // the package is hoisted out of the project's own node_modules.
         sources: [
           blumeSourceGlob(root, genDir),
-          "../../**/*.{astro,mdx,ts,tsx}",
+          "../../**/*.{astro,jsx,mdx,ts,tsx}",
         ],
         twoslashCss: twoslashCss(),
         userTheme,
@@ -806,7 +811,6 @@ export const eject = async (
     exportEpub,
     exportPdf,
     needsReact,
-    staged: hasStaged,
   });
 
   if (config.seo.og.enabled) {
@@ -907,6 +911,7 @@ export const eject = async (
     files.push({
       content: mixedbreadSearchEndpointTemplate(
         searchAdapter.options,
+        sourcePages(project),
         config.rateLimit
       ),
       path: join(srcDir, "pages", "api", "search.ts"),

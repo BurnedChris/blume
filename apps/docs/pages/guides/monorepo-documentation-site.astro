@@ -1,0 +1,531 @@
+---
+// Add docs to a monorepo: checked against the quickstart, content sources,
+// includes, components (Component examples), configuration (github.dir), and
+// deployment docs, and against cli/init (scaffold.ts, init.ts),
+// astro/examples.ts, theme/sources.ts, astro/templates.ts (workspace fs.allow),
+// core/sources/collection.ts, core/project-graph.ts, core/includes.ts, and
+// deploy/platforms on main; Turborepo's docs and its builtin pass-through env
+// list (crates/turborepo-env); Vercel's monorepo, Turborepo, and build docs.
+// Ran, in a throwaway fixture with pnpm 12.6.0, Turborepo 2.11.4, and blume
+// from npm: `blume init` via pnpm dlx, the ERR_PNPM_IGNORED_BUILDS failure and
+// its allowBuilds fix, a frozen install from a fresh clone, `blume doctor` and
+// `blume validate` (clean, then reproducing BLUME_ENTRY_ID_MISMATCH and
+// BLUME_INCLUDE_OUTSIDE_ROOT), the web app's build, `turbo run build
+// --dry-run` with the package turbo.json, `--affected` on four branches, and
+// `turbo query affected --exit-code`. Not run: `blume dev`/`blume build`, the
+// Vercel deploy, and the GitHub Actions workflow. Not yet run end to end.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("monorepo-documentation-site")}>
+  <p>
+    To add documentation to a monorepo, give the docs their own workspace, like{" "}
+    <code>apps/docs</code>, with a <code>package.json</code> that depends on{" "}
+    <code>blume</code>. Your package manager installs it with everything else,
+    Turborepo builds it as one more task with its own <code>dist/</code>{" "}
+    output, and it deploys as a separate project rooted at{" "}
+    <code>apps/docs</code>. Your app's dependencies, build command, and
+    deployments stay as they are.
+  </p>
+  <p>
+    By the end, you have a docs site beside your app that shows live examples
+    from a shared component package, rebuilds only when the docs or that
+    package change, and deploys to Vercel on its own. The walkthrough uses pnpm
+    12.6 workspaces and Turborepo 2.11, with an app in <code>apps/web</code>{" "}
+    and a shared React package, <code>@acme/ui</code>.
+  </p>
+  <p>
+    Some setups need something else. To serve the docs under your app's own
+    domain at <code>/docs</code>, do this first, then follow{" "}
+    <a href="/guides/nextjs-documentation-subpath">Serve a separate documentation site under /docs in Next.js</a>.
+    If you want docs pages to be routes inside your React app, sharing its
+    layout and auth, a library that runs in the app fits better; see{" "}
+    <a href="/compare/fumadocs">Blume vs Fumadocs</a>. If the docs come from
+    several repositories, see{" "}
+    <a href="/guides/documentation-multiple-repositories">Build one documentation portal from multiple GitHub repositories</a>.
+  </p>
+
+  <h2>The layout</h2>
+  <p>
+    Here's the repository at the end. Everything except <code>apps/docs</code>{" "}
+    exists already:
+  </p>
+  <CodeBlock
+    code={`acme/
+├── apps/
+│   ├── web/                 your application
+│   └── docs/                the new docs workspace
+├── packages/
+│   └── ui/                  @acme/ui, shared React components
+│       ├── src/button.tsx
+│       └── examples/button.tsx
+├── package.json
+├── pnpm-lock.yaml
+├── pnpm-workspace.yaml
+└── turbo.json`}
+    lang="text"
+  />
+  <p>
+    Pin pnpm in the root <code>package.json</code>. pnpm switches to that
+    version when you run it in the repository, and pnpm's GitHub Action
+    installs it in CI:
+  </p>
+  <CodeBlock
+    code={`{
+  "name": "acme",
+  "private": true,
+  "packageManager": "pnpm@12.6.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev"
+  },
+  "devDependencies": {
+    "turbo": "2.11.4"
+  }
+}`}
+    lang="json"
+    title="package.json"
+  />
+
+  <h2>Create the docs workspace</h2>
+  <p>From the repository root, scaffold Blume into <code>apps/docs</code>:</p>
+  <CodeBlock
+    code="pnpm dlx --allow-build=esbuild blume init apps/docs --yes --template docs --no-install"
+    lang="bash"
+  />
+  <p>
+    <code>--allow-build=esbuild</code> lets pnpm 12 run esbuild's install
+    script while it fetches the CLI, and <code>--no-install</code> waits until
+    pnpm knows about the folder. You get a <code>package.json</code> named{" "}
+    <code>docs</code> with <code>dev</code>, <code>build</code>, and{" "}
+    <code>doctor</code> scripts, a <code>docs/index.mdx</code> home page, a{" "}
+    <code>blume.config.ts</code>, and a <code>.gitignore</code> for{" "}
+    <code>node_modules/</code>, <code>.blume/</code>, <code>dist/</code>, and{" "}
+    <code>.env.local</code>. <code>.blume/</code> is the Astro project Blume
+    generates and drives, so it never gets committed. pnpm, Turborepo, and Vercel all identify workspaces
+    by name, so if another package is already called <code>docs</code>,
+    rename this one.
+  </p>
+  <p>Then name the site and tell Blume where it sits in the repository:</p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme Docs",
+  description: "Guides and component docs for Acme.",
+  github: {
+    owner: "acme",
+    repo: "acme",
+    dir: "apps/docs",
+  },
+});`}
+    lang="ts"
+    title="apps/docs/blume.config.ts"
+  />
+  <p>
+    Edit links are built from the repository root, so <code>dir</code> makes
+    the home page's link open <code>apps/docs/docs/index.mdx</code> instead
+    of a <code>docs/index.mdx</code> that doesn't exist.
+  </p>
+
+  <h2>Register it with pnpm</h2>
+  <p>
+    pnpm installs only the folders <code>pnpm-workspace.yaml</code> lists, and
+    pnpm 12 stops any install whose dependencies have build scripts nobody
+    approved. Astro, which Blume runs on, depends on esbuild, which has one:
+  </p>
+  <CodeBlock
+    code={`packages:
+  - apps/*
+  - packages/*
+
+allowBuilds:
+  esbuild: true`}
+    lang="yaml"
+    title="pnpm-workspace.yaml"
+  />
+  <p>
+    <code>apps/*</code> already covers the new folder. If your file lists apps
+    one by one, add <code>apps/docs</code>. Then install from the root and
+    start the docs on their own:
+  </p>
+  <CodeBlock
+    code={`pnpm install
+pnpm --filter docs dev`}
+    lang="bash"
+  />
+  <p>
+    The site is at <code>http://localhost:4321</code>. The docs'
+    dependencies, Astro among them, belong to the docs workspace. pnpm keeps
+    them out of the root <code>node_modules</code>, so your app can't import
+    them without declaring them.
+  </p>
+
+  <h2>Add the Turborepo task</h2>
+  <p>
+    You don't need to touch the root <code>turbo.json</code>. It probably
+    describes your app's build, like this one for a Next.js app:
+  </p>
+  <CodeBlock
+    code={`{
+  "$schema": "https://turborepo.dev/schema.json",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    }
+  }
+}`}
+    lang="json"
+    title="turbo.json"
+  />
+  <p>
+    Those outputs don't include the docs' <code>dist/</code>, so a cache hit
+    would restore nothing. Give the docs a package configuration of their own
+    that extends the root and replaces only the outputs:
+  </p>
+  <CodeBlock
+    code={`{
+  "$schema": "https://turborepo.dev/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "outputs": ["dist/**"]
+    }
+  }
+}`}
+    lang="json"
+    title="apps/docs/turbo.json"
+  />
+  <p>
+    The docs' <code>build</code> keeps the root's <code>dependsOn</code>, and{" "}
+    <code>dev</code> comes from the root unchanged. Check what Turborepo will
+    run:
+  </p>
+  <CodeBlock code="pnpm turbo run build --dry-run --filter=docs" lang="bash" />
+  <p>
+    <code>docs#build</code> should show <code>Command = blume build</code> and{" "}
+    <code>Outputs = dist/**</code>. Turborepo hashes the files in{" "}
+    <code>apps/docs</code> that <code>.gitignore</code> doesn't exclude, so
+    the generated <code>.blume/</code> and <code>dist/</code> never change
+    the hash.
+  </p>
+
+  <h2>Show examples from a shared package</h2>
+  <p>
+    Blume's <code>&lt;Component&gt;</code> renders an example file as a live
+    preview beside its source. The examples can live in the package they
+    demonstrate, so whoever changes a component updates its example in the
+    same pull request. First, declare that the docs depend on the package:
+  </p>
+  <CodeBlock code={`pnpm --filter docs add "@acme/ui@workspace:*"`} lang="bash" />
+  <p>
+    The docs don't import <code>@acme/ui</code> by name, but Turborepo and
+    Vercel build their dependency graphs from <code>package.json</code>, and
+    this entry is what tells them a change to <code>packages/ui</code> affects
+    the docs. Here's the package, its component, and one example. An example
+    file default-exports the component to preview:
+  </p>
+  <CodeBlock
+    code={`{
+  "name": "@acme/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./button": "./src/button.tsx"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "react": "^19.3.0"
+  }
+}`}
+    lang="json"
+    title="packages/ui/package.json"
+  />
+  <CodeBlock
+    code={`import type { ComponentProps } from "react";
+
+export function Button(props: ComponentProps<"button">) {
+  return (
+    <button
+      className="rounded-md bg-indigo-600 px-4 py-2 font-medium text-white hover:bg-indigo-500"
+      {...props}
+    />
+  );
+}`}
+    lang="tsx"
+    title="packages/ui/src/button.tsx"
+  />
+  <CodeBlock
+    code={`import { useState } from "react";
+
+import { Button } from "../src/button";
+
+export default function ButtonExample() {
+  const [count, setCount] = useState(0);
+  return <Button onClick={() => setCount(count + 1)}>Clicked {count} times</Button>;
+}`}
+    lang="tsx"
+    title="packages/ui/examples/button.tsx"
+  />
+  <p>
+    Point <code>examples</code> at that folder. The path is relative to{" "}
+    <code>apps/docs</code>:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme Docs",
+  description: "Guides and component docs for Acme.",
+  examples: {
+    source: "../../packages/ui/examples",
+    css: "examples.css",
+  },
+  github: {
+    owner: "acme",
+    repo: "acme",
+    dir: "apps/docs",
+  },
+});`}
+    lang="ts"
+    title="apps/docs/blume.config.ts"
+  />
+  <p>
+    Previews get Tailwind, scanned from the docs workspace and the examples
+    folder. The button's classes live in <code>packages/ui/src</code>, which
+    neither covers, so add it with an <code>@source</code> directive, written
+    relative to the stylesheet:
+  </p>
+  <CodeBlock
+    code={`/* Scan the shared UI package for the Tailwind classes its components use. */
+@source "../../packages/ui/src";`}
+    lang="css"
+    title="apps/docs/examples.css"
+  />
+  <p>Now any page can show the example by its path, without the extension:</p>
+  <CodeBlock
+    code={`---
+title: Button
+description: The primary action button from @acme/ui, with a live example.
+---
+
+Import it from the shared UI package:
+
+\`\`\`tsx
+import { Button } from "@acme/ui/button";
+\`\`\`
+
+<Component path="button" />`}
+    lang="mdx"
+    title="apps/docs/docs/components/button.mdx"
+  />
+  <p>
+    Keep React on one version across the workspace. With matching versions,
+    pnpm links Blume's React and the one <code>@acme/ui</code> imports to the
+    same copy, so the example's hooks run against the React that renders
+    them. For more on writing examples, see{" "}
+    <a href="/guides/react-examples-mdx-documentation">Add live React component examples to Markdown documentation</a>.
+  </p>
+  <Callout type="info">
+    Share code this way, not pages. Blume's filesystem sources must share one
+    root, so a second <code>filesystem()</code> pointed at{" "}
+    <code>packages/ui/docs</code> fails with{" "}
+    <code>BLUME_ENTRY_ID_MISMATCH</code>, and an <code>&lt;include&gt;</code>{" "}
+    of a file outside the content root fails with{" "}
+    <code>BLUME_INCLUDE_OUTSIDE_ROOT</code>. Keep every page under{" "}
+    <code>apps/docs/docs</code>.
+  </Callout>
+
+  <h2>Deploy the docs as their own project</h2>
+  <p>
+    The docs deploy as a second Vercel project from the same repository, so the
+    app's project and its settings stay untouched. Add a{" "}
+    <code>vercel.json</code> to the docs workspace:
+  </p>
+  <CodeBlock
+    code={`{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "turbo run build",
+  "outputDirectory": "dist"
+}`}
+    lang="json"
+    title="apps/docs/vercel.json"
+  />
+  <p>
+    In Vercel, add a new project, import the repository, and set{" "}
+    <strong>Root Directory</strong> to <code>apps/docs</code>. Set the Node.js
+    version to 22 or later, since Blume needs 22.19 or newer, and deploy.
+    Vercel detects pnpm from the lockfile and installs the workspace, and{" "}
+    <code>turbo run build</code> run from <code>apps/docs</code> builds only
+    the docs and what they depend on. Leave{" "}
+    <strong>Include source files outside of the Root Directory in the Build Step</strong>{" "}
+    on, which is the default: the build reads the examples in{" "}
+    <code>packages/ui</code>.
+  </p>
+  <p>
+    Blume reads the site URL for the sitemap, canonical links, and Open Graph
+    images from Vercel's environment. Turborepo's strict environment mode
+    hides undeclared variables from tasks, but it always passes Vercel's{" "}
+    <code>VERCEL_*</code> through, so there's nothing to declare. If you later
+    switch to server rendering with <code>vercel()</code> from{" "}
+    <code>blume/deploy</code>, the build writes <code>.vercel/output</code>,
+    so add <code>".vercel/output/**"</code> to the docs' outputs.
+  </p>
+
+  <h2>Build only what changed</h2>
+  <p>
+    Vercel skips deploying a monorepo project when a commit doesn't touch it,
+    and new projects have this on by default (<strong>Skip deployment</strong>,
+    under Root Directory). It needs a GitHub repository, every workspace listed
+    in <code>pnpm-workspace.yaml</code> with a unique name, and dependencies
+    between workspaces declared in <code>package.json</code>, which is why you
+    added <code>@acme/ui</code> to the docs. Turborepo reads the same graph.
+    Here's what <code>turbo run build --affected</code> selected against{" "}
+    <code>main</code> for four branches of a repository with this layout:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">The branch changed</th>
+        <th scope="col">What builds</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>apps/docs/docs/index.mdx</code></td>
+        <td>The docs</td>
+      </tr>
+      <tr>
+        <td><code>apps/web/src/main.tsx</code></td>
+        <td>The app</td>
+      </tr>
+      <tr>
+        <td><code>packages/ui/examples/button.tsx</code></td>
+        <td>The docs and the app</td>
+      </tr>
+      <tr>
+        <td>The root <code>turbo.json</code></td>
+        <td>Everything</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Vercel treats a change outside every workspace, like a root config file,
+    as a global change and deploys every project. On a Git host other than
+    GitHub, set the docs project's <strong>Ignored Build Step</strong> to:
+  </p>
+  <CodeBlock
+    code="turbo query affected --base=$VERCEL_GIT_PREVIOUS_SHA --packages docs --exit-code"
+    lang="bash"
+  />
+  <p>
+    It exits 1 when the docs are affected, so the build runs, and 0 when they
+    aren't, so Vercel skips it.
+  </p>
+  <p>
+    In CI, the same flag keeps a docs-only pull request from building the
+    app:
+  </p>
+  <CodeBlock
+    code={`name: CI
+
+on:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build --affected`}
+    lang="yaml"
+    title=".github/workflows/ci.yml"
+  />
+  <p>
+    In GitHub Actions, Turborepo compares the pull request with its base
+    branch. It needs that history, which is what <code>fetch-depth: 0</code>{" "}
+    is for: in a shallow clone, it treats every package as changed. To check
+    the docs' links on the same pull requests, see{" "}
+    <a href="/guides/markdown-link-checking-ci">Catch broken Markdown links in GitHub Actions</a>.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>pnpm install fails with ERR_PNPM_IGNORED_BUILDS</h3>
+  <p>
+    The error lists <code>Ignored build scripts: esbuild@…</code>. Add{" "}
+    <code>esbuild: true</code> under <code>allowBuilds</code> in the root{" "}
+    <code>pnpm-workspace.yaml</code>, not in the docs folder, and install
+    again.
+  </p>
+  <h3>pnpm doctor doesn't run Blume's checks</h3>
+  <p>
+    pnpm has a built-in <code>doctor</code> command that wins over the
+    script. Run <code>pnpm --filter docs run doctor</code> instead.
+  </p>
+  <h3>The build fails with BLUME_ENTRY_ID_MISMATCH</h3>
+  <p>
+    A second <code>filesystem()</code> source has a root of its own, so its
+    pages would 404. Filesystem sources must share one root and split it
+    with <code>include</code> globs. Move those pages under{" "}
+    <code>apps/docs/docs</code> and remove the second source. See{" "}
+    <a href="/docs/content/sources">Content sources</a>.
+  </p>
+  <h3>An include fails with BLUME_INCLUDE_OUTSIDE_ROOT</h3>
+  <p>
+    Includes can only splice files inside the content root. Show component
+    code through <code>examples</code> instead, or move the snippet into{" "}
+    <code>apps/docs/docs/_snippets</code>. See{" "}
+    <a href="/docs/content/includes#rules-and-diagnostics">Includes</a>.
+  </p>
+  <h3>The page says "No example found at button"</h3>
+  <p>
+    Blume found no file at that path under <code>examples.source</code>, and{" "}
+    <code>blume doctor</code>, <code>blume dev</code>, and{" "}
+    <code>blume build</code> warn with <code>BLUME_EXAMPLE_NOT_FOUND</code> at
+    the line. Check that the source is relative to <code>apps/docs</code>, and
+    that the <code>path</code> leaves off the extension.
+  </p>
+  <h3>The preview renders without styles</h3>
+  <p>
+    The component's classes weren't scanned. Check the <code>@source</code>{" "}
+    path, which is relative to <code>examples.css</code>, and that{" "}
+    <code>css</code> under <code>examples</code> names that file. Blume warns
+    when the file it names doesn't exist.
+  </p>
+  <h3>Vercel can't find the build output after a cache hit</h3>
+  <p>
+    Turborepo restored the docs' task from cache, but the task's outputs
+    didn't include <code>dist/**</code>. Check{" "}
+    <code>apps/docs/turbo.json</code> and the dry run above.
+  </p>
+  <h3>The sitemap is missing on another host</h3>
+  <p>
+    Turborepo's strict mode passes Vercel's variables through but hides other
+    hosts', so Blume can't detect the site URL. Add them to the docs' build
+    task in <code>apps/docs/turbo.json</code>, like{" "}
+    <code>"env": ["NETLIFY", "URL"]</code> on Netlify, or set{" "}
+    <a href="/docs/deployment#set-your-site-url">deployment.site</a>. A token a{" "}
+    <a href="/docs/content/sources">content source</a> reads, like{" "}
+    <code>NOTION_TOKEN</code>, needs the same treatment.
+  </p>
+</GuidePage>

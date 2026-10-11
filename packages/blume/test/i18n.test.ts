@@ -1133,7 +1133,7 @@ describe("UI dictionaries", () => {
     expect(EN_UI.actions.export).toBe("Export");
     expect(EN_UI.actions.generating).toBe("Generating…");
     expect(EN_UI.nav.sections).toBe("Sections");
-    expect(EN_UI.nav.toggleTheme).toBe("Toggle color theme");
+    expect(EN_UI.nav.toggleTheme).toBe("Toggle theme");
     expect(EN_UI.search.results).toBe("Results");
     expect(EN_UI.search.error).toBe("Something went wrong. Please try again.");
     expect(EN_UI.content.diagramError).toBe("Could not render this diagram.");
@@ -1187,9 +1187,13 @@ describe("UI dictionaries", () => {
     expect(EN_UI.changelog.description).toBe(
       "Product updates, new features, and fixes from every release."
     );
+    expect(EN_UI.changelog.empty).toBe("No changelog entries yet.");
     const dict = resolveUIStrings("fr", { defaultLocale: "en" });
     expect(dict.nav.breadcrumb).toBe("Fil d'Ariane");
     expect(dict.changelog.title).toBe("Journal des modifications");
+    expect(dict.changelog.empty).toBe(
+      "Aucune entrée dans le journal des modifications pour le moment."
+    );
     for (const [code, pack] of Object.entries(UI_PACKS)) {
       expect(pack.search?.all, `pack "${code}" misses search.all`).toBeTruthy();
       expect(
@@ -1207,6 +1211,10 @@ describe("UI dictionaries", () => {
       expect(
         pack.changelog?.description,
         `pack "${code}" misses changelog.description`
+      ).toBeTruthy();
+      expect(
+        pack.changelog?.empty,
+        `pack "${code}" misses changelog.empty`
       ).toBeTruthy();
     }
   });

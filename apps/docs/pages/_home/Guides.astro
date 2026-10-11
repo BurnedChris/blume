@@ -1,0 +1,19 @@
+---
+// Guides: the first three from _guides/guides.ts as a row of cards, with a
+// link to the rest at /guides. A new guide at the top of that list lands here.
+import GuideGrid from "../_guides/GuideGrid.astro";
+import { guides } from "../_guides/guides.ts";
+import SectionHeading from "./SectionHeading.astro";
+import TextLink from "./TextLink.astro";
+---
+
+<section class="flex flex-col gap-10 lg:gap-12" data-reveal>
+  <SectionHeading
+    tagline="Step-by-step guides, from first page to production."
+    title="Learn Blume one goal at a time."
+  >
+    <TextLink href="/guides">All guides</TextLink>
+  </SectionHeading>
+
+  <GuideGrid guides={guides.slice(0, 3)} />
+</section>

@@ -1,7 +1,7 @@
 ---
 title: アシスタント
 description: >-
-  ドキュメントに基づいたページ内アシスタント — 推奨質問、カスタム指示、検索サイズの調整、Vercel AI Gateway から任意の OpenAI 互換エンドポイントまでのプロバイダーアダプター、そして必要となるサーバー出力について解説します。
+  ドキュメントに基づいたページ内アシスタント — 推奨質問、カスタム指示、検索サイズの調整、OpenAI、Anthropic、Gemini、Grok、Vercel AI Gateway、任意の OpenAI 互換エンドポイント向けのプロバイダーアダプター、そして必要となるサーバー出力について解説します。
 ---
 
 読者の質問にページ内チャットパネルで回答するアシスタントを追加します。ストリーミング対応のサーバーエンドポイントと [AI SDK](https://ai-sdk.dev) によって動作します。これはオプトイン方式であり、有効にするまで静的ドキュメントは完全に静的なままです。
@@ -35,6 +35,27 @@ ai: {
 
 `label` は実際に送信される質問で、`icon` は任意です。`suggestions` を未設定（または空）のままにすると、パネルはシンプルな入力欄だけで開きます。
 
+## コードについて質問する [#asking-about-code]
+
+アシスタントを有効にすると、すべてのコードブロックのコピーボタンの横に **Ask** ボタンが表示されます。このボタンはブロックを添付した状態でアシスタントを開き、添付したブロックは入力欄の上にチップとして表示されます。これにより読者は、そのコードが何をするのか、なぜ失敗するのか、どう応用すればよいのかを質問できます。質問を入力せずに送信すると、アシスタントにコードの説明を依頼します。コードは質問の後にフェンス付きコードブロックとしてモデルに渡され、最大 6,000 文字まで送信されます。
+
+`useAssistant` を使って構築したカスタムチャット UI でも同じことができます。`window` で `blume:open-assistant` をリッスンしてください。その `detail.code` にはブロックの `language`、`source`、`title` が含まれています。
+
+## サポートへの問い合わせ [#contact-support]
+
+ドキュメントで回答できない場合は、読者を担当者に引き継ぎましょう。`support` を設定すると、会話が始まった時点で、パネルの会話の下に **Contact support** リンクが表示されます。
+
+```ts blume.config.ts lineNumbers
+ai: {
+  assistant: {
+    enabled: true,
+    support: "mailto:help@example.com", // or "https://example.com/support", or "/support"
+  },
+},
+```
+
+`mailto:` アドレスの場合は、会話を本文としたメールが作成されるため、読者が改めて説明する必要はありません（長い会話では最新のやり取りが残されます）。URL またはサイト内のページの場合は、会話の ID が `thread` クエリパラメーターとして付与されます。アシスタントの `ask`、`ask_answer`、`ask_error` の[アナリティクスイベント](#analytics)にも同じ `thread` が含まれるため、サポートチームはアナリティクス上でその会話を見つけられます。
+
 ## カスタム指示 [#custom-instructions]
 
 `instructions` で独自のシステムプロンプトのテキストを追加できます。アイデンティティ、言語、トーンなど、アシスタントに意識してほしい内容を自由に指定できます。
@@ -55,9 +76,27 @@ ai: {
 
 アシスタントは**ドキュメントに基づいて**動作します。質問ごとに最も関連性の高いページを取得し（オンページ検索を支えるものと同じ字句ベースの [Orama](/docs/configuration/search) インデックスを使用）、モデルのシステムプロンプトに挿入します。これにより、回答はモデル自身の知識ではなくコンテンツから生成されます。アシスタントには、取得したページのみに基づいて回答すること、扱われていない内容についてはその旨を伝えること、参照したページを引用することが指示されています。
 
-読者が現在閲覧しているページが最初にコンテキストへ追加され、そのページの言語に（[バージョン管理](/docs/content/versioning)されたサイトではそのドキュメントのバージョンにも）検索範囲を絞り込むために使用されます。これにより、ドキュメント内のどこにいても関連性の高い回答が得られます。検索はビルド時に焼き込まれたスナップショットからリクエスト時に実行されるため、[検索](/docs/configuration/search)プロバイダーに関係なく動作し（`search: false` の場合でも）、設定は不要です。
+読者が現在閲覧しているページが最初にコンテキストへ追加され、そのページの言語に（[バージョン管理](/docs/content/versioning)されたサイトではそのドキュメントのバージョンにも）検索範囲を絞り込むために使用されます。これにより、ドキュメント内のどこにいても関連性の高い回答が得られます。ランディングページなどドキュメント外からの質問では、URL のロケールプレフィックスが示す言語（`/ja`）、またはデフォルトの言語に限定されます。検索はビルド時に焼き込まれたスナップショットからリクエスト時に実行されるため、[検索](/docs/configuration/search)プロバイダーに関係なく動作し（`search: false` の場合でも）、設定は不要です。
 
 グラウンディングは **[Inkeep](#inkeep)** を除くすべてのアダプターで有効です。Inkeep はダッシュボードでインデックス化したコンテンツに対して独自の検索を実行します。
+
+## ページの検索と読み込み [#searching-and-reading-pages]
+
+取得されたページはあくまで出発点です。アシスタントは自ら調べることもできます。ドキュメントを検索する `search_docs` ツールと、抜粋だけでは回答に届かない場合にページ全体を読み込む `read_page` ツールを備えています。1つの質問の中で、検索し、1〜2ページを読み、再度検索してから回答することができます。ツール呼び出しはグラウンディングと同じスナップショットに対してサーバー上で実行され、読者の言語とドキュメントのバージョンの範囲内にとどまり、読者に届くことはありません。読者に表示されるのは回答だけです。
+
+これらのツールは、モデルがツール呼び出しに対応しているすべてのアダプターでデフォルトで有効です。セルフホストのモデルは対応していない可能性があるため、[OpenAI 互換エンドポイント](#openai-compatible-endpoints)ではデフォルトで無効になっています。どちらのデフォルトも `tools` で変更できます。
+
+```ts blume.config.ts lineNumbers
+ai: {
+  assistant: {
+    enabled: true,
+    provider: openai({ baseUrl, model, apiKeyEnv }),
+    tools: true, // this model supports tool calling
+  },
+}
+```
+
+1つの質問で実行されるモデルのステップは最大5回で、最大4ラウンドのツール呼び出しの後に回答します。`tools: false` の場合、アシスタントはツールが導入される前と同様に、取得したページのみから回答します。
 
 ## 検索サイズ [#retrieval-size]
 
@@ -86,6 +125,8 @@ ai: {
 
 デフォルト値はホスト型モデルに適しています。自前のハードウェアで提供していて、再現率よりも最初のトークンまでの時間が重要な場合は値を下げてください。いずれの場合も回答はドキュメントに基づいたままであり、アシスタントは扱われていない内容について推測で埋めるのではなく、その旨を伝えるよう指示されています。
 
+自前のハードウェアで運用する場合は、抜粋だけでなくプロンプト全体に合わせてモデルのコンテキストウィンドウのサイズも設定してください。それまでの会話によって最大 24,000 文字が追加され、`tools` が有効な場合は `read_page` の結果1件だけで最大 20,000 文字（それだけで約 5,000 トークン）になります。たとえば Ollama は小規模な GPU ではデフォルトで 4k トークンのウィンドウを使用しますが、プロンプトがこれを超えてもエラーにはなりません。Ollama は指示と抜粋が含まれるプロンプトの先頭部分を切り捨てるため、モデルはドキュメントを参照せずに回答してしまいます。
+
 ## 外部エンドポイント [#external-endpoint]
 
 すでに AI 用の API バックエンドをお持ちですか？パネルをそこに向けることで、ドキュメントのビルドを静的なまま維持できます。
@@ -108,6 +149,8 @@ Blume は組み込みルートと同じ `POST` ボディを送信します。
 }
 ```
 
+`messages` はそれまでの会話で、最後が新しい質問になります。組み込みルートが受け付けるのは最大 40 件のメッセージで、JSON として 24,000 文字までです。そのため、会話がいずれかの上限を超えると、パネルは収まる範囲で最新のやり取りを送信し、最も古いものを除外します。
+
 ボディがプレーンな UTF-8 テキストストリームである成功レスポンスを返してください。エンドポイントが別のオリジンにある場合は、CORS でドキュメントのオリジンを許可してください。`OPTIONS` と `POST` を受け付け、`content-type` リクエストヘッダーを許可し、プリフライトとストリーミングレスポンスの両方で CORS ヘッダーを返します。`endpoint` を設定すると、Blume はチャット UI のみを生成し、サーバールート、グラウンディング用スナップショット、プロバイダーの依存関係、プロバイダーシークレットの警告は生成しません。検索、認証、レート制限、モデルへのアクセス、引用はすべてバックエンド側の責任となります。併せて設定したアダプターは無視されます。
 
 ## クロスオリジンの呼び出し元 [#cross-origin-callers]
@@ -123,7 +166,7 @@ ai: {
 }
 ```
 
-これによりルートはブラウザの `OPTIONS` プリフライトに応答し、すべてのレスポンスで列挙されたオリジンを指定します。ストリーミングされる回答もエラーステータスも同様であるため、呼び出し元はボディが拒否されたのかプロバイダー側の障害なのかを判別できます。列挙されていないオリジンにはヘッダーが付与されず、ブラウザの同一オリジンポリシーの対象のままとなります。各エントリはそのオリジンに正規化されるため、`https://www.example.com/docs/` と `https://www.example.com` は同じ意味になります。任意のページからルートを呼び出せるようにするには、オリジンの代わりに `"*"` を列挙してください。
+これによりルートはブラウザの `OPTIONS` プリフライトに応答し、すべてのレスポンスで列挙されたオリジンを指定します。ストリーミングされる回答もエラーステータスも同様であるため、呼び出し元はボディが拒否されたのかプロバイダー側の障害なのかを判別できます。これらのレスポンスでは `Retry-After` も公開されるため、[レート制限](/docs/configuration/rate-limiting)による `429` の後、呼び出し元は何秒待てばよいかを読み取れます。列挙されていないオリジンにはヘッダーが付与されず、ブラウザの同一オリジンポリシーの対象のままとなります。各エントリはそのオリジンに正規化されるため、`https://www.example.com/docs/` と `https://www.example.com` は同じ意味になります。任意のページからルートを呼び出せるようにするには、オリジンの代わりに `"*"` を列挙してください。
 
 呼び出し元は[外部エンドポイント](#external-endpoint)の取り決めで説明されているものと同じ `POST` ボディを送信し、同じテキストストリームを読み取ります。`content-type: application/json` ヘッダーを付けて JSON として送信してください。
 
@@ -161,13 +204,13 @@ export default defineConfig({
 
 ```ts blume.config.ts lineNumbers
 import { defineConfig } from "blume";
-import { openrouter } from "blume/ai";
+import { anthropic } from "blume/ai";
 
 export default defineConfig({
   ai: {
     assistant: {
       enabled: true,
-      provider: openrouter({ model: "anthropic/claude-sonnet-4-5" }),
+      provider: anthropic({ model: "claude-sonnet-5" }),
     },
   },
 });
@@ -175,15 +218,119 @@ export default defineConfig({
 
 | アダプター | 回答に使用するもの | API キーの環境変数 | インストールする SDK |
 | --- | --- | --- | --- |
+| [`openai()`](#openai) | [OpenAI](https://platform.openai.com) のモデル、または任意の [OpenAI 互換エンドポイント](#openai-compatible-endpoints) | `OPENAI_API_KEY` | `@ai-sdk/openai`（`baseUrl` を指定する場合は `@ai-sdk/openai-compatible`） |
+| [`anthropic()`](#anthropic) | [Claude](https://platform.claude.com) のモデル | `ANTHROPIC_API_KEY` | `@ai-sdk/anthropic` |
+| [`gemini()`](#gemini) | [Gemini](https://ai.google.dev) のモデル | `GEMINI_API_KEY` | `@ai-sdk/google` |
+| [`grok()`](#grok) | [xAI](https://x.ai/api) の Grok モデル | `XAI_API_KEY` | `@ai-sdk/xai` |
 | [`gateway()`](#vercel-ai-gateway)（デフォルト） | Vercel AI Gateway 経由の `provider/model` 形式の文字列 | `AI_GATEWAY_API_KEY` | 不要 — Blume に同梱 |
 | [`openrouter()`](#openrouter) | 任意の [OpenRouter](https://openrouter.ai) モデル | `OPENROUTER_API_KEY` | `@openrouter/ai-sdk-provider` |
 | [`llmgateway()`](#llmgateway) | 任意の [LLMGateway](https://llmgateway.io) モデル | `LLMGATEWAY_API_KEY` | `@ai-sdk/openai-compatible` |
 | [`inkeep()`](#inkeep) | [Inkeep](https://inkeep.com) の QA モデル | `INKEEP_API_KEY` | `@ai-sdk/openai-compatible` |
-| [`openaiCompatible()`](#openai-compatible-endpoints) | エンドポイントが提供するもの | `apiKeyEnv` で指定 | `@ai-sdk/openai-compatible` |
 
-これらの SDK はオプションのピア依存関係なので、アダプターに必要なものをプロジェクトに追加してください（例: `npm install @openrouter/ai-sdk-provider`）。不足している場合、`blume build` は Vite の実行前に停止し、パッケージ名とそれをインストールするコマンドを示します。[`blume doctor`](/docs/cli/doctor) でも報告されます。
+`openai()`、`anthropic()`、`gemini()`、`grok()` は、指定したキーを使ってプロバイダー自身の API を直接呼び出し、間に何も介在しません。各 SDK はオプションのピア依存関係なので、アダプターに必要なものをプロジェクトに追加してください（例: `npm install @ai-sdk/anthropic`）。不足している場合、`blume build` は Vite の実行前に停止し、パッケージ名とそれをインストールするコマンドを示します。[`blume doctor`](/docs/cli/doctor) でも報告されます。
 
 アダプターが返すディスクリプターは、種類、オプション、読み取る環境変数、必要な SDK からなるプレーンなデータです。そのため、生成されたルート（および[イジェクト](/docs/configuration/customization#eject)したルート）はこれをリテラルとしてインライン化し、プロバイダー SDK を名前でインポートします。リクエスト時に `blume.config.ts` を読み取るものはなく、シークレットがルートに書き込まれることもありません。アダプターはキーを保持する環境変数の**名前**を受け取り、ルートは Astro の [`getSecret()`](https://docs.astro.build/en/guides/environment-variables/#retrieving-secrets-programmatically) を通じてその値を読み取るため、各デプロイアダプターがそれぞれの方法でキーを提供します。Node、Vercel、Netlify では環境変数、Cloudflare では Worker の[バインディング](https://docs.astro.build/en/guides/integrations-guide/cloudflare/#environment-variables-and-secrets)が使用されます。
+
+### OpenAI [#openai]
+
+[OpenAI](https://platform.openai.com) の任意のモデルを、OpenAI 独自の AI SDK プロバイダーを通じて直接呼び出せます。
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { openai } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: openai({ model: "gpt-5.5" }),
+    },
+  },
+});
+```
+
+#### OpenAI 互換エンドポイント [#openai-compatible-endpoints]
+
+OpenAI API に対応したエンドポイント（セルフホストのモデルや社内ゲートウェイなど）であれば、`openai()` を通じて動作します。`baseUrl` を追加し、通常はキーを保持する環境変数を `apiKeyEnv` で指定してください（デフォルトは `OPENAI_API_KEY` です）。`name` は AI SDK が報告するプロバイダー名であり、エンドポイントが [`providerOptions`](#options-every-adapter-takes) を読み取る際のキーでもあります。デフォルトは `openai-compatible` です。
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { openai } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: openai({
+        baseUrl: "https://my-gateway.example.com/v1",
+        apiKeyEnv: "MY_GATEWAY_API_KEY",
+        model: "gpt-4o",
+        name: "my-gateway",
+      }),
+    },
+  },
+});
+```
+
+`baseUrl` を指定すると、ルートは `@ai-sdk/openai-compatible` を通じてエンドポイントの Chat Completions API を呼び出すため、`@ai-sdk/openai` ではなくこのパッケージをインストールしてください。互換エンドポイントの多くは OpenAI の Responses API を提供していません。セルフホストのモデルはツール呼び出しに対応していない可能性があるため、[ドキュメントツール](#searching-and-reading-pages)はデフォルトで無効です。
+
+:::note
+以前のバージョンの Blume の `openaiCompatible()` も引き続き動作します。これは `baseUrl` を指定した `openai()` と同じアダプターです。
+:::
+
+### Anthropic [#anthropic]
+
+[Claude](https://platform.claude.com) の任意のモデルを、Anthropic の AI SDK プロバイダーを通じて直接呼び出せます。
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { anthropic } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: anthropic({ model: "claude-sonnet-5" }),
+    },
+  },
+});
+```
+
+### Gemini [#gemini]
+
+[Gemini](https://ai.google.dev) の任意のモデルを、Google の AI SDK プロバイダーを通じて直接呼び出せます。キーには Google AI Studio で発行した API キーを使用します。
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { gemini } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: gemini({ model: "gemini-3.5-flash" }),
+    },
+  },
+});
+```
+
+### Grok [#grok]
+
+[xAI](https://x.ai/api) の任意の Grok モデルを、xAI の AI SDK プロバイダーを通じて直接呼び出せます。
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { grok } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: grok({ model: "grok-4.7" }),
+    },
+  },
+});
+```
 
 ### Vercel AI Gateway [#vercel-ai-gateway]
 
@@ -266,29 +413,6 @@ export default defineConfig({
 
 `baseUrl` でプリセットのエンドポイント（`https://api.inkeep.com/v1`）を上書きできます。
 
-### OpenAI 互換エンドポイント [#openai-compatible-endpoints]
-
-OpenAI API に対応したエンドポイントであれば `openaiCompatible()` を通じて動作します。`baseUrl`、エンドポイントが提供する `model`、キーを保持する環境変数を指定してください。汎用エンドポイントにはこれらのプリセットがないため、3つとも必須です。`name` は AI SDK が報告するプロバイダー名で、デフォルトは `openai-compatible` です。
-
-```ts blume.config.ts lineNumbers
-import { defineConfig } from "blume";
-import { openaiCompatible } from "blume/ai";
-
-export default defineConfig({
-  ai: {
-    assistant: {
-      enabled: true,
-      provider: openaiCompatible({
-        baseUrl: "https://my-gateway.example.com/v1",
-        apiKeyEnv: "MY_GATEWAY_API_KEY",
-        model: "gpt-4o",
-        name: "my-gateway",
-      }),
-    },
-  },
-});
-```
-
 ### すべてのアダプターで使えるオプション [#options-every-adapter-takes]
 
 **`apiKeyEnv`** を指定すると、アダプターはデフォルトとは別の環境変数を参照します。`gateway({ apiKeyEnv: "DOCS_GATEWAY_KEY" })` は `AI_GATEWAY_API_KEY` の代わりにその変数を読み取り、`blume dev`/`build` 時のシークレット不足の警告もその変数をチェックします。キーが設定されるまで、デプロイされたルートは変数名を示すメッセージとともに `503` を返します。ルートはリクエストボディを 64 KB までしか読み取らず、それより大きいものには `413` を返します。
@@ -296,7 +420,7 @@ export default defineConfig({
 **`headers`** は、すべての呼び出しで静的なリクエストヘッダーを送信します。たとえば共有バックエンドに対して呼び出し元を識別するヘッダーを付与すれば、そのバックエンド側の可観測性やレート制限がドキュメントからのトラフィックを他のトラフィックと区別できます。
 
 ```ts blume.config.ts lineNumbers
-provider: openaiCompatible({
+provider: openai({
   baseUrl: "https://llm.internal.example.com/v1",
   apiKeyEnv: "INTERNAL_LLM_API_KEY",
   model: "gpt-4o",
@@ -315,7 +439,7 @@ provider: gateway({
 }),
 ```
 
-Blume がマッピングするのは Blume 自身が定義するオプション（`model`、`reasoning`、`apiKeyEnv`、`headers`）のみで、`providerOptions` はそのまま転送します。そのため `providerOptions` はルートにインライン化される JSON である必要があり、基盤となるプロバイダーが想定するキー（ゲートウェイ経由の OpenAI モデルなら `openai`、OpenRouter なら `openrouter`）を使用する必要があります。アシスタントを有効にすると、ページ内アイランドのために React も有効になります。詳細は[カスタマイズ](/docs/configuration/customization#interactive-islands)を参照してください。
+Blume がマッピングするのは Blume 自身が定義するオプション（`model`、`reasoning`、`apiKeyEnv`、`headers`）のみで、`providerOptions` はそのまま転送します。そのため `providerOptions` はルートにインライン化される JSON である必要があり、基盤となるプロバイダーが想定するキー（`openai()` またはゲートウェイ経由の OpenAI モデルなら `openai`、`anthropic()` なら `anthropic`、`gemini()` なら `google`、`grok()` なら `xai`、OpenRouter なら `openrouter`、OpenAI 互換エンドポイントならアダプターの `name`）を使用する必要があります。アシスタントを有効にすると、ページ内アイランドのために React も有効になります。詳細は[カスタマイズ](/docs/configuration/customization#interactive-islands)を参照してください。
 
 ## 推論 [#reasoning]
 
@@ -329,10 +453,13 @@ provider: gateway({ model: "openai/gpt-5.5", reasoning: "none" }),
 
 | アダプター | レベルの変換先 |
 | --- | --- |
+| `openai()` | OpenAI の `reasoning_effort`。`baseUrl` を指定した場合はリクエスト内の `reasoning_effort` として送信されるため、エンドポイントがそのパラメーターを受け付ける必要があります。 |
+| `anthropic()` | Claude の思考。アダプティブ思考に対応したモデルでは推論強度のレベル、それ以前のモデルでは思考予算となり、`"none"` では思考が無効になります。 |
+| `gemini()` | Gemini の思考レベル。思考予算を受け付けるモデルでは思考予算になります。 |
+| `grok()` | 推論強度を提供するモデルにおける xAI の推論強度。 |
 | `gateway()` | AI SDK の [`reasoning`](https://ai-sdk.dev/docs/ai-sdk-core/reasoning) 呼び出しオプション。ゲートウェイがこれをモデル自身の設定（たとえば OpenAI の `reasoning_effort`）にマッピングします。 |
 | `openrouter()` | モデルに設定される OpenRouter の `reasoning.effort`。このプロバイダーは AI SDK の呼び出しオプションを無視するため、レベルは OpenRouter が読み取る場所に配置されます。 |
 | `llmgateway()` | AI SDK の呼び出しオプションを通じて送信される、リクエスト内の `reasoning_effort`。 |
-| `openaiCompatible()` | リクエスト内の `reasoning_effort`。そのため、エンドポイントがそのパラメーターを受け付ける必要があります。 |
 | `inkeep()` | 利用できません。Inkeep は推論の制御を持たない独自の QA パイプラインを実行するため、このアダプターには `reasoning` オプションがなく、設定すると設定エラーになります。 |
 
 選択したレベルをモデルがサポートしている必要があります。OpenAI はモデルが提供していないレベルを拒否するため（`"none"` と `"xhigh"` は一部のモデルにのみ存在します）、設定する前にモデルのドキュメントを確認してください。未設定のままにすると、モデルのデフォルトが維持されます。[検索サイズ](#retrieval-size)と同様に、これは網羅性と最初のトークンまでの時間のトレードオフであり、いずれの場合も回答はドキュメントに基づいたままです。
@@ -343,16 +470,45 @@ provider: gateway({ model: "openai/gpt-5.5", reasoning: "none" }),
 
 | イベント | タイミング | プロパティ |
 | --- | --- | --- |
-| `ask` | 質問が送信されたとき | `path`、`questionChars` |
-| `ask_answer` | 回答のストリーミングが完了したとき | `path`、`questionChars`、`ms`、`chars` |
-| `ask_error` | リクエストが失敗、中断、または空のまま返されたとき | `path`、`questionChars`、`ms`、`status` |
+| `ask` | 質問が送信されたとき | `path`、`questionChars`、`thread` |
+| `ask_answer` | 回答のストリーミングが完了したとき | `path`、`questionChars`、`thread`、`ms`、`chars` |
+| `ask_error` | リクエストが失敗、中断、または空のまま返されたとき | `path`、`questionChars`、`thread`、`ms`、`status` |
 
-`path` は読者が質問したページ（配信されるパス名なので、フィードバックウィジェットや `base` の下でのページビューと一致します）、`questionChars` は質問の長さ、`ms` は質問の送信から最後のチャンクまでの時間、`chars` は回答の長さです。`status` は HTTP ステータスで、レスポンスがまったく届かなかった場合（オフライン、DNS、CORS）は `0`、レスポンス自体は正常だったものの回答の途中でストリームが途切れた場合（バックエンドがすでにヘッダーを送信済みのため、プロバイダーや認証情報のエラーはこの形で表面化します）や、何も配信されなかった場合は `200` になります。回答の途中で会話をクリアした場合は、いずれの結果も報告されません。
+`path` は読者が質問したページ（配信されるパス名なので、フィードバックウィジェットや `base` の下でのページビューと一致します）、`questionChars` は質問の長さ、`thread` は会話の ID（読者が会話をクリアすると新しくなります）、`ms` は質問の送信から最後のチャンクまでの時間、`chars` は回答の長さです。`status` は HTTP ステータスで、レスポンスがまったく届かなかった場合（オフライン、DNS、CORS）は `0`、レスポンス自体は正常だったものの回答の途中でストリームが途切れた場合（バックエンドがすでにヘッダーを送信済みのため、プロバイダーや認証情報のエラーはこの形で表面化します）や、何も配信されなかった場合は `200` になります。回答の途中で会話をクリアした場合は、いずれの結果も報告されません。
 
 質問のテキストがプロバイダーに届くことはありません。これは自由形式の読者入力（貼り付けられたキー、エラーログ、氏名など）であり、ほとんどのプロバイダーの利用規約や値ごとのサイズ制限に抵触するためです。テキストは `blume:track` の DOM イベント上でのみ、`detail.props` の `question` として送信されるため、ご自身で記述したリスナーで適切と判断した先へ転送できます。`blume/hooks` の `useAssistant` を使って構築したカスタムチャット UI も同じイベントを報告します。プロバイダーを設定していない場合、組み込みのプロバイダー呼び出しは何も行いませんが、`blume:track` イベントは引き続き発火するため、これを購読するカスタム連携は各イベントを受け取れます。
 
 ## レート制限 [#rate-limiting]
 
-`POST /api/ask` エンドポイントは**認証されていません**。ページ内アシスタントから呼び出せる必要があるため、これは必然です。Blume は各リクエストを検証し（不正なボディを拒否し、メッセージ数を 1〜40 に制限し、`user`/`assistant` ロールのみを受け付けることで、呼び出し元が独自のシステムプロンプトを注入してこのルートを汎用 LLM プロキシとして転用できないようにします）、1回の呼び出しでモデルに対して消費できる量を制限しますが、同じエンドポイントが繰り返し呼び出されるのを防ぐことはできません。コストの悪用が懸念される場合は、ルートをレート制限の背後に置いてください。ホスティング事業者（Vercel など）のエッジレート制限、ミドルウェア、あるいはモデルプロバイダーのキーごとの利用上限などが利用できます。
+`POST /api/ask` エンドポイントは**認証されていません**。ページ内アシスタントから呼び出せる必要があるため、これは必然です。Blume は各リクエストを検証し（不正なボディを拒否し、メッセージ数を 1〜40 に制限し、`user`/`assistant` ロールのみを受け付けることで、呼び出し元が独自のシステムプロンプトを注入してこのルートを汎用 LLM プロキシとして転用できないようにします）、1回の呼び出しでモデルに対して消費できる量を制限します。さらに、デフォルトで有効な[レート制限](/docs/configuration/rate-limiting)によって、1人の読者が質問できる回数が制限されます。上限を超えると、パネルは数分後に再試行するよう読者に伝えます。
+
+## ボット対策 [#bot-protection]
+
+レート制限は IP アドレス単位でカウントされるため、多数のアドレスに質問を分散させるスクリプトはこれをすり抜けてしまいます。スクリプトを阻止するには、`blume/captcha` からボットチェックを追加してください。各質問の前にパネルがチェックからトークンを取得し、ルートはモデルを実行する前にそのトークンをプロバイダーで検証します。ほとんどの読者にはチャレンジが表示されることはなく、チェックが判断に迷った場合にのみクリックを求めます。
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { turnstile } from "blume/captcha";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      captcha: turnstile({ siteKey: "0x4AAAAAAA…" }),
+    },
+  },
+});
+```
+
+| アダプター | プロバイダー | シークレットキーの環境変数 |
+| --- | --- | --- |
+| `turnstile()` | [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/) | `TURNSTILE_SECRET_KEY` |
+| `hcaptcha()` | [hCaptcha](https://www.hcaptcha.com)（非表示で実行） | `HCAPTCHA_SECRET_KEY` |
+
+サイトキーはブラウザに送信されるもので、コミットしても安全です。シークレットキーはサーバー上に保持されます。Turnstile の場合は、Cloudflare ダッシュボードでウィジェットを作成し、**Managed** または **Invisible** モードを選択してください。シークレットが設定されるまで、アシスタントは設定されていない旨を回答し、`blume build` は警告を出します。プロバイダーのスクリプトはページの読み込み時ではなく、読者の最初の質問時に読み込まれます。
+
+チェックに失敗すると、読者には翻訳された「人間であることを確認できませんでした」という通知が表示され、ルートは `403` を返します。どちらのプロバイダーも、ローカルでチェックを試すための常に成功するテストキーを公開しています。Turnstile ではサイトキー `1x00000000000000000000BB` とシークレット `1x0000000000000000000000000000000AA`、hCaptcha ではサイトキー `10000000-ffff-ffff-ffff-000000000001` とシークレット `0x0000000000000000000000000000000000000000` です。
+
+[外部エンドポイント](#external-endpoint)を使用する場合も、パネルはトークンをリクエストボディの `captcha` として送信するため、バックエンド側で検証してください。
 
 このエンドポイントは、サイトの機械可読な情報とともに[エージェント可読性マニフェスト](/docs/discoverability/agent-discovery#agent-readability)で公開されます。

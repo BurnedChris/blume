@@ -21,6 +21,7 @@
     "bundle-docs": "node packages/blume/scripts/bundle-docs.mjs",
     "prepare": "husky && node packages/blume/scripts/bundle-docs.mjs",
     "bump-deps": "npx npm-check-updates -u --deep && bun i",
+    "generate-guide-image": "cd apps/docs && bun run generate-guide-image",
     "translate": "cd apps/docs && bun translate --claude --concurrency 16 && cd ../.. && bun fix",
     "sync:c15t-integrations": "bun scripts/sync-c15t-integrations.ts",
     "check:c15t-integrations": "bun scripts/sync-c15t-integrations.ts --check"
@@ -32,20 +33,23 @@
     "astro": "^7.3.2",
     "html-escaper": "^3.0.3",
     "husky": "^9.1.7",
-    "oxfmt": "^0.67.0",
-    "oxlint": "^1.82.0",
-    "sharp": "^0.35.4",
-    "turbo": "^2.10.12",
+    "oxfmt": "^0.71.0",
+    "oxlint": "^1.86.0",
+    "sharp": "^0.35.5",
+    "turbo": "^2.11.7",
     "typescript": "^6.0.3",
     "ufo": "^1.6.4",
-    "ultracite": "^7.11.1",
+    "ultracite": "^7.12.2",
     "zod": "^4.6.2"
   },
+  "overrides": {
+    "sharp": "^0.35.5"
+  },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.19.0"
   },
   "packageManager": "bun@1.4.2",
   "patchedDependencies": {
-    "oxfmt@0.67.0": "patches/oxfmt@0.67.0.patch"
+    "oxfmt@0.71.0": "patches/oxfmt@0.71.0.patch"
   }
 }

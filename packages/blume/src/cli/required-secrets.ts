@@ -45,7 +45,6 @@ const adapterSecretOwners = (config: ResolvedConfig): SecretOwner[] => {
       secrets: consent.requiredSecrets,
     });
   }
-  // Upstash's endpoint and token.
   if (rateLimit) {
     owners.push({
       feature: `Rate limiting (${rateLimit.kind})`,
@@ -61,7 +60,7 @@ const adapterSecretOwners = (config: ResolvedConfig): SecretOwner[] => {
  * the failure surfaces at `blume dev`/`build` instead of at the first request in
  * production. These are runtime secrets (the endpoint reads them on the server),
  * so this warns rather than hard-fails — the value may live only in the deploy
- * environment. Build-time secrets (search-index sync) already warn during sync.
+ * environment. Build-time secrets (search-index sync) are checked by the sync.
  */
 export const checkRequiredSecrets = (config: ResolvedConfig): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
@@ -92,7 +91,8 @@ export const checkRequiredSecrets = (config: ResolvedConfig): Diagnostic[] => {
   }
 
   // Generated narration reads its key at build, not at runtime; without it the
-  // build skips the audio and pages read with browser voices.
+  // build skips the audio and pages read with browser voices. `openai()` with
+  // a `baseUrl` requires only a key it names (see `narrationProviderSchema`).
   const { narration } = config;
   if (narration.enabled && narration.provider) {
     for (const env of narration.provider.requiredSecrets) {

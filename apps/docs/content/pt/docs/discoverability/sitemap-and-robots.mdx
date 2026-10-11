@@ -8,13 +8,25 @@ Crawlers de busca e crawlers de IA começam pelos mesmos dois arquivos na raiz d
 
 ## Sitemap
 
-O Blume escreve um `sitemap.xml` com todas as páginas indexáveis no momento do build. Ele precisa de um [`deployment.site`](/docs/deployment) absoluto e lista todas as páginas exceto rascunhos, ocultas e páginas com [`noindex`](/docs/discoverability/metadata#per-page-overrides). Em um site [versionado](/docs/content/versioning), páginas arquivadas cuja canonical aponta para o equivalente ativo também ficam de fora — a página ativa é a que deve ser indexada. Ativado por padrão:
+O Blume escreve um `sitemap.xml` com todas as páginas indexáveis no momento do build. Ele precisa de um [`deployment.site`](/docs/deployment) absoluto e lista todas as páginas exceto rascunhos, [ocultas](/docs/content/navigation#hidden-pages), páginas com [`noindex`](/docs/discoverability/metadata#per-page-overrides) e páginas cujo `seo.canonical` aponta para outra URL. Em um site [versionado](/docs/content/versioning), páginas arquivadas cuja canonical aponta para o equivalente ativo também ficam de fora — a página ativa é a que deve ser indexada. Ativado por padrão:
 
 ```ts blume.config.ts lineNumbers
 seo: {
   sitemap: true,
 }
 ```
+
+### Links alternativos de idioma [#locale-alternates]
+
+Ative links alternativos no sitemap de um site multilíngue:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  sitemap: { alternates: true },
+}
+```
+
+Cada página traduzida lista suas traduções, incluindo ela mesma, como elementos `xhtml:link`, além de um link `x-default` quando o locale padrão tem a página. São os mesmos links `hreflang` que o head da página carrega: uma tradução com `noindex`, oculta ou com canonical apontando para outro lugar não aparece em nenhum dos dois. Uma página presente em menos de dois locales listados não recebe links alternativos. As URLs incluem a base do deployment. `sitemap: true` e `sitemap: {}` mantêm os links alternativos desativados; `sitemap: false` desativa o sitemap.
 
 Envie seu próprio `public/sitemap.xml` para assumir o controle — o Blume nunca sobrescreve um arquivo que você coloca em `public/`.
 

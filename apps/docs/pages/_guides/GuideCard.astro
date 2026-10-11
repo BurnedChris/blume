@@ -1,0 +1,68 @@
+---
+// A guide in a grid: a 48px swatch of its cover, then the title and summary,
+// straight on the page with no card surface. Here the cover is color and
+// rhythm rather than information, so it stays small; the guide's own page
+// shows it large. The swatch is the 96px thumbnail that
+// `generate-guide-image --use` writes (public/guides/thumbs/<id>.webp), or a
+// cornflower wash from the bloom ramp until the guide has a cover. No date:
+// guides land in batches, so dates would bunch up rather than say anything.
+// The title is the link, stretched over the whole item, so the link's name is
+// the guide's goal rather than every word in the item.
+import "../_home/bloom.css";
+import type { Guide } from "./guides.ts";
+
+interface Props {
+  class?: string;
+  guide: Guide;
+  /** The title's level, to fit the page's outline. */
+  level?: "h2" | "h3";
+  style?: string;
+}
+
+const { class: className, guide, level: Heading = "h3", style } = Astro.props;
+const swatch =
+  "size-12 shrink-0 rounded-xl outline-1 -outline-offset-1 outline-foreground/5";
+---
+
+<article
+  class:list={[
+    "group relative flex flex-col items-start gap-4 lg:pr-8",
+    className,
+  ]}
+  style={style}
+>
+  {
+    guide.image ? (
+      <img
+        alt=""
+        class:list={[swatch, "object-cover"]}
+        decoding="async"
+        height="48"
+        loading="lazy"
+        src={`/guides/thumbs/${guide.id}.webp`}
+        width="48"
+      />
+    ) : (
+      <div aria-hidden="true" class:list={[swatch, "guide-swatch"]} />
+    )
+  }
+  <div class="flex flex-col gap-1.5">
+    <Heading class="text-balance font-medium text-foreground text-lg">
+      <a
+        class="after:absolute after:inset-0 group-hover:underline"
+        href={`/guides/${guide.id}`}
+      >
+        {guide.title}
+      </a>
+    </Heading>
+    <p class="text-pretty text-base text-muted-foreground sm:text-sm">
+      {guide.summary}
+    </p>
+  </div>
+</article>
+
+<style>
+  .guide-swatch {
+    background-image: linear-gradient(135deg, var(--bloom-7), var(--bloom-5));
+  }
+</style>

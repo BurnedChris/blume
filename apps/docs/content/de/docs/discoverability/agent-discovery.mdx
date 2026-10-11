@@ -1,7 +1,7 @@
 ---
 title: Agent-Discovery
 description: >-
-  Wie Agenten deine maschinenlesbare Oberfläche finden, ohne zu raten — das Agent-Readability-Manifest, Link-Header, der RFC-9727-API-Katalog, WebMCP, veröffentlichte Skills, DNS-basierte Discovery und Web-Bot-Auth-Schlüssel.
+  Wie Agenten deine maschinenlesbare Oberfläche finden, ohne zu raten — das Agent-Readability-Manifest, Link-Header, der RFC-9727-API-Katalog, WebMCP, der generierte Skill deiner Site und veröffentlichte Skills, DNS-basierte Discovery und Web-Bot-Auth-Schlüssel.
 ---
 
 `llms.txt`, Markdown-Spiegel, eine JSON-API und einen MCP-Server zu veröffentlichen, ist nur die halbe Arbeit — ein Agent muss sie auch finden. Blume bewirbt die gesamte Oberfläche über die Konventionen, die Agenten tatsächlich abfragen: ein Manifest im Site-Root, `Link`-Header und `<link>`-Tags, Well-Known-Dateien und den Model Context des Browsers selbst. Alles hier ist standardmäßig aktiv und leitet sich aus dem ab, was du bereits aktiviert hast.
@@ -229,6 +229,33 @@ agents: {
 }
 ```
 
+## Der Skill deiner Site [#your-sites-skill]
+
+Jeder Build schreibt einen [Agent Skill](https://agentskills.io) für deine Docs — eine `SKILL.md`, die ein Coding-Agent installieren kann, um mit deinem Produkt zu arbeiten. Er wird unter `/skill.md` ausgeliefert und im [Skills-Index](#skills-discovery) aufgeführt. Blume erstellt ihn aus dem, was es ohnehin über die Site weiß, ohne ein Modell aufzurufen — er kostet also nichts und ändert sich, sobald sich deine Docs ändern. Er enthält:
+
+- den Titel und die Beschreibung der Site sowie wann ein Agent den Skill verwenden sollte
+- wie man jede Seite als Markdown liest, dazu `llms.txt`, `llms-full.txt`, den [MCP-Server](/docs/discoverability/mcp), die JSON-API und das Changelog, sofern die Site sie ausliefert
+- deine API-Referenzen
+- eine Übersicht der Docs in Sidebar-Reihenfolge, die das Markdown jeder Seite mit ihrer einzeiligen Beschreibung verlinkt (ihrer Meta-Beschreibung, wie in `llms.txt`)
+
+Der Skill ist nach dem `title` deiner Site benannt (aus `Acme Docs` wird `acme-docs`). Er deckt die aktuelle Version in der Standardsprache ab, lässt API-Operationsseiten und Changelog-Einträge aus (beide haben jeweils eine eigene Zeile oberhalb der Übersicht), überspringt dieselben Seiten wie `llms.txt` (Entwürfe, versteckte und `noindex`-Seiten sowie Seiten mit [`ai.exclude`](/docs/discoverability/llms-txt#excluding-a-page)) und listet bis zu 200 Seiten auf, wobei er für den Rest auf `llms.txt` verweist. Die Links sind absolut, daher braucht der Skill [`deployment.site`](/docs/deployment); ein Build ohne sie überspringt ihn.
+
+Der generierte Skill ist ein Wegweiser durch deine Docs, keine Zusammenfassung deines Produkts. Für einen, der einem Agenten dein Produkt beibringt — Setup, Kernkonzepte, häufige Aufgaben und Stolperfallen —, lass deinen Coding-Agenten ihn aus den Docs schreiben:
+
+```bash
+blume skill --claude   # or --codex
+```
+
+`blume skill` öffnet Claude Code oder Codex mit dem Skill [`blume-write-skill`](/docs/advanced/skills#writing-your-sites-skill), der eine `SKILL.md` in deinem [`agents.skills`](#skills-discovery)-Ordner schreibt (`./skills`, wenn keiner gesetzt ist — dann wird er deiner Konfiguration hinzugefügt), benannt nach deiner Site, sodass er den generierten ersetzt. Du prüfst und committest ihn wie jede andere Datei; das kostet deinen Agenten einmalig Tokens, nicht bei jedem Build. Führe `blume skill` nach einer größeren Änderung an den Docs erneut aus, denn ein handgeschriebener Skill aktualisiert sich nicht von selbst. Ohne Flag gibt `blume skill` aus, wo der Skill landen würde und wie du einen anderen Agenten darauf ansetzt.
+
+Jeder gleichnamige Skill in `agents.skills`, egal wie du ihn schreibst, ersetzt den generierten im Index — und auch unter `/skill.md`, wenn er nur aus einer einzelnen `SKILL.md` besteht. Eine `public/skill.md`, die du selbst auslieferst, gewinnt über beide. Um den Skill abzuschalten:
+
+```ts blume.config.ts lineNumbers
+agents: {
+  skillMd: false,
+}
+```
+
 ## Skills-Discovery
 
 Wenn dein Projekt [Agent Skills](https://agentskills.io) ausliefert — [das Blume-Repo selbst tut das](/docs/advanced/skills) —, richte `agents.skills` auf das Verzeichnis, das sie enthält, und der Build veröffentlicht sie gemäß dem [Agent Skills Discovery RFC](https://github.com/cloudflare/agent-skills-discovery-rfc) zur Discovery:
@@ -241,7 +268,7 @@ agents: {
 
 Der Pfad wird relativ zu deinem Projekt-Root aufgelöst, und jedes Unterverzeichnis mit einer `SKILL.md` wird zu einem veröffentlichten Skill. Ein Skill, der nur aus einer einzelnen `SKILL.md` besteht, wird wortgetreu nach `/.well-known/agent-skills/<name>/SKILL.md` kopiert (`type: "skill-md"`); ein Skill mit unterstützenden Ressourcen (`scripts/`, `references/`, `assets/`) wird in ein deterministisches `.tar.gz` gebündelt (`type: "archive"`), damit sich seine relativen Verweise nach dem Entpacken auflösen, wobei die Ausführungsbits von Skripten erhalten bleiben. Der Discovery-Index unter `/.well-known/agent-skills/index.json` trägt das `$schema` der Version v0.2.0 und pro Skill dessen Namen, Typ, Beschreibung (aus dem Frontmatter der `SKILL.md`), Artefakt-URL und den SHA-256-Digest, gegen den Clients Downloads verifizieren.
 
-Skills mit fehlendem oder spezifikationswidrigem `name`/`description` werden mit einer Build-Warnung übersprungen, statt kaputt veröffentlicht zu werden, und eine `public/.well-known/agent-skills/index.json`, die du selbst auslieferst, übernimmt die gesamte Oberfläche. Veröffentlichte Skills werden außerdem in [`llms.txt`](/docs/discoverability/llms-txt#generated-sections) aufgeführt.
+Skills mit fehlendem oder spezifikationswidrigem `name`/`description` werden mit einer Build-Warnung übersprungen, statt kaputt veröffentlicht zu werden, und eine `public/.well-known/agent-skills/index.json`, die du selbst auslieferst, übernimmt die gesamte Oberfläche. Veröffentlichte Skills, einschließlich [des eigenen Skills deiner Site](#your-sites-skill), werden außerdem in [`llms.txt`](/docs/discoverability/llms-txt#generated-sections) aufgeführt.
 
 ## DNS-basierte Discovery (DNS-AID) [#dns-based-discovery-dns-aid]
 

@@ -53,6 +53,8 @@ const uiStringsObject = z.object({
       // writes none.
       explainCode: z.string().default("Explain this code."),
       label: z.string().default("Ask a question"),
+      // The header trigger's tooltip.
+      open: z.string().default("Open assistant"),
       placeholder: z.string().default("Ask a question…"),
       // The answer when the rate limit (`rateLimit`) turns a question away.
       rateLimited: z
@@ -88,6 +90,8 @@ const uiStringsObject = z.object({
         .default(
           "Product updates, new features, and fixes from every release."
         ),
+      // What the index says when it has no entries to list.
+      empty: z.string().default("No changelog entries yet."),
       title: z.string().default("Changelog"),
     })
     .prefault({}),
@@ -127,6 +131,8 @@ const uiStringsObject = z.object({
       prop: z.string().default("Prop"),
       // `<Tabs dropdown>`: the accessible name of the tab picker.
       selectTab: z.string().default("Select tab"),
+      // `<View>`: the accessible name of the page's view picker.
+      selectView: z.string().default("Select view"),
       // An expanded `expandable` code block's toggle.
       showLess: z.string().default("Show less"),
       // `<Expandable>`'s toggle when it sets no `title`, and a collapsed
@@ -202,7 +208,7 @@ const uiStringsObject = z.object({
       primary: z.string().default("Primary"),
       sections: z.string().default("Sections"),
       toggleNavigation: z.string().default("Toggle navigation"),
-      toggleTheme: z.string().default("Toggle color theme"),
+      toggleTheme: z.string().default("Toggle theme"),
     })
     .prefault({}),
   notFound: z

@@ -1,0 +1,522 @@
+---
+// Run a documentation assistant with Ollama: checked against the assistant,
+// deployment, and rate limiting docs and the adapter and route source on
+// main (ai/ask.ts, ai/ask-context.ts, ai/ask-tools.ts, astro/templates.ts,
+// cli/required-secrets.ts, components/islands/hooks.ts); Ollama's OpenAI
+// compatibility, FAQ, context length, Linux, and cloud docs and its v0.34.4
+// source (host check, reasoning_effort mapping, prompt truncation); and
+// Caddy's matcher and reverse_proxy docs. Ran: the Ollama 0.34.4 release
+// binary on an Apple M1 Pro with 16 GB, with qwen3:1.7b and gemma3:270m; the
+// curl tool test; Blume's grounding and docs tools with ai 7.0.99 and
+// @ai-sdk/openai-compatible 3.0.48, called the way the generated route calls
+// them, over Blume's own docs; ask-compare.mjs against a stand-in route; the
+// config through blumeConfigSchema. Not run: qwen3:8b, Caddy, or blume
+// dev/build with this config. Not yet run end to end.
+// Review: rechecked Ollama's context-length and FAQ docs (4k/32k/256k by
+// VRAM, OLLAMA_NO_CLOUD, OLLAMA_NUM_PARALLEL=1) and, for the reverse-proxy
+// rate-limit note, Astro 7.3.2's core/app/node.js (X-Forwarded-For is only
+// trusted when security.allowedDomains matches, which node()'s
+// allowedDomains sets: deploy/platforms/node.ts on 400b5ff3).
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("ollama-documentation-assistant")}>
+  <p>
+    Blume's assistant can answer from your docs with a model you run in
+    Ollama. Point the <code>openai()</code> adapter at Ollama's
+    OpenAI-compatible Chat Completions endpoint, and Blume works as before: it
+    finds the relevant pages, sends them with the question to your model, and
+    streams back an answer that links its sources.
+  </p>
+  <p>
+    By the end, your docs server and Ollama run on one machine, Ollama is
+    unreachable from outside it, the context window and retrieval fit your
+    hardware, and you've asked a hosted model the same questions to see what
+    you gave up.
+  </p>
+  <p>
+    A model that fits on one server usually answers less well than a hosted
+    frontier model, and it moves the cost from a provider bill to hardware you
+    keep running. If you don't need the model on your own machine,{" "}
+    <a href="/guides/ai-assistant-for-documentation">the hosted setup</a> is
+    less work. This guide reuses its questions for the comparison.
+  </p>
+
+  <h2>How the pieces connect</h2>
+  <p>
+    The assistant is a server route, <code>POST /api/ask</code>, on your docs
+    site. For each question it searches a snapshot of your docs baked into the
+    build, adds the best excerpts to the model's instructions, and calls the
+    model. Browsers only talk to your docs server; only the route talks to
+    Ollama.
+  </p>
+  <p>
+    So Ollama can stay where it starts, listening on{" "}
+    <code>127.0.0.1:11434</code>. Keep it there: Ollama ignores the API key on
+    its local API, so anyone who can reach the port can run your model. If
+    your docs are hosted elsewhere, see{" "}
+    <a href="#when-the-docs-run-somewhere-else">When the docs run somewhere else</a>.
+  </p>
+  <p>
+    Local doesn't mean nothing leaves the machine. Models named{" "}
+    <code>:cloud</code> or <code>-cloud</code> run on ollama.com,{" "}
+    <code>ollama pull</code> downloads from Ollama's registry, and Blume
+    features like analytics or a bot check talk to their own providers. If no
+    traffic may leave, block it at the firewall and watch what gets refused.
+  </p>
+
+  <h2>Start Ollama with a model that calls tools</h2>
+  <p>
+    This guide pins Ollama 0.34.4 and uses <code>qwen3:8b</code>, a 5.2 GB
+    download that Ollama lists with tool calling and thinking. On a Linux
+    server, install that version with Ollama's script, which runs it as the{" "}
+    <code>ollama</code> systemd service:
+  </p>
+  <CodeBlock
+    code="curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.34.4 sh"
+    lang="bash"
+  />
+  <p>
+    Open an override for the service with{" "}
+    <code>sudo systemctl edit ollama</code> and add three settings:
+  </p>
+  <CodeBlock
+    code={`[Service]
+Environment="OLLAMA_CONTEXT_LENGTH=16384"
+Environment="OLLAMA_KEEP_ALIVE=-1"
+Environment="OLLAMA_NO_CLOUD=1"`}
+    lang="ini"
+    title="ollama.service override"
+  />
+  <CodeBlock
+    code={`sudo systemctl daemon-reload
+sudo systemctl restart ollama
+ollama pull qwen3:8b`}
+    lang="bash"
+  />
+  <p>
+    The context length makes room for Blume's excerpts (see{" "}
+    <a href="#tune-it-for-your-hardware">Tune it for your hardware</a>), the
+    keep-alive stops Ollama unloading the model after five idle minutes, and
+    the last line turns off cloud models. Leave <code>OLLAMA_HOST</code> unset
+    so Ollama keeps listening on 127.0.0.1 only.
+  </p>
+  <p>
+    To try it on a Mac, run <code>brew install ollama</code>, quit the Ollama
+    app if it's running (it holds the same port), and start the server with
+    the same settings:
+  </p>
+  <CodeBlock
+    code="OLLAMA_CONTEXT_LENGTH=16384 OLLAMA_KEEP_ALIVE=-1 OLLAMA_NO_CLOUD=1 ollama serve"
+    lang="bash"
+  />
+  <p>
+    Write down what you're running. A tag like <code>qwen3:8b</code> can be
+    updated upstream, so keep the <code>ID</code> column of{" "}
+    <code>ollama list</code> next to the Ollama version. When answers change,
+    you'll know whether the model did.
+  </p>
+
+  <h3>Test tool calling</h3>
+  <p>
+    Blume can give the model two tools, <code>search_docs</code> and{" "}
+    <code>read_page</code>, to look past the excerpts it was handed. They're
+    off by default for a self-hosted endpoint, since not every model can call
+    tools. <code>ollama show qwen3:8b</code> should list <code>tools</code>{" "}
+    under Capabilities. Then send a tool through the Chat Completions endpoint
+    Blume will use:
+  </p>
+  <CodeBlock
+    code={`curl -s http://127.0.0.1:11434/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "qwen3:8b",
+    "reasoning_effort": "none",
+    "messages": [{ "role": "user", "content": "Search the docs for how to send an SMS." }],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "search_docs",
+        "description": "Search the documentation.",
+        "parameters": {
+          "type": "object",
+          "properties": { "query": { "type": "string" } },
+          "required": ["query"]
+        }
+      }
+    }]
+  }'`}
+    lang="bash"
+  />
+  <p>
+    A model that can use tools answers with{" "}
+    <code>"finish_reason": "tool_calls"</code> and a <code>tool_calls</code>{" "}
+    entry that calls <code>search_docs</code> with a query. One that can't
+    returns a 400 whose message ends in <code>does not support tools</code>.
+    Passing proves the plumbing, not that the model uses tools well; the
+    comparison later shows that.
+  </p>
+
+  <h2>Point the assistant at Ollama</h2>
+  <p>
+    In your Blume project, install the provider package the route uses for
+    OpenAI-compatible endpoints:
+  </p>
+  <CodeBlock code="npm install @ai-sdk/openai-compatible@3.0.57" lang="bash" />
+  <p>
+    Then point the assistant at Ollama, and switch to server output with the
+    Node adapter:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openai } from "blume/ai";
+import { node } from "blume/deploy";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: openai({
+        apiKeyEnv: "DOCS_LLM_API_KEY",
+        baseUrl: "http://127.0.0.1:11434/v1",
+        model: "qwen3:8b",
+        reasoning: "none",
+      }),
+      retrieval: {
+        contextBudget: 3000,
+        excerptChars: 1200,
+        maxResults: 3,
+      },
+      tools: true,
+    },
+  },
+  deployment: node({ site: "https://docs.acme.example" }),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <ul>
+    <li>
+      <strong><code>baseUrl</code></strong> makes <code>openai()</code> call
+      the endpoint's Chat Completions API through{" "}
+      <code>@ai-sdk/openai-compatible</code>. Without that package,{" "}
+      <code>blume build</code> stops with <code>BLUME_DEPENDENCY_MISSING</code>.
+    </li>
+    <li>
+      <strong><code>apiKeyEnv</code></strong> names the variable holding the
+      key. Ollama ignores the key, but the route answers 503 until the variable
+      is set.
+    </li>
+    <li>
+      <strong><code>reasoning: "none"</code></strong> is sent as{" "}
+      <code>reasoning_effort</code>, which Ollama turns into thinking off.
+      Qwen3 thinks before every answer by default.
+    </li>
+    <li>
+      <strong><code>tools: true</code></strong> turns the docs tools on,
+      because the test passed. Leave it out for a model that failed.
+    </li>
+    <li>
+      <strong><code>retrieval</code></strong> cuts the docs sent with each
+      question from the default 10,000 characters to 3,000.
+    </li>
+  </ul>
+  <p>Give the key variable any value for local development:</p>
+  <CodeBlock code="DOCS_LLM_API_KEY=ollama" lang="bash" title=".env.local" />
+  <p>
+    Run <code>npx blume dev</code>, open the site, and ask a question in the
+    assistant panel. The answer should stream in with links to the pages it
+    drew from.
+  </p>
+
+  <h2>Run it in production next to Ollama</h2>
+  <p>
+    Build the site and start the Node server on the machine that runs Ollama,
+    with the project's installed <code>node_modules</code>, since the server
+    resolves its packages through them. <code>.env.local</code> is only for
+    local development, so pass the key in the server's environment:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+DOCS_LLM_API_KEY=ollama PORT=8080 node dist/server/entry.mjs`}
+    lang="bash"
+  />
+  <p>
+    The server listens on localhost:8080. Run it as a service behind a reverse
+    proxy for HTTPS;{" "}
+    <a href="/guides/self-host-documentation-docker">the Docker guide</a>{" "}
+    covers one with Caddy. In a container, 127.0.0.1 is the container itself,
+    so use host networking, or put Ollama on the same private Docker network
+    and point <code>baseUrl</code> at it.
+  </p>
+  <p>
+    Every question now runs on your hardware, and the route is public by
+    design. Blume's rate limit, on by default at 30 questions per reader every
+    10 minutes, counts by the address the Node server sees. Behind a reverse
+    proxy on the same machine, that's the proxy's address on every request, so
+    all readers would share one count. List the site's host in{" "}
+    <code>node()</code>'s <code>allowedDomains</code>, and Astro reads each
+    reader's address from the <code>X-Forwarded-For</code> header the proxy
+    sends:
+  </p>
+  <CodeBlock
+    code={`deployment: node({
+  site: "https://docs.acme.example",
+  allowedDomains: [{ hostname: "docs.acme.example" }],
+}),`}
+    lang="ts"
+  />
+  <p>
+    The proxy must replace any <code>X-Forwarded-For</code> the reader sent,
+    not append to it, as{" "}
+    <a href="/guides/rate-limit-documentation-ai-assistant#everyone-hits-the-limit-at-once">the rate limiting guide</a>{" "}
+    explains. Its bot check works either way.
+  </p>
+
+  <h3 id="when-the-docs-run-somewhere-else">When the docs run somewhere else</h3>
+  <p>
+    On Vercel, Netlify, or Cloudflare, the route has to reach Ollama over the
+    internet. Don't open port 11434 for that. Put Ollama behind a reverse proxy
+    that serves HTTPS and checks the key the route sends as a bearer token.
+    With Caddy, on the Ollama machine:
+  </p>
+  <CodeBlock
+    code={`llm.acme.example {
+	@authorized header Authorization "Bearer {env.DOCS_LLM_API_KEY}"
+	handle @authorized {
+		reverse_proxy 127.0.0.1:11434 {
+			header_up Host {upstream_hostport}
+		}
+	}
+	handle {
+		respond 401
+	}
+}`}
+    lang="text"
+    title="Caddyfile"
+  />
+  <p>
+    Start Caddy with <code>DOCS_LLM_API_KEY</code> set to a long random value,
+    set the same value in your docs host's environment, and change{" "}
+    <code>baseUrl</code> to <code>https://llm.acme.example/v1</code>. Keep the{" "}
+    <code>header_up Host</code> line: Ollama, listening on 127.0.0.1, answers
+    403 to a request whose Host header names another domain. A private network
+    between the two machines, like a VPN, avoids the public proxy altogether.
+  </p>
+
+  <h2>Tune it for your hardware</h2>
+  <p>
+    On a local model, the wait for the first word is mostly the model reading
+    its prompt, and the prompt is mostly your docs. Three things decide how
+    long that takes and whether it works at all.
+  </p>
+
+  <h3>The context window</h3>
+  <p>
+    Ollama sizes the default window by GPU memory: 4k tokens under 24 GiB of
+    VRAM, 32k up to 48 GiB, and 256k above that. Blume's prompt can outgrow
+    4k:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In one request</th>
+        <th scope="col">Up to</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Excerpts, including the page the reader is on</td>
+        <td><code>contextBudget</code> characters (default 10,000)</td>
+      </tr>
+      <tr>
+        <td>The conversation so far</td>
+        <td>24,000 characters</td>
+      </tr>
+      <tr>
+        <td>Each <code>search_docs</code> result, with tools on</td>
+        <td>5 excerpts of 700 characters</td>
+      </tr>
+      <tr>
+        <td>Each <code>read_page</code> result, with tools on</td>
+        <td>20,000 characters</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    When a prompt doesn't fit, Ollama doesn't fail the request. It logs{" "}
+    <code>truncating input prompt</code> and drops the start, where Blume's
+    instructions and excerpts are, so the model answers without your docs.
+    The <code>CONTEXT</code> column of <code>ollama ps</code> shows the window
+    the model got. A bigger one takes more memory, and the{" "}
+    <code>PROCESSOR</code> column shows when the model spills from the GPU onto
+    the slower CPU.
+  </p>
+
+  <h3>How much documentation each question carries</h3>
+  <p>
+    The <code>retrieval</code> settings trade recall for speed. Start from the
+    config above: 3 pages, 1,200 characters from each, 3,000 in total. Raise{" "}
+    <code>excerptChars</code> when answers stop short of a fact on the cited
+    page, and <code>maxResults</code> when the right page isn't cited at all.
+    The comparison below tells you which.
+  </p>
+
+  <h3>Thinking, loading, and concurrency</h3>
+  <p>
+    Keep <code>reasoning: "none"</code> unless the comparison shows answers
+    need thinking. Keep the model loaded with <code>OLLAMA_KEEP_ALIVE</code>,
+    or the first question after a quiet spell waits for it to load. And know
+    that Ollama answers one request per model at a time by default
+    (<code>OLLAMA_NUM_PARALLEL=1</code>), queuing the rest. Raising it lets
+    readers share the model at once, but memory scales with it times the
+    context length.
+  </p>
+
+  <h2>Compare it with a hosted model</h2>
+  <p>
+    Keep the hosted deployment as your baseline and ask both the same
+    questions. The{" "}
+    <a href="/guides/ai-assistant-for-documentation#write-a-small-evaluation-set">hosted guide's</a>{" "}
+    <code>ask-evals.json</code> is an array of
+    entries with an <code>id</code>, a <code>question</code>, and optionally
+    the <code>page</code> it's asked from. This script asks each question on
+    each site, one at a time, and saves every answer with the time to its first
+    chunk and to its end. It needs Node.js 22 or later and nothing else:
+  </p>
+  <CodeBlock
+    code={`import { readFile, writeFile } from "node:fs/promises";
+
+const cases = JSON.parse(await readFile("ask-evals.json", "utf8"));
+const results = [];
+
+for (const site of process.argv.slice(2)) {
+  const endpoint = new URL("api/ask", site.endsWith("/") ? site : site + "/");
+  for (const test of cases) {
+    const started = performance.now();
+    const response = await fetch(endpoint, {
+      body: JSON.stringify({
+        messages: [{ content: test.question, role: "user" }],
+        page: { path: test.page ?? "/" },
+      }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    });
+    const decoder = new TextDecoder();
+    let answer = "";
+    let firstChunkMs = null;
+    for await (const chunk of response.body ?? []) {
+      firstChunkMs ??= Math.round(performance.now() - started);
+      answer += decoder.decode(chunk, { stream: true });
+    }
+    answer += decoder.decode();
+    const totalMs = Math.round(performance.now() - started);
+    results.push({ answer, firstChunkMs, id: test.id, site, status: response.status, totalMs });
+    console.log([response.status, firstChunkMs ?? "-", totalMs, test.id, site].join("  "));
+  }
+}
+
+await writeFile("ask-compare.json", JSON.stringify(results, null, 2));`}
+    lang="js"
+    title="ask-compare.mjs"
+  />
+  <p>Run it twice and keep the second run, so a model load doesn't count:</p>
+  <CodeBlock
+    code="node ask-compare.mjs https://docs.acme.example http://localhost:8080"
+    lang="bash"
+  />
+  <p>
+    Each line shows the status, milliseconds to the first chunk and to the
+    end, the question, and the site. A 429 is the rate limit, so wait and
+    rerun. A 200 with an empty answer is a model error: check the server log.
+  </p>
+  <p>
+    Then read <code>ask-compare.json</code>. For each answer, decide whether it
+    states the facts, cites a page that holds them, and says so when the docs
+    don't cover the question. The hosted guide's <code>ask-eval.mjs</code>{" "}
+    automates the citation and wording checks: run it once per site with{" "}
+    <code>DOCS_URL</code> set.
+  </p>
+  <p>
+    Read the misses in pairs. If both models miss, fix the page. If only the
+    local one misses, raise <code>retrieval</code> first, since the baseline
+    sends more docs, then try a larger model. If it only trails on speed,
+    shrink <code>retrieval</code> or turn the tools off.
+  </p>
+
+  <h2>What a test run showed</h2>
+  <p>
+    We ran the pieces of this setup on an Apple M1 Pro with 16 GB of memory:
+    Ollama 0.34.4 with <code>qwen3:1.7b</code>, a smaller model from the same
+    family (ID <code>8f68893c685c</code>), and Blume's retrieval and docs tools
+    with the AI SDK packages the route imports, over Blume's own docs. It
+    wasn't a full deployment, and your hardware will differ, but these are the
+    behaviors to look for:
+  </p>
+  <ul>
+    <li><code>ollama ps</code> reported a 4,096-token window by default.</li>
+    <li>
+      A question with the default retrieval came to about 3,000 tokens. After
+      one <code>read_page</code> call on a long page, the next request was
+      7,971. At 4,096, Ollama logged <code>truncating input prompt</code>, and
+      the answer drifted off the question and cited nothing. At 16,384 it fit.
+    </li>
+    <li>
+      The model called <code>search_docs</code> and answered from the result.
+      The AI SDK sends <code>tool_choice</code>, which Ollama's docs list as
+      unsupported; Ollama ignored it. Once, the model wrote a tool call into
+      its answer as text instead, which a reader would see.
+    </li>
+    <li>
+      With thinking left on, the first chunk came later on every question than
+      with <code>reasoning: "none"</code>.
+    </li>
+    <li>
+      It said the docs didn't cover a question they don't, and said the same
+      about one they do, whose fact sat outside the excerpt retrieval picked:
+      a retrieval miss, not a model one.
+    </li>
+  </ul>
+
+  <h2>Troubleshooting</h2>
+  <h3>The panel says the assistant is not configured</h3>
+  <p>
+    The route answered 503 because <code>DOCS_LLM_API_KEY</code> isn't set
+    where the server runs. <code>.env.local</code> only applies to{" "}
+    <code>blume dev</code>, so set it in the production server's environment
+    and restart it.
+  </p>
+  <h3>The panel says "Sorry, something went wrong."</h3>
+  <p>
+    Ollama errors arrive after the route starts streaming, so the reader gets
+    this notice. The server log has the cause after{" "}
+    <code>Assistant provider error:</code>. <code>Cannot connect to API</code>{" "}
+    means Ollama isn't running or <code>baseUrl</code> is wrong.{" "}
+    <code>model 'qwen3:8b' not found</code> means the model isn't pulled on
+    that machine. <code>does not support tools</code> means the model can't
+    call tools, so remove <code>tools: true</code>.
+  </p>
+  <h3>Answers ignore the docs or stop citing pages</h3>
+  <p>
+    The prompt outgrew the context window. On Linux,{" "}
+    <code>journalctl -u ollama | grep "truncating input prompt"</code> shows
+    it. Raise <code>OLLAMA_CONTEXT_LENGTH</code>, lower{" "}
+    <code>retrieval</code>, or turn the tools off, since{" "}
+    <code>read_page</code> adds the most.
+  </p>
+  <h3>A tool call shows up in the answer as text</h3>
+  <p>
+    The model wrote the call instead of making it, which small models do. Try
+    a larger model, or remove <code>tools: true</code> so it answers from the
+    retrieved excerpts alone.
+  </p>
+  <h3>The log shows a 401 or 403 from the proxy</h3>
+  <p>
+    A 401 comes from Caddy: the token on the docs host doesn't match the one
+    Caddy was started with. A 403 comes from Ollama rejecting the Host header,
+    so keep <code>header_up Host {"{upstream_hostport}"}</code>, or set the
+    same header in whatever proxy you use.
+  </p>
+</GuidePage>

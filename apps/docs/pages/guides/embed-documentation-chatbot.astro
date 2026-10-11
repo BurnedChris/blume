@@ -1,0 +1,719 @@
+---
+// Embed the docs assistant in a product: checked against the assistant,
+// rate limiting, and deployment docs, and against the generated route
+// (astro/templates.ts askEndpointTemplate, printed with cors set), its CORS
+// helpers (ai/cors.ts), grounding (ai/ask-context.ts), the rate limiter
+// (ratelimit/runtime.ts), the useAssistant hook (components/islands/hooks.ts),
+// the static-build gate (cli/prepare.ts), and Astro 7.3.2's cross-site origin
+// check on main. Built the React example in a Vite 8 react-ts app with
+// react-markdown 10.1.0 (tsc -b and vite build pass), and ran it in Chrome
+// against a stand-in route using Blume's real CORS helpers and rate limiter,
+// Astro's real origin check, and canned streamed text: preflight, streaming,
+// citation rewriting, Stop, 400/429/503, an empty 200, and an unlisted origin.
+// Replayed each curl command here against that stand-in. Not yet run end to
+// end against a deployed Blume route and a real model.
+// Review: rechecked the route's validation order, CORS helpers, and Astro
+// 7.3.2's origin check; setup now hands off to the assistant guide and the
+// bot check to the rate limiting guide. Updated against 400b5ff3 (read, not
+// rerun): withCors exposes Retry-After to a listed origin (ai/cors.ts), so
+// the 429 notice reads it; a page path outside the snapshot keeps retrieval
+// to its locale prefix or the default locale (readerScope).
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const askDocsCode = `// Where the docs are deployed, with the deployment base if there is one
+// (like https://acme.example/docs). The route and every citation live under it.
+export const DOCS_URL = "https://docs.acme.example";
+
+export interface AskMessage {
+  content: string;
+  role: "assistant" | "user";
+}
+
+/** The route turned the question away, or the answer never arrived. */
+export class AskError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+const GENERIC = "Something went wrong answering that. Try again.";
+
+const NOTICES: Record<number, string> = {
+  0: "Couldn't reach the docs. Check your connection and try again.",
+  400: "That question couldn't be sent. Shorten it and try again.",
+  403: "The docs assistant turned that request away.",
+  413: "That question is too long. Shorten it and try again.",
+  429: "You've asked a lot of questions. Try again in a few minutes.",
+  503: "The docs assistant isn't available right now.",
+};
+
+// A 429 from the rate limit says in Retry-After how many seconds are left.
+const notice = (response: Response): string => {
+  const seconds = Number(response.headers.get("retry-after"));
+  if (response.status === 429 && seconds > 0) {
+    const minutes = Math.ceil(seconds / 60);
+    return \`You've asked a lot of questions. Try again in \${minutes} minute\${minutes === 1 ? "" : "s"}.\`;
+  }
+  return NOTICES[response.status] ?? GENERIC;
+};
+
+// The route answers 400 past 40 messages or 24,000 characters of JSON, so
+// send the latest turns that fit, starting with a question.
+const fit = (messages: AskMessage[]): AskMessage[] => {
+  let kept = messages.slice(-40);
+  while (
+    kept.length > 1 &&
+    (kept[0].role === "assistant" || JSON.stringify(kept).length > 24_000)
+  ) {
+    kept = kept.slice(1);
+  }
+  return kept;
+};
+
+/** Point a citation like /templates at the docs, not at your app. */
+export const docsHref = (url: string): string =>
+  url.startsWith("/") && !url.startsWith("//") ? \`\${DOCS_URL}\${url}\` : url;
+
+interface AskOptions {
+  messages: AskMessage[];
+  /** Called with the answer so far, each time more of it arrives. */
+  onText: (answer: string) => void;
+  /** The docs route that covers the reader's screen, like "/templates". */
+  page?: string;
+  signal: AbortSignal;
+}
+
+export const askDocs = async ({
+  messages,
+  onText,
+  page,
+  signal,
+}: AskOptions): Promise<string> => {
+  let response: Response;
+  try {
+    response = await fetch(\`\${DOCS_URL}/api/ask\`, {
+      body: JSON.stringify({
+        messages: fit(messages),
+        page: page ? { path: page } : undefined,
+      }),
+      // Without a JSON content type, the docs site's cross-site check
+      // answers 403 before the route runs.
+      headers: { "content-type": "application/json" },
+      method: "POST",
+      signal,
+    });
+  } catch (error) {
+    // A Stop click lands here too, and the caller handles it.
+    if (signal.aborted) {
+      throw error;
+    }
+    // Offline, DNS, or a CORS rejection: the browser gives no status.
+    throw new AskError(0, NOTICES[0]);
+  }
+  if (!(response.ok && response.body)) {
+    throw new AskError(response.status, notice(response));
+  }
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let answer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    answer += value;
+    onText(answer);
+  }
+  // A provider failure after the 200 (a bad key, an unknown model) ends the
+  // stream with no text, so an empty answer is an error.
+  if (!answer) {
+    throw new AskError(200, GENERIC);
+  }
+  return answer;
+};`;
+---
+
+<GuidePage guide={guideById("embed-documentation-chatbot")}>
+  <p>
+    To put your docs assistant inside your product, turn on Blume's
+    assistant, deploy your docs to a server host, list your product's origin
+    in <code>ai.assistant.cors</code>, and call the generated{" "}
+    <code>POST /api/ask</code> route from your app. The route answers
+    with a plain text stream grounded in your docs, with citations as links to
+    your pages, so a small React component can show answers inside your
+    product as they arrive.
+  </p>
+  <p>
+    By the end of this guide, the fictional Acme app at{" "}
+    <code>app.acme.example</code> has an "Ask the docs" panel that streams
+    answers from <code>docs.acme.example</code>, tells the assistant which docs
+    page covers the current screen, links every source back to the docs, stops
+    on request, and turns each error the route can return into a message the
+    reader understands.
+  </p>
+  <p>
+    If a link to your docs, or the assistant panel on the docs site itself, is
+    enough, you don't need any of this. And Blume's route only knows your docs:
+    it can't see who the user is or what's in their account, and it answers
+    anyone who calls it. If answers have to depend on the user, or sit behind
+    your login, run your own assistant backend instead.
+  </p>
+
+  <h2>Decide which side runs the assistant</h2>
+  <p>
+    Two settings connect the assistant to something outside the docs site, and
+    they point in opposite directions:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <td></td>
+        <th scope="col"><code>cors</code></th>
+        <th scope="col"><code>endpoint</code></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <th scope="row">What it does</th>
+        <td>Lets pages on other origins call Blume's generated route</td>
+        <td>Points Blume's docs panel at a backend you run</td>
+      </tr>
+      <tr>
+        <th scope="row">Who answers</th>
+        <td>Blume's route, on the docs host</td>
+        <td>Your backend</td>
+      </tr>
+      <tr>
+        <th scope="row">Docs build</th>
+        <td>Server output, on a host adapter</td>
+        <td>Can stay static</td>
+      </tr>
+      <tr>
+        <th scope="row">Retrieval and citations</th>
+        <td>Blume grounds answers in your pages</td>
+        <td>Your backend's job</td>
+      </tr>
+      <tr>
+        <th scope="row">CORS, rate limits, bot checks</th>
+        <td>Blume's route handles them</td>
+        <td>Your backend's job</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Setting both is a config error, since <code>cors</code> only configures
+    the generated route. This guide uses <code>cors</code>. If you already run
+    an assistant backend, your app calls it directly and{" "}
+    <a href="/docs/configuration/assistant#external-endpoint">endpoint</a> lets
+    the docs panel share it. Both take the same request body and return the
+    same text stream, so the component below works against either once you
+    change its URL.
+  </p>
+
+  <h2>Deploy the assistant route</h2>
+  <p>
+    Add the assistant and a host adapter to the docs site's config. The origin
+    in <code>cors</code> is your product's, not the docs site's:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { vercel } from "blume/deploy";
+
+export default defineConfig({
+  // ...the rest of your config
+  ai: {
+    assistant: {
+      enabled: true,
+      cors: ["https://app.acme.example"],
+    },
+  },
+  deployment: vercel({ site: "https://docs.acme.example" }),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The assistant's backend is a server route, and naming a host adapter
+    switches the build to server output. Without one, <code>blume build</code>{" "}
+    stops with <code>BLUME_SERVER_FEATURE_REQUIRED</code>. The{" "}
+    <code>node()</code>, <code>netlify()</code>, and <code>cloudflare()</code>{" "}
+    adapters work the same way; see{" "}
+    <a href="/docs/deployment#server-rendering">Server rendering</a>.
+  </p>
+  <p>
+    The model and its key work as in{" "}
+    <a href="/guides/ai-assistant-for-documentation">Add an AI assistant that answers from your documentation</a>,
+    which covers choosing a provider, keeping the key on the server, and
+    testing answers. With no <code>provider</code> set, answers come from{" "}
+    <code>openai/gpt-5.5</code> through the Vercel AI Gateway, which reads{" "}
+    <code>AI_GATEWAY_API_KEY</code> (or, on Vercel, the deployment's OIDC
+    token). Until the key is set, the route answers 503.
+  </p>
+  <p>
+    Once deployed, the route is at <code>https://docs.acme.example/api/ask</code>.
+    If your docs deploy under a{" "}
+    <a href="/docs/deployment#subpath-deploys">deployment.base</a> like{" "}
+    <code>/docs</code>, the route moves under it too:{" "}
+    <code>https://acme.example/docs/api/ask</code>.
+  </p>
+
+  <h2>Allow your product's origin</h2>
+  <p>
+    A browser only lets a page read a response from another origin when the
+    response names that origin. Blume reduces each <code>cors</code> entry to
+    its origin (scheme, host, and port), and the route compares the caller's{" "}
+    <code>Origin</code> header against the list exactly:
+  </p>
+  <ul>
+    <li>
+      <code>https://app.acme.example</code> and <code>https://acme.example</code>{" "}
+      are different origins. List each one your panel runs on.
+    </li>
+    <li>
+      There are no patterns. Per-branch preview URLs each need their own entry,
+      so list a stable staging origin, or <code>"*"</code> to let any page call
+      the route.
+    </li>
+    <li>
+      The list is written into the generated route when the site builds, so a
+      change takes effect on the next deploy.
+    </li>
+  </ul>
+  <p>
+    To develop against a local docs server, add Vite's default origin,{" "}
+    <code>http://localhost:5173</code>, to the list and run{" "}
+    <code>npx blume dev</code>, which serves the route at{" "}
+    <code>http://localhost:4321/api/ask</code>.
+  </p>
+  <p>
+    Once it's deployed, replay the preflight a browser sends before the real
+    request:
+  </p>
+  <CodeBlock
+    code={`curl -i -X OPTIONS https://docs.acme.example/api/ask \\
+  -H "Origin: https://app.acme.example" \\
+  -H "Access-Control-Request-Method: POST" \\
+  -H "Access-Control-Request-Headers: content-type"`}
+    lang="bash"
+  />
+  <p>A listed origin gets a 204 with these headers among the rest:</p>
+  <CodeBlock
+    code={`access-control-allow-origin: https://app.acme.example
+access-control-allow-headers: content-type
+access-control-allow-methods: POST
+access-control-max-age: 86400
+vary: origin`}
+    lang="http"
+  />
+  <p>
+    Send the same command with an origin that isn't listed, like{" "}
+    <code>https://example.com</code>. It still gets a 204, but without{" "}
+    <code>access-control-allow-origin</code>, so the browser stops there and
+    never sends the question.
+  </p>
+
+  <h2>CORS is not authentication</h2>
+  <p>
+    CORS decides which browser pages may read the route's answers. It doesn't
+    decide who may ask. Leave out the <code>Origin</code> header and the route
+    streams an answer to anyone:
+  </p>
+  <CodeBlock
+    code={`curl -N https://docs.acme.example/api/ask \\
+  -H "content-type: application/json" \\
+  -d '{"messages":[{"role":"user","content":"How do I send an SMS?"}]}'`}
+    lang="bash"
+  />
+  <p>
+    So treat the route as public, whatever the list says. These are what limit
+    it:
+  </p>
+  <ul>
+    <li>
+      <strong>Validation.</strong> The route reads at most 64 KB, and accepts 1
+      to 40 messages, up to 24,000 characters of JSON, in the{" "}
+      <code>user</code> and <code>assistant</code> roles only, so a caller
+      can't swap in their own system prompt.
+    </li>
+    <li>
+      <strong>Rate limiting.</strong> On by default, at 30 questions per IP
+      address every 10 minutes. The default count lives in memory, per
+      instance on serverless hosts; <code>upstash()</code> gives every
+      instance one shared count. People using your product from one office
+      often share an address, so raise <code>requests</code> if they meet it.
+      See{" "}
+      <a href="/guides/rate-limit-documentation-ai-assistant">
+        Rate-limit a public documentation AI assistant
+      </a>.
+    </li>
+    <li>
+      <strong>A bot check.</strong> With <code>captcha</code> set (see{" "}
+      <a href="/guides/rate-limit-documentation-ai-assistant#add-a-bot-check">Add a bot check</a>),
+      the route answers 403 to any question without a valid token in the
+      body's <code>captcha</code> field. Your panel would then have to run the
+      same Turnstile or hCaptcha widget and send its token, and Turnstile only
+      runs on the hostnames listed for the widget, so add your product's. The
+      example below leaves the bot check out.
+    </li>
+  </ul>
+  <p>
+    Questions reach your model provider as the reader typed them. The route
+    doesn't know who's asking, so don't add account details or tokens to the
+    messages your app sends.
+  </p>
+
+  <h2>Build the chat component</h2>
+  <p>In your React app, add react-markdown to render the answers' Markdown:</p>
+  <CodeBlock code="npm install react-markdown@10" lang="bash" />
+  <p>
+    Put the request in its own module. It sends the conversation, reads the
+    answer as it streams, and turns every failure into an{" "}
+    <code>AskError</code> with a message for the reader:
+  </p>
+  <CodeBlock
+    code={askDocsCode}
+    lang="ts"
+    title="src/ask-docs.ts"
+  />
+  <p>Three details in it matter:</p>
+  <ul>
+    <li>
+      <strong>The content type.</strong> Astro rejects a cross-origin{" "}
+      <code>POST</code> with no content type, or a form-like one such as{" "}
+      <code>text/plain</code>, with a 403 before Blume's route runs. That
+      response has no CORS headers, so the browser reports it as a network
+      error.
+    </li>
+    <li>
+      <strong>The stream is plain UTF-8 text</strong>, not server-sent events.{" "}
+      <code>TextDecoderStream</code> decodes it chunk by chunk and keeps a
+      character split across two chunks intact.
+    </li>
+    <li>
+      <strong>An empty answer is an error.</strong> The route sends its 200 as
+      soon as the model call starts, so a provider failure after that ends the
+      stream with no text. A failure partway through ends it early, which
+      looks like a short answer.
+    </li>
+  </ul>
+  <p>Then the panel itself:</p>
+  <CodeBlock
+    code={`import { type FormEvent, useEffect, useRef, useState } from "react";
+import Markdown, { defaultUrlTransform } from "react-markdown";
+import { AskError, type AskMessage, askDocs, docsHref } from "./ask-docs";
+
+interface DocsAssistantProps {
+  /** The docs route that covers the screen this panel sits on. */
+  page?: string;
+}
+
+export function DocsAssistant({ page }: DocsAssistantProps) {
+  const [messages, setMessages] = useState<AskMessage[]>([]);
+  const [question, setQuestion] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const controllerRef = useRef<AbortController | null>(null);
+
+  // Stop the answer if the panel closes mid-stream.
+  useEffect(() => () => controllerRef.current?.abort(), []);
+
+  const send = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const text = question.trim();
+    if (!text || busy) {
+      return;
+    }
+    const before = messages;
+    const history: AskMessage[] = [...before, { content: text, role: "user" }];
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setMessages([...history, { content: "", role: "assistant" }]);
+    setQuestion("");
+    setError(null);
+    setBusy(true);
+    try {
+      await askDocs({
+        messages: history,
+        onText: (answer) =>
+          setMessages([...history, { content: answer, role: "assistant" }]),
+        page,
+        signal: controller.signal,
+      });
+    } catch (caught) {
+      if (controller.signal.aborted) {
+        // Stopped: keep what arrived, and drop the bubble if nothing did.
+        setMessages((current) => current.filter((message) => message.content));
+      } else {
+        // Failed: put the question back so the reader can send it again.
+        setMessages(before);
+        setQuestion(text);
+        setError(
+          caught instanceof AskError ? caught.message : "Something went wrong."
+        );
+      }
+    } finally {
+      controllerRef.current = null;
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section aria-label="Ask the docs">
+      <ol aria-busy={busy}>
+        {messages.map((message, index) => (
+          <li data-role={message.role} key={index}>
+            {message.role === "user" ? (
+              <p>{message.content}</p>
+            ) : (
+              <Markdown
+                components={{
+                  a: ({ node, ...props }) => (
+                    <a {...props} rel="noreferrer" target="_blank" />
+                  ),
+                }}
+                urlTransform={(url) => defaultUrlTransform(docsHref(url))}
+              >
+                {message.content || "Thinking…"}
+              </Markdown>
+            )}
+          </li>
+        ))}
+      </ol>
+      {error && <p role="alert">{error}</p>}
+      <form onSubmit={send}>
+        <input
+          aria-label="Question"
+          maxLength={4000}
+          onChange={(event) => setQuestion(event.target.value)}
+          placeholder="Ask about the docs"
+          value={question}
+        />
+        {busy ? (
+          <button onClick={() => controllerRef.current?.abort()} type="button">
+            Stop
+          </button>
+        ) : (
+          <button type="submit">Ask</button>
+        )}
+      </form>
+    </section>
+  );
+}`}
+    lang="tsx"
+    title="src/DocsAssistant.tsx"
+  />
+  <p>
+    It's unstyled, so it takes on your app's styles. react-markdown doesn't
+    render raw HTML by default, so an answer can't inject markup into your
+    app.
+  </p>
+
+  <h2>Send page context and keep source links</h2>
+  <p>Mount the panel on each screen with the docs page that covers it:</p>
+  <CodeBlock
+    code={`import { DocsAssistant } from "./DocsAssistant";
+
+export function TemplatesScreen() {
+  return (
+    <main>
+      <h1>Templates</h1>
+      {/* ...the screen itself */}
+      <DocsAssistant page="/templates" />
+    </main>
+  );
+}`}
+    lang="tsx"
+    title="src/TemplatesScreen.tsx"
+  />
+  <p>
+    The component sends <code>page</code> as <code>page.path</code>. The route
+    puts that page into the model's context first, marked as the page the
+    reader is viewing, and keeps retrieval to its language and, on a versioned
+    site, its docs version. Use the route as your docs sidebar links it,
+    without <code>deployment.base</code>. A path that matches no page, or no{" "}
+    <code>page</code> at all, leaves answers to search alone, kept to the
+    locale the path starts with (<code>/ja</code>) or the default language.
+  </p>
+  <p>
+    The assistant cites pages as Markdown links to their routes, like{" "}
+    <code>[Templates](/templates)</code>. On the docs site those resolve to the
+    right page, but in your app a root-relative link resolves against your
+    app's origin and lands on the wrong page. <code>docsHref</code> joins
+    root-relative links onto <code>DOCS_URL</code> before react-markdown's{" "}
+    <code>defaultUrlTransform</code> runs, which still drops unsafe URLs such as{" "}
+    <code>javascript:</code> links. Citations leave the base out, so if your
+    docs have one, include it in <code>DOCS_URL</code>.
+  </p>
+
+  <h2>Handle errors, limits, and cancellation</h2>
+  <p>
+    These are the responses a question can get, and what the panel shows for
+    each:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Status</th>
+        <th scope="col">Cause</th>
+        <th scope="col">The panel shows</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>None</td>
+        <td>
+          Offline, a DNS failure, an origin not in <code>cors</code>, or
+          Astro's cross-site 403
+        </td>
+        <td>Couldn't reach the docs</td>
+      </tr>
+      <tr>
+        <td>400</td>
+        <td>The body failed validation</td>
+        <td>Couldn't be sent</td>
+      </tr>
+      <tr>
+        <td>403</td>
+        <td>The bot check failed</td>
+        <td>Turned away</td>
+      </tr>
+      <tr>
+        <td>413</td>
+        <td>The body is over 64 KB</td>
+        <td>Too long</td>
+      </tr>
+      <tr>
+        <td>429</td>
+        <td>The reader is over the rate limit</td>
+        <td>How many minutes to wait</td>
+      </tr>
+      <tr>
+        <td>503</td>
+        <td>The provider's key, or the bot check's secret, isn't set</td>
+        <td>Not available</td>
+      </tr>
+      <tr>
+        <td>500</td>
+        <td>The route failed before streaming</td>
+        <td>Something went wrong</td>
+      </tr>
+      <tr>
+        <td>200, empty</td>
+        <td>The provider failed after the response started</td>
+        <td>Something went wrong</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Every response from the route names a listed origin, so your app can
+    always read its status. It also exposes <code>Retry-After</code> to that
+    origin, so after a 429 <code>notice</code> reads the seconds left and
+    tells the reader how long to wait. Each error also has a short plain-text
+    body that explains it: read it with <code>curl</code> when you debug, and
+    keep your own wording in the panel.
+  </p>
+  <p>
+    Stop aborts the request, and so does closing the panel mid-answer. The
+    component sees the aborted signal, keeps whatever text had arrived, and
+    shows no error. On the server, the route
+    passes the request's abort signal to the model call, so generation stops
+    once the host reports the closed connection, and it isn't logged as a
+    provider error.
+  </p>
+
+  <h2>Test it before you ship</h2>
+  <p>
+    With the docs deployed and your app running on a listed origin, check four
+    things. Each request counts against the rate limit, so space them out.
+  </p>
+  <ol>
+    <li>
+      <strong>Preflight.</strong> In your browser's Network panel, the first
+      question sends an <code>OPTIONS</code> request that gets a 204 naming
+      your origin, then the <code>POST</code>.
+    </li>
+    <li>
+      <strong>Streaming.</strong> The answer appears in pieces, not all at
+      once, and its links open pages on the docs site.
+    </li>
+    <li>
+      <strong>Errors.</strong> An invalid body gets a 400 that still names your
+      origin, so the browser lets your app read the status.
+    </li>
+    <li>
+      <strong>Cancellation.</strong> Ask for something long and select Stop.
+      The <code>POST</code> shows as canceled, the partial answer stays, and
+      your host's logs show no <code>Assistant provider error</code> line for
+      it.
+    </li>
+  </ol>
+  <p>For the third check:</p>
+  <CodeBlock
+    code={`curl -i https://docs.acme.example/api/ask \\
+  -H "Origin: https://app.acme.example" \\
+  -H "content-type: application/json" \\
+  -d '{"messages":[]}'`}
+    lang="bash"
+  />
+
+  <h2>Troubleshooting</h2>
+  <h3>The browser reports a CORS error</h3>
+  <p>
+    The origin isn't listed exactly, or the change isn't deployed yet. Copy the{" "}
+    <code>Origin</code> header from the failed request in the Network panel
+    and replay the preflight with it. If{" "}
+    <code>access-control-allow-origin</code> is missing, fix the list and
+    redeploy. <code>http://localhost:5173</code> and{" "}
+    <code>http://127.0.0.1:5173</code> are different origins.
+  </p>
+  <h3>A 403 says "Cross-site POST form submissions are forbidden"</h3>
+  <p>
+    That's Astro's cross-site check, not Blume's route. The request had no
+    content type, or a form-like one. Send{" "}
+    <code>content-type: application/json</code>. <code>curl -d</code> sends a
+    form content type unless you set that header.
+  </p>
+  <h3>The config fails with "ai.assistant.cors only applies to the generated route"</h3>
+  <p>
+    You set both <code>cors</code> and <code>endpoint</code>. Remove{" "}
+    <code>endpoint</code> to use Blume's route, or remove <code>cors</code> and
+    handle CORS in your own backend.
+  </p>
+  <h3>The build fails with BLUME_SERVER_FEATURE_REQUIRED</h3>
+  <p>
+    The build is static, and the assistant needs a server. Set{" "}
+    <code>deployment</code> to a host adapter from <code>blume/deploy</code>,
+    or drop <code>output: "static"</code> from the one you have.
+  </p>
+  <h3>Every question says the assistant isn't available</h3>
+  <p>
+    The route answered 503. Send it a valid question with <code>curl</code>{" "}
+    and read the body: it names the variable to set, such as{" "}
+    <code>AI_GATEWAY_API_KEY</code>. Set it in your host's environment and
+    redeploy.
+  </p>
+  <h3>Answers come back empty</h3>
+  <p>
+    A 200 with no text means the provider failed after the response started,
+    usually over a rejected key or a model name it doesn't know. The route
+    logs the cause as <code>Assistant provider error:</code> in your host's
+    function logs.
+  </p>
+  <h3>Source links open pages in your app</h3>
+  <p>
+    The citation rewrite isn't running. Check that every{" "}
+    <code>&lt;Markdown&gt;</code> that renders an answer passes{" "}
+    <code>urlTransform</code>, and that <code>DOCS_URL</code> includes your
+    docs' base, if they have one.
+  </p>
+  <h3>The request never leaves the browser</h3>
+  <p>
+    If your app sets a Content Security Policy, its <code>connect-src</code>{" "}
+    has to include the docs origin, or the browser blocks the request before
+    the preflight. The console names the directive that blocked it.
+  </p>
+</GuidePage>

@@ -563,9 +563,37 @@ describe("page meta schema", () => {
     expect(meta.draft).toBeFalsy();
     expect(meta.sidebar.hidden).toBeFalsy();
   });
+
+  it("folds the top-level hidden/noindex shorthands into their nested fields", () => {
+    const meta = pageMetaSchema.parse({ hidden: true, noindex: true });
+    expect(meta.sidebar.hidden).toBeTruthy();
+    expect(meta.seo.noindex).toBeTruthy();
+    // A shorthand left off never unsets the nested field.
+    const nested = pageMetaSchema.parse({
+      seo: { noindex: true },
+      sidebar: { hidden: true },
+    });
+    expect(nested.sidebar.hidden).toBeTruthy();
+    expect(nested.seo.noindex).toBeTruthy();
+  });
 });
 
 describe("page collection schema", () => {
+  it("folds the shorthands into entry.data, which the page template reads", () => {
+    // The catch-all page emits its robots tag from `entry.data.seo.noindex`
+    // and the changelog index skips `entry.data.sidebar.hidden`, so the
+    // collection must fold the shorthands the way the scan does.
+    const data = pageCollectionSchema.parse({
+      hidden: true,
+      noindex: true,
+      product: "cli",
+      seo: { title: "Kept" },
+    });
+    expect(data.seo).toStrictEqual({ noindex: true, title: "Kept" });
+    expect(data.sidebar.hidden).toBeTruthy();
+    expect(data.product).toBe("cli");
+  });
+
   it("normalizes built-in keys and passes custom keys through", () => {
     const data = pageCollectionSchema.parse({
       date: new Date("2026-01-02T00:00:00.000Z"),
@@ -960,8 +988,16 @@ describe(scanBody, () => {
       '<a id="hidden"></a>',
       "</Prompt>",
       '<p data-id="attribute-suffix">x</p>',
+      // An escaped `<` renders the tag as text in `.md` and `.mdx` alike.
+      String.raw`Write \<a id="escaped">x\</a> for an anchor.`,
     ].join("\n");
     expect(scanBody(body).anchors).toStrictEqual([]);
+  });
+
+  it("keeps an id after an escaped backslash, which leaves the `<` a tag", () => {
+    expect(
+      scanBody(String.raw`\\<a id="after-backslash"></a>`).anchors
+    ).toStrictEqual(["after-backslash"]);
   });
 
   it("never lets a stripped comment splice its neighbors into new markup", () => {
@@ -1005,13 +1041,29 @@ describe(scanBody, () => {
       "## E {#e}",
       "```",
       "## {#f}",
+      // MkDocs `attr_list` spellings fail the MDX compile the same way.
+      "## G { #g }",
+      "## H {: #h }",
+      "## I {:#i} [toc]",
+      // So does an id among other attributes; a list with no id isn't one.
+      '## J {: .wide #j title="a #b" } [toc]',
+      "## K { .wide data-x=1 }",
     ].join("\n");
     const scan = scanBody(body);
     expect(scan.curlyMarkers).toStrictEqual([
-      { id: "a", line: 4 },
-      { id: "b", line: 6 },
-      { id: "d", line: 9 },
-      { id: "f", line: 13 },
+      { attributes: false, id: "a", line: 4, marker: "{#a}" },
+      { attributes: false, id: "b", line: 6, marker: "{#b}" },
+      { attributes: false, id: "d", line: 9, marker: "{#d}" },
+      { attributes: false, id: "f", line: 13, marker: "{#f}" },
+      { attributes: false, id: "g", line: 14, marker: "{ #g }" },
+      { attributes: false, id: "h", line: 15, marker: "{: #h }" },
+      { attributes: false, id: "i", line: 16, marker: "{:#i}" },
+      {
+        attributes: true,
+        id: "j",
+        line: 17,
+        marker: '{: .wide #j title="a #b" }',
+      },
     ]);
     expect(scan.headings.map((h) => h.slug)).toContain("c");
   });
@@ -1262,6 +1314,25 @@ describe("rss feeds", () => {
     );
   });
 
+  it("describes an item with its meta description when it has no description", () => {
+    const release = {
+      ...postPage("v2", "/changelog/v2", "changelog", {
+        date: "2026-01-02",
+        seo: { description: "Faster builds." },
+      }),
+      description: undefined,
+    };
+    const both = postPage("v1", "/changelog/v1", "changelog", {
+      date: "2026-01-01",
+      seo: { description: "Meta summary" },
+    });
+    const [feed] = buildRssFeeds(makeProject([release, both]));
+    expect(feed?.items.map((item) => item.description)).toStrictEqual([
+      "Faster builds.",
+      "About v1",
+    ]);
+  });
+
   it("URI-encodes item links like the sitemap does", () => {
     const pages = [
       postPage("Tips", "/tips & tricks/café", "blog", { date: "2026-01-01" }),
@@ -1275,8 +1346,24 @@ describe("rss feeds", () => {
   });
 });
 
+/** The node types the French homepage `/fr` gets, given the home route. */
+const frenchHomeTypes = (homeRoute?: string) =>
+  graphOf(
+    buildStructuredData({
+      breadcrumbs: [
+        { label: "Accueil", route: "/fr" },
+        { label: "Guide", route: "/fr/guide" },
+      ],
+      homeRoute,
+      route: "/fr",
+      siteName: "Docs",
+      siteUrl: "https://x.com",
+      title: "Accueil",
+    })
+  ).map((n) => n["@type"]);
+
 describe("structured data", () => {
-  it("emits only a WebSite node for the homepage", () => {
+  it("emits a WebSite and an undated WebPage node for the homepage", () => {
     const data = buildStructuredData({
       breadcrumbs: [],
       route: "/",
@@ -1284,7 +1371,49 @@ describe("structured data", () => {
       siteUrl: "https://x.com",
       title: "Home",
     });
-    expect(graphOf(data).map((n) => n["@type"])).toStrictEqual(["WebSite"]);
+    const graph = graphOf(data);
+    expect(graph.map((n) => n["@type"])).toStrictEqual(["WebSite", "WebPage"]);
+    expect(graph[1]).toStrictEqual({
+      "@id": "https://x.com/#page",
+      "@type": "WebPage",
+      inLanguage: "en",
+      isPartOf: { "@id": "https://x.com#website" },
+      name: "Home",
+      url: "https://x.com/",
+    });
+  });
+
+  it("gives the homepage WebPage its description, language, and dates", () => {
+    const data = buildStructuredData({
+      breadcrumbs: [],
+      description: "The docs.",
+      locale: "de",
+      modified: "2026-10-01T09:00:00Z",
+      published: "2026-01-01",
+      route: "/",
+      siteName: "Docs",
+      siteUrl: "https://x.com",
+      title: "Home",
+    });
+    const page = graphOf(data).find((n) => n["@type"] === "WebPage");
+    expect(page).toMatchObject({
+      dateModified: "2026-10-01T09:00:00.000Z",
+      datePublished: "2026-01-01T00:00:00.000Z",
+      description: "The docs.",
+      inLanguage: "de",
+    });
+    // A headline is an article property; the homepage isn't one.
+    expect(page?.headline).toBeUndefined();
+  });
+
+  it("treats the navigation root as the homepage under a locale or basePath", () => {
+    expect(frenchHomeTypes("/fr")).toStrictEqual(["WebSite", "WebPage"]);
+    // Without one, only `/` is the homepage.
+    expect(frenchHomeTypes()).toStrictEqual([
+      "WebSite",
+      "TechArticle",
+      "BreadcrumbList",
+    ]);
   });
 
   it("emits a BlogPosting with absolute url, datePublished, and breadcrumbs", () => {
@@ -1367,16 +1496,25 @@ describe("structured data", () => {
     expect(graph[0]?.url).toBe("/guide");
   });
 
-  it("returns null for the homepage without a site", () => {
-    expect(
-      buildStructuredData({
-        breadcrumbs: [],
-        route: "/",
-        siteName: "Docs",
-        siteUrl: null,
-        title: "Home",
-      })
-    ).toBeNull();
+  it("still dates the homepage without a site, with a relative url", () => {
+    const data = buildStructuredData({
+      breadcrumbs: [],
+      modified: "2026-10-01",
+      route: "/",
+      siteName: "Docs",
+      siteUrl: null,
+      title: "Home",
+    });
+    expect(graphOf(data)).toStrictEqual([
+      {
+        "@id": "/#page",
+        "@type": "WebPage",
+        dateModified: "2026-10-01T00:00:00.000Z",
+        inLanguage: "en",
+        name: "Home",
+        url: "/",
+      },
+    ]);
   });
 });
 
@@ -1408,6 +1546,45 @@ describe("sitemap", () => {
     expect(xml).not.toContain("/b<");
     expect(xml).not.toContain("/c<");
     expect(xml).not.toContain("/d<");
+  });
+
+  it("lists canonical URLs only, leaving out a page whose canonical points elsewhere", () => {
+    const canonical = (id: string, url: string) =>
+      makePage({
+        id,
+        meta: pageMetaSchema.parse({ seo: { canonical: url } }),
+        route: `/${id}`,
+        title: id,
+      });
+    const pages = [
+      canonical("copy", "https://example.com/original"),
+      makePage({ id: "original", route: "/original", title: "Original" }),
+      // Naming itself, with or without a trailing slash, keeps it listed.
+      canonical("self", "https://example.com/self/"),
+      // Unicode routes compare decoded, as the audit reads them.
+      canonical("größe", "https://example.com/gr%C3%B6%C3%9Fe"),
+      // A malformed escape can't be decoded, so it names some other path.
+      canonical("bad", "https://example.com/bad%E0%A4%A"),
+    ];
+    const xml = buildSitemap(makeProject(pages)) ?? "";
+    expect(xml).not.toContain("/copy<");
+    expect(xml).not.toContain("/bad");
+    expect(xml).toContain("https://example.com/original<");
+    expect(xml).toContain("https://example.com/self<");
+    expect(xml).toContain("https://example.com/gr%C3%B6%C3%9Fe<");
+
+    // Under a deployment base the canonical carries it, like the <loc>.
+    const based = buildSitemap(
+      makeProject(
+        [
+          canonical("copy", "https://example.com/sub/original"),
+          canonical("self", "https://example.com/sub/self"),
+        ],
+        { deployment: { base: "/sub", site: "https://example.com" } }
+      )
+    );
+    expect(based).not.toContain("/copy<");
+    expect(based).toContain("https://example.com/sub/self<");
   });
 
   it("returns null without a site or when disabled", () => {
@@ -1743,15 +1920,20 @@ describe("agent-readability.json", () => {
     );
   });
 
-  it("advertises the agent-skills index only when skills are configured", () => {
+  it("advertises the agent-skills index when skills are configured or generated", () => {
     const manifest = buildAgentReadability(
-      makeProject([], { agents: { skills: "./skills" } })
+      makeProject([], { agents: { skillMd: false, skills: "./skills" } })
     );
     expect(manifest?.artifacts).toMatchObject({
       agentSkills: "https://example.com/.well-known/agent-skills/index.json",
     });
+    // The generated site skill publishes an index on its own.
+    expect(buildAgentReadability(makeProject([]))?.artifacts).toHaveProperty(
+      "agentSkills"
+    );
     expect(
-      buildAgentReadability(makeProject([]))?.artifacts
+      buildAgentReadability(makeProject([], { agents: { skillMd: false } }))
+        ?.artifacts
     ).not.toHaveProperty("agentSkills");
   });
 
@@ -1909,6 +2091,7 @@ describe("api reference (scalar)", () => {
         kind: "openapi",
         label: "API Reference",
         noindex: false,
+        overlays: [],
         route: "/reference",
         seoDescriptionSuffix: true,
         slug: "reference",

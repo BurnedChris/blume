@@ -174,7 +174,12 @@ describe("agents", () => {
       contentSignals: { aiInput: true, aiTrain: true, search: true },
       llmsTxt: { enabled: true, openapi: true },
       markdownComponents: {},
-      mcp: { enabled: false, route: "/mcp" },
+      mcp: {
+        clients: ["claude-code", "codex", "cursor", "vscode"],
+        enabled: false,
+        route: "/mcp",
+      },
+      skillMd: true,
       webBotAuth: { keys: [] },
       webmcp: true,
     });
@@ -229,14 +234,14 @@ describe("ai.assistant provider", () => {
       messages(
         parse({ ai: { assistant: { provider: "openai-compatible" } } })
       )[0]
-    ).toContain("`provider: openaiCompatible({ model })`");
+    ).toContain("`provider: openai({ model })`");
   });
 
   it("lists the adapters for a provider value that was never a 1.x name", () => {
     const hint =
-      'ai.assistant.provider takes an adapter from "blume/ai": gateway(), openrouter(), llmgateway(), inkeep(), or openaiCompatible().';
+      'ai.assistant.provider takes an adapter from "blume/ai": openai(), anthropic(), gemini(), grok(), gateway(), openrouter(), llmgateway(), or inkeep().';
     expect(
-      messages(parse({ ai: { assistant: { provider: "anthropic" } } }))
+      messages(parse({ ai: { assistant: { provider: "ollama" } } }))
     ).toEqual([hint]);
     expect(messages(parse({ ai: { assistant: { provider: 42 } } }))).toEqual([
       hint,
@@ -275,6 +280,20 @@ describe("ai.assistant provider", () => {
       )
     ).toEqual([
       'ai.assistant.model moved into the provider adapter: `provider: inkeep({ model })`, imported from "blume/ai".',
+    ]);
+    expect(
+      messages(
+        parse({
+          ai: {
+            assistant: {
+              provider: { ...inkeepDescriptor, kind: "anthropic" },
+              reasoning: "low",
+            },
+          },
+        })
+      )
+    ).toEqual([
+      'ai.assistant.reasoning moved into the provider adapter: `provider: anthropic({ reasoning })`, imported from "blume/ai".',
     ]);
     expect(
       messages(parse({ ai: { assistant: { apiKeyEnv: "KEY", headers: {} } } }))
@@ -375,12 +394,8 @@ describe("the 1.x reference blocks", () => {
 });
 
 describe("search.boost frontmatter", () => {
-  it("rejects the removed field with a hint", () => {
-    const result = pageMetaSchema.safeParse({ search: { boost: 2 } });
-    expect(result.success).toBe(false);
-    expect(result.error?.issues.map((issue) => issue.message)).toEqual([
-      "search.boost was removed: search never read it, so the page ranked the same without it. Delete the field.",
-    ]);
+  it("is a relevance multiplier again, not a removed field", () => {
+    expect(pageMetaSchema.parse({ search: { boost: 2 } }).search.boost).toBe(2);
   });
 
   it("keeps the other search keys", () => {

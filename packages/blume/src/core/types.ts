@@ -56,12 +56,26 @@ export interface Heading {
 
 /** A link target discovered in page content, anchored to its source line. */
 export interface PageLink {
-  /** Raw link target as written, e.g. `./foo`, `/api#auth`, `https://x.dev`. */
+  /** Raw link target as written, e.g. `./foo`, `/api#auth`, `https://x.dev`.
+   * A Markdown destination is read as the renderer reads it: without its
+   * `<…>` brackets, and with backslash escapes resolved. */
   target: string;
+  /** Length of the target's text in the source, when escapes make it differ
+   * from `target`'s (`image\(1\).png` is read as `image(1).png`). */
+  sourceLength?: number;
   /** Set when the target was written as an image embed (`![alt](target)`) —
    * only those go through the image pipeline; a plain link to the same path
    * resolves as a site route. */
   image?: boolean;
+  /** Set when the target is a lowercase `<a href>`, which ships as written:
+   * the Markdown pipeline neither resolves its relative path file-style nor
+   * mounts the base path on it, so it's checked the way a browser reads it. */
+  raw?: boolean;
+  /** The element, when the target is a media element's `src` (`img`,
+   * `source`, `video`, `audio`). It's `raw` too: the browser resolves it as
+   * written, unless it names a file beside the page, which the build
+   * publishes and points it at. */
+  src?: string;
   /** 1-based line number in the source file. */
   line: number;
   /** 1-based column of the target within the line. */
@@ -70,6 +84,38 @@ export interface PageLink {
    * page's own source — a link inside an included partial. Diagnostics point
    * here so authors fix the partial, not the page that spliced it. */
   file?: string;
+}
+
+/** A `<Component path="…">` in a page, located like a {@link PageLink}. */
+export interface ExampleUse {
+  /** The example's key as written: its path under `examples/`, sans extension. */
+  path: string;
+  /** 1-based line number in the source file. */
+  line: number;
+  /** 1-based column of the `path` value within the line. */
+  column: number;
+  /** Absolute path of the included partial it was written in, if not the page. */
+  file?: string;
+}
+
+/**
+ * A JSX element in an `.mdx` body whose props don't render as written (see
+ * `core/mdx-elements.ts`), located like a {@link PageLink}: an HTML element
+ * with a JavaScript event handler (`handler`), or a childless built-in given
+ * props it doesn't take (`prop`).
+ */
+export interface ElementUse {
+  /** 1-based column of the element's `<` within the line. */
+  column: number;
+  /** Absolute path of the included partial it was written in, if not the page. */
+  file?: string;
+  kind: "handler" | "prop";
+  /** 1-based line number in the source file. */
+  line: number;
+  /** The handler props, or the props the built-in doesn't take. */
+  props: string[];
+  /** The element's name as written (`button`, `Badge`). */
+  tag: string;
 }
 
 /**
@@ -160,6 +206,12 @@ export interface PageRecord {
    */
   fallback?: boolean;
   /**
+   * The route an earlier Blume published the page at, when it differs from
+   * `route`: a date-named file or folder (`12-05-2022`) lost its first number
+   * as an ordering prefix. The scan redirects it to `route`.
+   */
+  formerRoute?: string;
+  /**
    * True for pages from a source that publishes one language only (GitHub
    * Releases): they render without a language switcher.
    */
@@ -199,8 +251,21 @@ export interface PageRecord {
   links: PageLink[];
   /** Capitalized JSX component tags used in the body (`.mdx` only). */
   componentsUsed?: string[];
+  /** The string `path` of each `<Component>` example in the body (`.mdx` only). */
+  examplesUsed?: ExampleUse[];
+  /**
+   * Childless built-ins given props they don't take (`.mdx` only). Reported
+   * once the project's own components are known, since an override takes
+   * whatever props it declares.
+   */
+  unknownProps?: ElementUse[];
   /** Resolved "last updated" ISO date, when the feature is enabled. */
   lastModified?: string;
+  /**
+   * The git commit that added the source file, as an ISO date, when
+   * `seo.datePublished` is `"git"` and front matter carries no `date`.
+   */
+  published?: string;
   /** Absolute paths of files this page `<include>`s, transitively. Drives the
    * dev-server invalidation edge from a partial to the pages that splice it. */
   includes?: string[];
@@ -321,7 +386,7 @@ export interface Navigation {
   cta?: HeaderAction | null;
   /** Pinned links shown above the sidebar sections, unscoped by tab. */
   featured: FeaturedLink[];
-  /** Repo URL for the header link, or null when hidden (`navigation.repo`). */
+  /** Repo URL for the footer's GitHub link, or null when hidden (`navigation.repo`). */
   repoUrl?: string | null;
   /**
    * Where the header's brand link points in this locale: `logo.href` moved
@@ -429,6 +494,11 @@ export interface RouteManifestEntry {
   aiExclude?: boolean;
   /** Resolved "last updated" ISO date, when the feature is enabled. */
   lastModified?: string;
+  /**
+   * The git commit that added the source file, as an ISO date, when
+   * `seo.datePublished` is `"git"` and front matter carries no `date`.
+   */
+  published?: string;
 }
 
 /** The generated runtime contract between core and the Astro project. */

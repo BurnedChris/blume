@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 
 import GithubSlugger from "github-slugger";
+import type { YAMLException } from "js-yaml";
 import type { Nodes } from "mdast";
 import { extname } from "pathe";
 import { markdownToMdast } from "satteri";
@@ -10,10 +11,18 @@ import { mountBasePath } from "../base-path.ts";
 import { nextFenceState } from "../code-fences.ts";
 import type { FenceState } from "../code-fences.ts";
 import { diagnosticsFromIssues, diagnosticsFromZod } from "../diagnostics.ts";
-import { occupySlug, parseHeadingMarkers } from "../heading-markers.ts";
+import {
+  headingSlug,
+  joinHeadingText,
+  occupySlug,
+  parseHeadingMarkers,
+  rawHeadingTag,
+} from "../heading-markers.ts";
 import { localePlacement, localizeRoute } from "../i18n.ts";
+import { extractElementUses } from "../mdx-elements.ts";
 import { titleWord } from "../navigation.ts";
-import { stripOrderingPrefix } from "../ordering-prefix.ts";
+import { formerRouteName, stripOrderingPrefix } from "../ordering-prefix.ts";
+import { escapePinnedIds } from "../pinned-ids.ts";
 import { relatedPageLinks } from "../related.ts";
 import { pageMetaSchema } from "../schema.ts";
 import type {
@@ -22,7 +31,14 @@ import type {
   ResolvedI18nConfig,
 } from "../schema.ts";
 import { trimChar } from "../trim.ts";
-import type { Diagnostic, Heading, PageLink, PageRecord } from "../types.ts";
+import type {
+  Diagnostic,
+  ElementUse,
+  ExampleUse,
+  Heading,
+  PageLink,
+  PageRecord,
+} from "../types.ts";
 import { detectVersionRef, versionizeRoute } from "../versions.ts";
 import type { NormalizeContext, SourceEntry } from "./types.ts";
 
@@ -128,6 +144,37 @@ export const unloadablePathDiagnostic = (
     : undefined;
 
 /**
+ * The error for a content file whose front matter isn't valid YAML — most
+ * often an unquoted value holding `: `, which YAML reads as a nested mapping.
+ * Thrown out of a source's scan, it would fail every command with
+ * BLUME_INTERNAL; a source leaves the file out and reports this instead, like
+ * a page whose front matter fails the schema. js-yaml counts lines from the
+ * text after the opening `---`, which starts with the rest of that fence
+ * line, so its 0-based line is already the file's line minus one.
+ */
+export const frontmatterYamlDiagnostic = (
+  error: YAMLException,
+  file: string
+): Diagnostic => ({
+  code: "BLUME_FRONTMATTER_INVALID",
+  column: error.mark ? error.mark.column + 1 : undefined,
+  file,
+  line: error.mark ? error.mark.line + 1 : undefined,
+  message: `Front matter isn't valid YAML (${error.reason}), so the page was left out of the site.`,
+  severity: "error",
+  suggestion:
+    'Wrap the value at that line in double quotes, e.g. description: "Setup: the easy way".',
+});
+
+/**
+ * A file or folder name as its route segment spells it: without its ordering
+ * prefix, or — for the `former` route — as an earlier Blume dropped one (see
+ * {@link formerRouteName}).
+ */
+const cleanName = (part: string, former: boolean): string =>
+  (former ? formerRouteName(part) : undefined) ?? stripNumericPrefix(part);
+
+/**
  * Fold one raw path part into the accumulating route segments/groups.
  * `ordered` parts are file or folder names, whose ordering prefix is dropped.
  */
@@ -135,7 +182,8 @@ const addRouteSegment = (
   part: string,
   segments: string[],
   groups: string[],
-  ordered: boolean
+  ordered: boolean,
+  former: boolean
 ): void => {
   // A leading/trailing/double slash yields an empty part; keeping it would
   // produce a malformed route (`//foo`, `/foo/`) that nothing can link to.
@@ -147,7 +195,7 @@ const addRouteSegment = (
     groups.push(group);
     return;
   }
-  const clean = ordered ? stripNumericPrefix(part) : part;
+  const clean = ordered ? cleanName(part, former) : part;
   if (clean === "index") {
     return;
   }
@@ -172,12 +220,14 @@ interface MappedRoute {
  * `ordered` says they are file and folder names: the route prefix, a slug,
  * a release tag, or a CMS slug is a route spelled out, kept as written. Not
  * exported: a source that needs to predict a route goes through
- * {@link resolveEntryRoute}, so there is exactly one derivation.
+ * {@link resolveEntryRoute}, so there is exactly one derivation. `former`
+ * maps the route an earlier Blume gave the path instead.
  */
 const mapRoute = (
   prefix: string | undefined,
   relativePath: string,
-  ordered: boolean
+  ordered: boolean,
+  former = false
 ): MappedRoute => {
   const withoutExt = relativePath.slice(
     0,
@@ -188,10 +238,10 @@ const mapRoute = (
   const groups: string[] = [];
 
   for (const part of prefix ? prefix.split("/") : []) {
-    addRouteSegment(part, segments, groups, false);
+    addRouteSegment(part, segments, groups, false, false);
   }
   for (const part of withoutExt.split("/")) {
-    addRouteSegment(part, segments, groups, ordered);
+    addRouteSegment(part, segments, groups, ordered, former);
   }
 
   const route = segments.length === 0 ? "/" : `/${segments.join("/")}`;
@@ -235,9 +285,64 @@ const PROMPT_CLOSE = /<\/Prompt>/u;
 // the same marker — and the only spelling that survives the MDX parser, where
 // a bare `{…}` is a JSX expression and `#id` is not a valid one (`Could not
 // parse expression with acorn`). Further bracket markers may follow the brace
-// (`{#id} [toc]`), nothing else.
+// (`{#id} [toc]`), nothing else. The spaced `{ #id }` and kramdown's
+// `{: #id }` (MkDocs `attr_list` writes both) fail the compile the same way,
+// so they match too, though neither is an anchor in `.md`.
 const BARE_CURLY_MARKER =
-  /(?<!\\)\{#(?<id>[^\s}]+)\}(?:\s*\[(?:#[^\s\]]+|!?toc)\])*\s*$/u;
+  /(?<!\\)(?<marker>\{:?\s*#(?<id>[^\s}]+)\s*\})(?:\s*\[(?:#[^\s\]]+|!?toc)\])*\s*$/u;
+
+// One attribute in a brace-wrapped attribute list (MkDocs' `attr_list`,
+// kramdown's IAL): `#id`, `.class`, or `key=value`, quoted or not.
+export const ATTRIBUTE = String.raw`(?:#[\w-]+|\.[A-Za-z_-][\w-]*|[\w-]+=(?:"[^"\n]*"|'[^'\n]*'|[^\s"'{}]+))`;
+const ATTRIBUTES = new RegExp(ATTRIBUTE, "gu");
+
+// A heading's trailing attribute list of more than one attribute, in the
+// place `BARE_CURLY_MARKER` reads (`## Setup { #setup .wide }`, `{: .wide
+// #setup }`). Neither format reads it: it stays in an `.md` heading's text,
+// and `.mdx` reads it as a JSX expression. One that sets an id is reported
+// with the `{#id}` markers, since pinning that id is what it was for.
+const HEADING_ATTRIBUTE_LIST = new RegExp(
+  String.raw`(?<!\\)(?<marker>\{:?[\t ]*${ATTRIBUTE}(?:[\t ]+${ATTRIBUTE})+[\t ]*\})(?:\s*\[(?:#[^\s\]]+|!?toc)\])*\s*$`,
+  "u"
+);
+
+/** A heading's trailing `{#id}` marker, where its text holds one. */
+export interface TrailingCurlyMarker {
+  /** Whether the braces also set classes or attributes (`{ #id .wide }`). */
+  attributes: boolean;
+  id: string;
+  /** Where the marker starts in the text. */
+  index: number;
+  /** The braces as written. */
+  marker: string;
+}
+
+/**
+ * The `{#id}` marker a heading's text ends with: one of the spellings
+ * `BARE_CURLY_MARKER` matches, or an attribute list that sets an id among
+ * other attributes (see `HEADING_ATTRIBUTE_LIST`).
+ */
+export const trailingCurlyMarker = (
+  text: string
+): TrailingCurlyMarker | undefined => {
+  const bare = BARE_CURLY_MARKER.exec(text);
+  if (bare?.groups?.id !== undefined && bare.groups.marker !== undefined) {
+    return {
+      attributes: false,
+      id: bare.groups.id,
+      index: bare.index,
+      marker: bare.groups.marker,
+    };
+  }
+  const list = HEADING_ATTRIBUTE_LIST.exec(text);
+  const marker = list?.groups?.marker ?? "";
+  const id = [...marker.matchAll(ATTRIBUTES)]
+    .find(([attribute]) => attribute.startsWith("#"))?.[0]
+    .slice(1);
+  return list && id !== undefined
+    ? { attributes: true, id, index: list.index, marker }
+    : undefined;
+};
 
 // A raw HTML element carrying an `id` — `<a id="…">`, `<section id='…'>`,
 // the unquoted `<a id=plain>`, or the JSX spelling `<div id={"…"}>` — whose
@@ -246,19 +351,35 @@ const BARE_CURLY_MARKER =
 // `JSX_OPEN` split below). `[^<>]` bounds the attribute run, so a wrapped tag
 // (`<div\n  id="x"\n>`) still matches while a long tag-free line can't
 // backtrack quadratically, and the run never reaches into a neighboring tag.
+//
+// `HTML_ID`, `ELEMENT_HREF`, `COMPONENT_PATH`, and `JSX_OPEN` open with the
+// lookbehind `(?<=(?:^|[^\\])(?:\\\\)*)`: a `<` opens a tag only after an even
+// run of backslashes (none, or `\\` pairs, each an escaped backslash). An odd
+// run escapes the `<` itself, so `\<a id="x">` and `Promise\<App>` render as
+// text in `.md` and `.mdx` alike.
 const HTML_ID =
-  /<[a-z][a-z0-9-]*(?:\s[^<>]*?)?\sid=(?:(?<quote>["'])(?<quoted>[^"'<>]+)\k<quote>|\{(?<jsxQuote>["'])(?<jsx>[^"'<>]+)\k<jsxQuote>\}|(?<bare>[^\s"'=<>`{}]+))/gu;
+  /(?<=(?:^|[^\\])(?:\\\\)*)<[a-z][a-z0-9-]*(?:\s[^<>]*?)?\sid=(?:(?<quote>["'])(?<quoted>[^"'<>]+)\k<quote>|\{(?<jsxQuote>["'])(?<jsx>[^"'<>]+)\k<jsxQuote>\}|(?<bare>[^\s"'=<>`{}]+))/gu;
+// An `<a name="…">`, read like `HTML_ID`: a browser scrolls a fragment to an
+// `a` element whose `name` matches it (the HTML spec's indicated part of the
+// document), so it's an anchor target too. On any other element, `name` is
+// no target.
+const HTML_A_NAME =
+  /(?<=(?:^|[^\\])(?:\\\\)*)<a(?:\s[^<>]*?)?\sname=(?:(?<quote>["'])(?<quoted>[^"'<>]+)\k<quote>|\{(?<jsxQuote>["'])(?<jsx>[^"'<>]+)\k<jsxQuote>\}|(?<bare>[^\s"'=<>`{}]+))/gu;
 // Commented-out markup renders nothing; matched across lines once the
 // scannable lines are joined back together. Shared with the search
 // extractor so both agree on what a comment is.
 export const HTML_COMMENT = /<!--[\s\S]*?-->/gu;
 export const INLINE_CODE = /`[^`]*`/gu;
 
-/** A heading whose trailing `{#id}` marker is unescaped — see `BARE_CURLY_MARKER`. */
+/** A heading whose trailing `{#id}` marker is unescaped — see `trailingCurlyMarker`. */
 export interface CurlyMarker {
+  /** Whether the braces also set classes or attributes (`{ #id .wide }`). */
+  attributes: boolean;
   id: string;
   /** 1-based line of the heading (a setext heading's first text line) in the body. */
   line: number;
+  /** The braces as written (`{#id}`, `{ #id }`, `{: #id }`). */
+  marker: string;
 }
 
 /** Scanner state: the open fence plus the paragraph lines accumulated so far. */
@@ -369,6 +490,10 @@ const SMART_PUNCTUATION = /['"]|--|\.\.\./u;
 const REF_DEFINITION =
   /^(?: {0,3}|[ \t]*(?:(?:>|(?:[-*+]|\d{1,9}[.)])[ \t])[ \t]*)+)\[(?<label>[^\]]+)\]:[ \t]*(?<rest>.*)$/u;
 
+/** A link label as CommonMark matches it: case-folded, whitespace collapsed. */
+const labelKey = (label: string): string =>
+  label.trim().replaceAll(/\s+/gu, " ").toLowerCase();
+
 /**
  * The normalized labels of every link-reference definition in the body
  * (outside fenced code), footnote definitions (`^1`) included. A heading
@@ -403,7 +528,7 @@ const refDefinitionLabels = (lines: readonly string[]): Set<string> => {
     if (destination === "" && (lines[index + 1] ?? "").trim() === "") {
       continue;
     }
-    labels.add(groups.label.trim().replaceAll(/\s+/gu, " ").toLowerCase());
+    labels.add(labelKey(groups.label));
   }
   return labels;
 };
@@ -500,9 +625,72 @@ const inlineText = (nodes: readonly Nodes[], context: HeadingContext): string =>
     })
     .join("");
 
+/** A heading's text, with what its own empty anchor pins. */
+interface HeadingContent {
+  /** The `id` (else `name`) of an empty `<a>` in the heading. */
+  target?: string;
+  text: string;
+}
+
+/** True for a raw `</a>`. */
+const isAnchorClose = (node: Nodes | undefined): boolean =>
+  node?.type === "html" && rawHeadingTag(node.value).kind === "anchor-close";
+
+/**
+ * A heading's text and own anchor, read the way `markdown/heading-anchors`
+ * reads them: an empty `<a>` (`<a id="x"></a>`, `<a name="x" />`) is the
+ * heading's own anchor, whose `id` (else `name`) pins the heading's id unless
+ * it is all the heading holds, and a `<Badge>`'s text is no part of the
+ * heading's text. In `.mdx` both are JSX, which this `.md` parse reads as the
+ * raw tags around their content, as the renderer does for `.md`.
+ */
+const headingContent = (
+  children: readonly Nodes[],
+  context: HeadingContext
+): HeadingContent => {
+  const pieces: (string | null)[] = [];
+  let target: string | undefined;
+  let kept = 0;
+  let badges = false;
+  let badgeDepth = 0;
+  let closesAnchor = false;
+  for (const [index, child] of children.entries()) {
+    if (closesAnchor) {
+      closesAnchor = false;
+      continue;
+    }
+    const tag = child.type === "html" ? rawHeadingTag(child.value) : null;
+    if (
+      tag?.kind === "anchor-open" &&
+      (tag.selfClosing || isAnchorClose(children[index + 1]))
+    ) {
+      target ??= tag.target;
+      closesAnchor = !tag.selfClosing;
+      continue;
+    }
+    kept += 1;
+    if (tag?.kind === "badge") {
+      badges = true;
+      pieces.push(null);
+      if (!tag.selfClosing) {
+        badgeDepth = Math.max(0, badgeDepth + (tag.closing ? -1 : 1));
+      }
+    } else if (badgeDepth === 0) {
+      pieces.push(inlineText([child], context));
+    }
+  }
+  return {
+    target: kept === 0 ? undefined : target,
+    text: badges ? joinHeadingText(pieces) : pieces.join(""),
+  };
+};
+
 /** A heading's rendered text plus the trailing markers the renderer strips. */
 interface RenderedHeading {
-  /** Author-pinned anchor id from `[#id]`/`{#id}`, used verbatim. */
+  /**
+   * Author-pinned anchor id from `[#id]`/`{#id}`, else from the heading's own
+   * empty `<a>`, used verbatim.
+   */
   id?: string;
   /** The text content the renderer slugs, markers stripped, untrimmed. */
   text: string;
@@ -526,7 +714,8 @@ const plainHeading = (raw: string): RenderedHeading => {
  * text remains. Parsing (rather than regex-stripping) resolves escapes —
  * `\[toc]` still reaches the marker parse as `[toc]` — and emphasis the way
  * CommonMark does, so `snake_case` stays whole while `_note_` loses its
- * underscores.
+ * underscores. A pinned id's punctuation is escaped first, as the renderer
+ * escapes it, so smart punctuation leaves `[#a--b]` as written.
  */
 const renderHeading = (
   raw: string,
@@ -539,7 +728,10 @@ const renderHeading = (
   }
   const source = form === "atx" ? `# ${raw}` : `${raw}\n=`;
   const tree = markdownToMdast(
-    `${source}${definitionsFor(raw, context.labels)}`,
+    escapePinnedIds(
+      `${source}${definitionsFor(raw, context.labels)}`,
+      "markdown"
+    ),
     parse
   );
   const heading = "children" in tree ? tree.children.at(0) : undefined;
@@ -550,18 +742,18 @@ const renderHeading = (
     return plainHeading(raw);
   }
   const { children } = heading;
-  const text = inlineText(children, context);
+  const { target, text } = headingContent(children, context);
   const last = children.at(-1);
   if (last?.type !== "text") {
-    return { text };
+    return { id: target, text };
   }
   const markers = parseHeadingMarkers(last.value);
   const stripped = last.value.length - markers.text.length;
   if (stripped === 0 || (markers.text === "" && children.length === 1)) {
-    return { text };
+    return { id: target, text };
   }
   return {
-    id: markers.id,
+    id: markers.id ?? target,
     text: text.slice(0, text.length - stripped),
     toc: markers.toc,
   };
@@ -606,7 +798,7 @@ const toHeading = (
     return { heading: { depth, slug: rendered.id, text }, pinned: true };
   }
   return {
-    heading: { depth, slug: slugger.slug(rendered.text), text },
+    heading: { depth, slug: headingSlug(slugger, rendered.text), text },
     pinned: false,
   };
 };
@@ -628,9 +820,10 @@ const noteCurlyMarker = (
   line: number,
   state: HeadingScanState
 ): void => {
-  const id = text.match(BARE_CURLY_MARKER)?.groups?.id;
-  if (id !== undefined) {
-    state.curlyMarkers.push({ id, line });
+  const found = trailingCurlyMarker(text);
+  if (found) {
+    const { attributes, id, marker } = found;
+    state.curlyMarkers.push({ attributes, id, line, marker });
   }
 };
 
@@ -798,10 +991,10 @@ export interface HeadingSite {
 /** Everything one walk over a body yields for the anchor index. */
 export interface BodyScan {
   /**
-   * Raw HTML element ids (`<a id="…">`) outside headings, fences, inline
-   * code, comments, and `<Prompt>` regions — fragment-link targets that
-   * `blume validate` accepts alongside heading slugs. Deduplicated, in
-   * document order.
+   * Raw HTML element ids (`<a id="…">`) and `<a name="…">` names outside
+   * headings, fences, inline code, comments, and `<Prompt>` regions —
+   * fragment-link targets that `blume validate` accepts alongside heading
+   * slugs. Deduplicated, in document order.
    */
   anchors: string[];
   /** Headings whose trailing `{#id}` marker is unescaped, for `.mdx` pages. */
@@ -854,7 +1047,10 @@ export const scanBody = (body: string): BodyScan => {
   // can splice its neighbors into a new `<!--` (`<!-<!-- x -->->`), and a
   // space keeps a tag from fusing with an `id=` that only a comment separated.
   const markup = state.anchorLines.join("\n").replaceAll(HTML_COMMENT, " ");
-  for (const match of markup.matchAll(HTML_ID)) {
+  for (const match of [
+    ...markup.matchAll(HTML_ID),
+    ...markup.matchAll(HTML_A_NAME),
+  ].toSorted((a, b) => a.index - b.index)) {
     const id = match.groups?.quoted ?? match.groups?.jsx ?? match.groups?.bare;
     if (id !== undefined) {
       anchors.add(id);
@@ -871,104 +1067,357 @@ export const scanBody = (body: string): BodyScan => {
 export const extractHeadings = (body: string): Heading[] =>
   scanBody(body).headings;
 
+// A backslash escape: before ASCII punctuation, a backslash makes the
+// character literal (CommonMark), and the renderer drops it.
+const ESCAPED = /\\(?<char>[!-/:-@[-`{-~])/gu;
+// One character of a bare link destination: an escape (`\(` is a literal
+// parenthesis, opening no group), a backslash that escapes nothing, or any
+// other character but a parenthesis or whitespace. The alternatives never
+// overlap, so a long run can't backtrack.
+const DESTINATION_CHAR = String.raw`\\[!-/:-@[-\x60{-~]|\\(?![!-/:-@[-\x60{-~])|[^()\s\\]`;
+// A link destination as written (CommonMark): `<…>`, which may hold spaces
+// and unbalanced parentheses (Prettier writes this form for a URL with
+// either), or a run that doesn't start with `<` and admits one level of
+// balanced parens, so a Wikipedia-style URL (`/wiki/Foo_(bar)`) isn't
+// truncated at its first `)`. {@link destinationLink} reads it.
+const DESTINATION = String.raw`<(?:\\[!-/:-@[-\x60{-~]|\\(?![!-/:-@[-\x60{-~])|[^<>\n\\])*>|(?!<)(?:${DESTINATION_CHAR}|\((?:${DESTINATION_CHAR})*\))+`;
+// A bare destination on its own, for telling whether a target can be written
+// back without angle brackets (see `writeDestination`).
+const BARE_DESTINATION = new RegExp(
+  String.raw`^(?!<)(?:${DESTINATION_CHAR}|\((?:${DESTINATION_CHAR})*\))+$`,
+  "u"
+);
+// A link title (CommonMark): `"…"`, `'…'`, or `(…)`, each holding backslash
+// escapes. Every alternative starts with its own delimiter, so they never
+// overlap.
+const TITLE = String.raw`"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'|\((?:[^()\\]|\\[\s\S])*\)`;
+// What follows a link's `[label]`: the destination, an optional title, and
+// the spaces CommonMark allows around both, in parentheses. The destination
+// holds no whitespace and the title starts with a delimiter, so each space
+// run has one home.
+const DESTINATION_TAIL = String.raw`\([ \t]*(?<target>${DESTINATION})(?:[ \t]+(?<title>${TITLE}))?[ \t]*\)`;
+
 // The label admits one level of nested brackets so an image-wrapped link
 // (`[![alt](/img.png)](/target)`) matches as the *outer* link — with a flat
 // `[^\]]*` label the match stopped at the image's `]` and the outer target was
-// never seen. The target admits one level of balanced parens so a Wikipedia-
-// style URL (`/wiki/Foo_(bar)`) isn't truncated at its first `)`.
-const MD_LINK =
-  /\[(?<label>(?:[^[\]]|\[[^\]]*\])*)\]\((?<target>(?:[^()\s]|\([^()\s]*\))+)(?<title>\s+"[^"]*")?\)/gu;
+// never seen. The target is the destination as written (see `DESTINATION`).
+// Matches carry indices (`d`), which locate the target past any spaces.
+const MD_LINK = new RegExp(
+  String.raw`\[(?<label>(?:[^[\]]|\[[^\]]*\])*)\]${DESTINATION_TAIL}`,
+  "dgu"
+);
 // An image inside a link label; its target was matched (and so validated) as a
 // link of its own before labels admitted nesting, and still should be.
-export const MD_IMAGE =
-  /!\[[^\]]*\]\((?<target>(?:[^()\s]|\([^()\s]*\))+)(?<title>\s+"[^"]*")?\)/gu;
+const LABEL_IMAGE = new RegExp(
+  String.raw`!\[[^\]]*\]${DESTINATION_TAIL}`,
+  "dgu"
+);
+// An image embed, the way the include and content-asset rewriters move one:
+// every destination form (`<…>`, escapes, a title in any of its quotes),
+// read and written back by `rewriteImageTargets`.
+const MD_IMAGE = new RegExp(
+  String.raw`!\[(?:[^[\]]|\[[^\]]*\])*\]${DESTINATION_TAIL}`,
+  "dgu"
+);
 
-/** Column (0-based, within `matched`) where a link/image match's target starts. */
-export const targetOffsetIn = (
-  matched: string,
-  target: string,
-  title: string | undefined
-): number => matched.length - 1 - (title?.length ?? 0) - target.length;
+/** Where a match's `target` group starts, as an offset into the matched text. */
+const targetStart = (match: RegExpExecArray | RegExpMatchArray): number =>
+  (match.indices?.groups?.target?.[0] ?? match.index ?? 0) - (match.index ?? 0);
+
+/** A destination as written, and the target the renderer reads from it. */
+interface ReadDestination {
+  /** Whether it was written in `<…>`. */
+  angled: boolean;
+  /** The text the target is read from: inside any brackets. */
+  source: string;
+  target: string;
+}
 
 /**
- * Extract link targets from a markdown body for later validation, recording the
- * 1-based line/column of each target. Skips fenced code blocks and inline code.
- * `lineOffset` shifts every recorded line: the body is frontmatter-stripped, so
- * diagnostics that point into the raw file must add the stripped block's height.
+ * A destination as written, read the way the renderer reads it: angle
+ * brackets dropped and backslash escapes resolved, so `<https://x.dev/a(b>`
+ * is `https://x.dev/a(b` and `image%20\(1\).png` is `image%20(1).png`.
  */
-/** Scan one line for link targets; returns the next fenced-block state. */
-const scanLinkLine = (
-  line: string,
-  lineNumber: number,
-  fence: FenceState,
-  links: PageLink[]
-): FenceState => {
-  const next = nextFenceState(line, fence);
-  // Skip fence delimiter lines themselves and anything inside a fence.
-  if (fence !== null || next !== null) {
-    return next;
-  }
-  // Blank out inline code spans (`[label](/x)` shown as syntax, not a link)
-  // with same-length padding so recorded columns stay accurate.
-  const masked = line.replaceAll(INLINE_CODE, (span) =>
-    " ".repeat(span.length)
-  );
-  for (const match of masked.matchAll(MD_LINK)) {
-    const target = match.groups?.target;
-    if (target === undefined || match.index === undefined) {
-      continue;
-    }
-    // Locate the target by arithmetic from the match end rather than searching
-    // for its text — a label that contains the same text (e.g. `[/a/b](/a/b)`)
-    // would otherwise report the column inside the label.
-    const targetOffset = targetOffsetIn(match[0], target, match.groups?.title);
-    const entry: PageLink = {
-      column: match.index + targetOffset + 1,
-      line: lineNumber,
-      target,
-    };
-    // `MD_LINK` matches the `[label](target)` tail of an image embed too; the
-    // preceding `!` is what marks the target as going through the image
-    // pipeline rather than resolving as a site route.
-    if (masked[match.index - 1] === "!") {
-      entry.image = true;
-    }
-    links.push(entry);
-    // An image nested in the label (`[![alt](/img.png)](/target)`) carries its
-    // own target; surface it too so a missing image is still caught.
-    const label = match[0].slice(0, targetOffset - "](".length);
-    for (const image of label.matchAll(MD_IMAGE)) {
-      const imageTarget = image.groups?.target;
-      if (imageTarget === undefined || image.index === undefined) {
-        continue;
-      }
-      links.push({
-        column:
-          match.index +
-          image.index +
-          targetOffsetIn(image[0], imageTarget, image.groups?.title) +
-          1,
-        image: true,
-        line: lineNumber,
-        target: imageTarget,
-      });
-    }
-  }
-  return next;
+const readDestination = (written: string): ReadDestination => {
+  const angled = written.startsWith("<");
+  const source = angled ? written.slice(1, -1) : written;
+  return { angled, source, target: source.replaceAll(ESCAPED, "$<char>") };
 };
 
 /**
- * A component's string `href` (`<Card href="./install" />`): the attribute
- * may sit on a later line than the tag name, where a formatter wraps a long
- * element, so the gap between them spans lines. An expression-valued
- * `href={…}` isn't a literal target, and a lowercase tag is raw HTML in a
- * `.md` page, so neither is matched.
+ * Write `target` back as a destination: as it stands where the bare form
+ * reads it unchanged, else with its parentheses and backslashes escaped, and
+ * in angle brackets where it was written in them or holds whitespace, which
+ * no bare destination can.
  */
-const COMPONENT_HREF =
-  /<[A-Z][\w.]*(?=[\s/>])[^<>]*?\shref=(?:"(?<double>[^"]*)"|'(?<single>[^']*)')/gu;
+const writeDestination = (target: string, angled: boolean): string => {
+  if (!angled && BARE_DESTINATION.test(target) && !target.includes("\\")) {
+    return target;
+  }
+  if (!(angled || /[\s<>]/u.test(target))) {
+    return target.replaceAll(/[\\()]/gu, String.raw`\$&`);
+  }
+  return `<${target.replaceAll(/[\\<>]/gu, String.raw`\$&`)}>`;
+};
 
-/** The body with fenced blocks and inline code blanked, shape preserved. */
-const maskCode = (lines: readonly string[]): string => {
+/**
+ * Rewrite the target of every image embed on one line with `rewrite`, which
+ * gets the target as the renderer reads it (see `readDestination`) and
+ * returns the new one, or `null` to leave it as written. Inline code is
+ * skipped: matches run on a copy with code spans blanked, and replacements
+ * splice into the real line by index, which the same-length mask keeps in
+ * step. A rewritten target is written back in the form its destination took.
+ */
+export const rewriteImageTargets = (
+  line: string,
+  rewrite: (target: string) => string | null
+): string => {
+  const masked = line.replaceAll(INLINE_CODE, (span) =>
+    " ".repeat(span.length)
+  );
+  let out = "";
+  let cursor = 0;
+  for (const match of masked.matchAll(MD_IMAGE)) {
+    const written = match.groups?.target ?? "";
+    const { angled, target } = readDestination(written);
+    const next = rewrite(target);
+    if (next === null) {
+      continue;
+    }
+    const at = match.index + targetStart(match);
+    out += line.slice(cursor, at) + writeDestination(next, angled);
+    cursor = at + written.length;
+  }
+  return out + line.slice(cursor);
+};
+
+/**
+ * The link a destination written at `at` (the 1-based position of its first
+ * character) leads to, as the renderer reads it (see `readDestination`). It's
+ * located where the target's text starts, inside any brackets. An empty `<>`
+ * leads nowhere.
+ */
+const destinationLink = (
+  written: string,
+  at: Pick<PageLink, "column" | "line">
+): PageLink | undefined => {
+  const { angled, source, target } = readDestination(written);
+  if (target === "") {
+    return undefined;
+  }
+  const link: PageLink = {
+    column: at.column + (angled ? 1 : 0),
+    line: at.line,
+    target,
+  };
+  if (source.length !== target.length) {
+    link.sourceLength = source.length;
+  }
+  return link;
+};
+
+// A link-reference definition's destination, at the start of what follows its
+// `[label]:` (see `REF_DEFINITION`), and only when whitespace or the end of
+// the line follows it: `[1]: <src/x.ts` has an unclosed `<…>`, so it defines
+// nothing (CommonMark).
+const DEFINITION_DESTINATION = new RegExp(
+  String.raw`^(?:${DESTINATION})(?=\s|$)`,
+  "u"
+);
+// A whole definition on its line: the destination, then at most a title.
+// Anything else after it makes the line paragraph text (CommonMark).
+const DEFINITION_LINE = new RegExp(
+  String.raw`^(?:${DESTINATION})(?:[ \t]+(?:${TITLE}))?[ \t]*$`,
+  "u"
+);
+
+// A CommonMark autolink (`<https://example.com>`). Only http(s) targets are
+// ever checked, so no other scheme is read. MDX rejects the syntax, so in
+// practice it's a `.md` page's. A link's `<…>` destination
+// (`[x](<https://…>)`) is no autolink.
+const AUTOLINK = /(?<!\]\()<(?<target>https?:\/\/[^\s<>]*)>/giu;
+
+/**
+ * Record the destination of a link-reference definition on `line`: a
+ * reference link (`[text][label]`, `[label]`) renders with it, so it's the
+ * target to check, once for every link that cites it. Only the first
+ * definition of a label counts (CommonMark), so a later one is skipped:
+ * `defined` holds the labels defined so far. A footnote definition (`[^1]: …`)
+ * is no link; the links inside it are read like any others. Returns whether
+ * the line is a definition.
+ */
+const scanDefinition = (
+  line: string,
+  lineNumber: number,
+  links: PageLink[],
+  defined: Set<string>
+): boolean => {
+  const groups = line.match(REF_DEFINITION)?.groups;
+  if (groups?.label === undefined || groups.label.startsWith("^")) {
+    return false;
+  }
+  const rest = groups.rest ?? "";
+  const written = rest.match(DEFINITION_DESTINATION)?.[0];
+  const key = labelKey(groups.label);
+  if (written === undefined || key === "") {
+    return false;
+  }
+  if (!defined.has(key)) {
+    defined.add(key);
+    // `rest` runs to the end of the line, so the destination starts where it
+    // does.
+    const link = destinationLink(written, {
+      column: line.length - rest.length + 1,
+      line: lineNumber,
+    });
+    if (link) {
+      links.push(link);
+    }
+  }
+  return true;
+};
+
+/**
+ * Scan one line for link targets. The line comes masked (see `maskCode`):
+ * code and comments are blanked with same-length padding, so recorded
+ * columns stay accurate.
+ */
+const scanLinkLine = (
+  masked: string,
+  lineNumber: number,
+  links: PageLink[],
+  defined: Set<string>
+): void => {
+  for (const match of masked.matchAll(MD_LINK)) {
+    const written = match.groups?.target;
+    if (written === undefined || match.index === undefined) {
+      continue;
+    }
+    // Locate the target by its group's index rather than searching for its
+    // text — a label that contains the same text (e.g. `[/a/b](/a/b)`) would
+    // otherwise report the column inside the label.
+    const entry = destinationLink(written, {
+      column: match.index + targetStart(match) + 1,
+      line: lineNumber,
+    });
+    if (entry) {
+      // `MD_LINK` matches the `[label](target)` tail of an image embed too;
+      // the preceding `!` is what marks the target as going through the
+      // image pipeline rather than resolving as a site route.
+      if (masked[match.index - 1] === "!") {
+        entry.image = true;
+      }
+      links.push(entry);
+    }
+    // An image nested in the label (`[![alt](/img.png)](/target)`) carries its
+    // own target; surface it too so a missing image is still caught.
+    const label = `[${match.groups?.label ?? ""}`;
+    for (const image of label.matchAll(LABEL_IMAGE)) {
+      const imageWritten = image.groups?.target;
+      if (imageWritten === undefined || image.index === undefined) {
+        continue;
+      }
+      const imageLink = destinationLink(imageWritten, {
+        column: match.index + image.index + targetStart(image) + 1,
+        line: lineNumber,
+      });
+      if (imageLink) {
+        links.push({ ...imageLink, image: true });
+      }
+    }
+  }
+  // A definition's `<…>` destination is no autolink either.
+  if (scanDefinition(masked, lineNumber, links, defined)) {
+    return;
+  }
+  for (const match of masked.matchAll(AUTOLINK)) {
+    const target = match.groups?.target ?? "";
+    links.push({ column: match.index + 2, line: lineNumber, target });
+  }
+};
+
+/**
+ * A component's string `href` (`<Card href="./install" />`), or a lowercase
+ * `<a href>`: the attribute may sit on a later line than the tag name, where
+ * a formatter wraps a long element, so the gap between them spans lines. An
+ * expression-valued `href={…}` isn't a literal target, so it isn't matched,
+ * and no other lowercase tag is a link. An escaped `\<a href>` is text, not a
+ * link (see `HTML_ID`).
+ */
+const ELEMENT_HREF =
+  /(?<=(?:^|[^\\])(?:\\\\)*)<(?:[A-Z][\w.]*|(?<anchor>a))(?=[\s/>])[^<>]*?\shref=(?:"(?<double>[^"]*)"|'(?<single>[^']*)')/gu;
+
+/**
+ * A media element's string `src` (`<img src="./diagram.png">`, `<source>`,
+ * `<video>`, `<audio>`): raw HTML in a `.md` page, a plain element in an
+ * `.mdx` one, with the attribute on the tag's line or a later one. An
+ * expression-valued `src={…}` isn't a literal path, so it isn't matched, and
+ * an escaped `\<img src>` is text (see `HTML_ID`).
+ */
+const ELEMENT_SRC =
+  /(?<=(?:^|[^\\])(?:\\\\)*)<(?<tag>img|source|video|audio)(?=[\s/>])[^<>]*?\ssrc=(?:"(?<double>[^"]*)"|'(?<single>[^']*)')/gu;
+
+/**
+ * A `<Card>`'s string `img` (`<Card img="./cover.png">`), read the way
+ * `ELEMENT_HREF` reads an `href`. It's an image embed: resolved from beside
+ * the page source and published like `![](./cover.png)` (see
+ * {@link rewriteCardImages}).
+ */
+const CARD_IMG =
+  /(?<=(?:^|[^\\])(?:\\\\)*)<Card(?=[\s/>])[^<>]*?\simg=(?:"(?<double>[^"]*)"|'(?<single>[^']*)')/gu;
+
+/**
+ * Any element's string `href` or `src` (the first a tag carries), read the
+ * way `ELEMENT_HREF` and `ELEMENT_SRC` read theirs: wrapped onto later lines
+ * or not, an expression value unmatched, an escaped `\<tag>` text.
+ */
+const ELEMENT_URL =
+  /(?<=(?:^|[^\\])(?:\\\\)*)<(?<tag>[A-Za-z][\w.:-]*)(?=[\s/>])[^<>]*?\s(?<attribute>href|src)=(?:"(?<double>[^"]*)"|'(?<single>[^']*)')/gu;
+
+/** A string `href` or `src` on an element, as {@link rewriteElementUrls} reads it. */
+export interface ElementUrl {
+  attribute: string;
+  /** The element's name as written: `img`, `a`, `Card`. */
+  tag: string;
+  value: string;
+}
+
+const MEDIA_TAGS = new Set(["audio", "img", "source", "video"]);
+
+/**
+ * Whether an element URL is one `blume validate` reads as a link (see
+ * `ELEMENT_HREF` and `ELEMENT_SRC`): a media element's `src`, or an `<a>`'s or
+ * a component's `href`. Only these name a file the build publishes from
+ * beside the page.
+ */
+export const isLinkElementUrl = (url: ElementUrl): boolean =>
+  url.attribute === "src"
+    ? MEDIA_TAGS.has(url.tag)
+    : url.attribute === "href" && (url.tag === "a" || /^[A-Z]/u.test(url.tag));
+
+/**
+ * An inline link whose label wraps onto later lines of its paragraph
+ * (`[a long⏎label](/x)`), as a formatter leaves one: the line scan can't see
+ * it. The label holds a line break but no blank line (which would end the
+ * paragraph) and no brackets, so a match never repeats a one-line link.
+ */
+const WRAPPED_LINK = new RegExp(
+  String.raw`\[[^[\]\n]*(?:\n(?![ \t]*(?:\n|$))[^[\]\n]*)+\]${DESTINATION_TAIL}`,
+  "dgu"
+);
+
+// An MDX comment (`{/* … */}`): JavaScript, so nothing in it renders.
+const JSX_COMMENT = /\{\s*\/\*[\s\S]*?\*\/\s*\}/gu;
+
+// What each format reads as a comment. `.md` renders a `{/* … */}` as text,
+// links and all, and MDX rejects `<!-- … -->` outright.
+const COMMENTS = { md: HTML_COMMENT, mdx: JSX_COMMENT } as const;
+
+/**
+ * The body with fenced blocks and inline code blanked, shape preserved — and,
+ * given the page's format, its comments too.
+ */
+const maskCode = (lines: readonly string[], format?: "md" | "mdx"): string => {
   let fence: FenceState = null;
   const masked = lines.map((line) => {
     const next = nextFenceState(line, fence);
@@ -978,45 +1427,381 @@ const maskCode = (lines: readonly string[]): string => {
       ? " ".repeat(line.length)
       : line.replaceAll(INLINE_CODE, (span) => " ".repeat(span.length));
   });
-  return masked.join("\n");
+  const text = masked.join("\n");
+  return format === undefined
+    ? text
+    : text.replaceAll(COMMENTS[format], (comment) =>
+        comment.replaceAll(/[^\n]/gu, " ")
+      );
 };
 
-/** Every component `href` target in `body`, with its 1-based position. */
-const componentHrefs = (
+/** The offset each of `lines` starts at once they're joined with `\n`. */
+const lineStartsOf = (lines: readonly string[]): number[] => {
+  const starts: number[] = [];
+  let at = 0;
+  for (const line of lines) {
+    starts.push(at);
+    at += line.length + 1;
+  }
+  return starts;
+};
+
+/**
+ * The 1-based position of offset `at` in the joined text whose `lineStarts`
+ * are given, lines shifted by `lineOffset`. A binary search, so a page with
+ * many links isn't rescanned from the top for each one.
+ */
+const positionIn = (
+  lineStarts: readonly number[],
+  at: number,
+  lineOffset: number
+): Pick<PageLink, "column" | "line"> => {
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if ((lineStarts[mid] ?? 0) <= at) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return {
+    column: at - (lineStarts[low] ?? 0) + 1,
+    line: lineOffset + low + 1,
+  };
+};
+
+/**
+ * Every media element's string `src` in the masked `text` (see
+ * `ELEMENT_SRC`), with its 1-based position. Like a raw `<a href>`, the
+ * browser resolves it as written, unless it names a file beside the page,
+ * which the build publishes and points it at (see `core/content-assets.ts`).
+ */
+const mediaSourceLinks = (
+  text: string,
+  lineStarts: readonly number[],
+  lineOffset: number
+): PageLink[] =>
+  [...text.matchAll(ELEMENT_SRC)].flatMap((match): PageLink[] => {
+    const target = match.groups?.double ?? match.groups?.single ?? "";
+    const tag = match.groups?.tag;
+    if (target === "" || tag === undefined) {
+      return [];
+    }
+    // The value ends one character (its closing quote) before the match does.
+    const at = match.index + match[0].length - target.length - 1;
+    return [
+      {
+        ...positionIn(lineStarts, at, lineOffset),
+        raw: true,
+        src: tag,
+        target,
+      },
+    ];
+  });
+
+/** Each `<Card img>` value in the masked `text`, with its offset there. */
+const cardImages = (text: string): { at: number; target: string }[] =>
+  [...text.matchAll(CARD_IMG)].map((match) => {
+    const target = match.groups?.double ?? match.groups?.single ?? "";
+    // The value ends one character (its closing quote) before the match does.
+    return { at: match.index + match[0].length - target.length - 1, target };
+  });
+
+/**
+ * Rewrite every `<Card img="…">` value in `text` (outside code) with
+ * `rewrite`, which returns the new value or `null` to leave one as written.
+ * The include expander rebases a partial's values with it and the
+ * content-asset rewriter points them at their served URL, exactly as both
+ * treat image embeds, so a card's image resolves like `![](./cover.png)`.
+ */
+export const rewriteCardImages = (
+  text: string,
+  rewrite: (target: string) => string | null
+): string => {
+  if (!text.includes("<Card")) {
+    return text;
+  }
+  let out = "";
+  let cursor = 0;
+  for (const { at, target } of cardImages(maskCode(text.split("\n")))) {
+    const next = rewrite(target);
+    if (next !== null) {
+      out += text.slice(cursor, at) + next;
+      cursor = at + target.length;
+    }
+  }
+  return out + text.slice(cursor);
+};
+
+/** A same-text edit: replace `length` characters at `at` with `text`. */
+interface Splice {
+  at: number;
+  length: number;
+  text: string;
+}
+
+/** Apply non-overlapping splices to `text`, in any order. */
+const applySplices = (text: string, splices: readonly Splice[]): string => {
+  let out = "";
+  let cursor = 0;
+  for (const splice of splices.toSorted((a, b) => a.at - b.at)) {
+    out += text.slice(cursor, splice.at) + splice.text;
+    cursor = splice.at + splice.length;
+  }
+  return out + text.slice(cursor);
+};
+
+/**
+ * Rewrite every element's string `href` or `src` in `text` (outside code)
+ * with `rewrite`, which returns the new value or `null` to leave one as
+ * written. The include expander rebases a partial's files with it, the
+ * content-asset rewriter points them at their served URL, and the render
+ * plugins rewrite raw HTML with it.
+ */
+export const rewriteElementUrls = (
+  text: string,
+  rewrite: (url: ElementUrl) => string | null
+): string => {
+  if (!(text.includes("href=") || text.includes("src="))) {
+    return text;
+  }
+  const splices: Splice[] = [];
+  for (const match of maskCode(text.split("\n")).matchAll(ELEMENT_URL)) {
+    const value = match.groups?.double ?? match.groups?.single ?? "";
+    const next = rewrite({
+      attribute: match.groups?.attribute ?? "",
+      tag: match.groups?.tag ?? "",
+      value,
+    });
+    if (next !== null) {
+      // The value ends one character (its closing quote) before the match.
+      const at = match.index + match[0].length - value.length - 1;
+      splices.push({ at, length: value.length, text: next });
+    }
+  }
+  return applySplices(text, splices);
+};
+
+/** A destination as written in a line, and its offset there. */
+interface WrittenDestination {
+  at: number;
+  written: string;
+}
+
+/**
+ * The destination of the link-reference definition on `line`, if it is one;
+ * a footnote definition (`[^1]: …`) is no link.
+ */
+const definitionDestination = (
+  line: string
+): WrittenDestination | undefined => {
+  const groups = line.match(REF_DEFINITION)?.groups;
+  const rest = groups?.label?.startsWith("^") ? "" : (groups?.rest ?? "");
+  const written = rest.match(DEFINITION_DESTINATION)?.[0];
+  return written === undefined
+    ? undefined
+    : { at: line.length - rest.length, written };
+};
+
+/**
+ * Rewrite the target of every Markdown link in `text` (outside code) with
+ * `rewrite`, which gets the target as the renderer reads it and returns the
+ * new one, or `null` to leave it as written: inline links (an image embed is
+ * no link; see {@link rewriteImageTargets}), links whose label wraps onto
+ * later lines, and link-reference definitions (`[spec]: ./spec.pdf`). Each
+ * rewritten target is written back in the form its destination took.
+ */
+export const rewriteLinkTargets = (
+  text: string,
+  rewrite: (target: string) => string | null
+): string => {
+  if (!(text.includes("](") || text.includes("]:"))) {
+    return text;
+  }
+  const splices: Splice[] = [];
+  const add = (at: number, written: string): void => {
+    const { angled, target } = readDestination(written);
+    const next = rewrite(target);
+    if (next !== null) {
+      splices.push({
+        at,
+        length: written.length,
+        text: writeDestination(next, angled),
+      });
+    }
+  };
+  const lines = text.split("\n");
+  const masked = maskCode(lines);
+  const lineStarts = lineStartsOf(lines);
+  for (const [index, line] of masked.split("\n").entries()) {
+    const start = lineStarts[index] ?? 0;
+    for (const match of line.matchAll(MD_LINK)) {
+      if (line[match.index - 1] !== "!") {
+        add(
+          start + match.index + targetStart(match),
+          match.groups?.target ?? ""
+        );
+      }
+    }
+    const definition = definitionDestination(line);
+    if (definition) {
+      add(start + definition.at, definition.written);
+    }
+  }
+  for (const match of masked.matchAll(WRAPPED_LINK)) {
+    if (masked[match.index - 1] !== "!") {
+      add(match.index + targetStart(match), match.groups?.target ?? "");
+    }
+  }
+  return applySplices(text, splices);
+};
+
+/** A link-reference definition, as {@link linkDefinitions} reads one. */
+export interface LinkDefinition {
+  /** The label as CommonMark matches it: case-folded, spaces collapsed. */
+  key: string;
+  /** The definition on a line of its own, out of any container. */
+  text: string;
+}
+
+/**
+ * Every link-reference definition in `text` (`[label]: /url "Title"`,
+ * outside code; footnotes aren't links), in order, the first of each label
+ * only, since that's the one that renders. A definition is read from its own
+ * line: its destination and any title there, and nothing else, since a line
+ * with more after them is text.
+ */
+export const linkDefinitions = (text: string): LinkDefinition[] => {
+  const definitions = new Map<string, LinkDefinition>();
+  const lines = text.split("\n");
+  for (const [index, line] of maskCode(lines).split("\n").entries()) {
+    const groups = line.match(REF_DEFINITION)?.groups;
+    const label = groups?.label ?? "^";
+    const key = labelKey(label);
+    const rest = groups?.rest ?? "";
+    if (
+      label.startsWith("^") ||
+      key === "" ||
+      definitions.has(key) ||
+      !DEFINITION_LINE.test(rest)
+    ) {
+      continue;
+    }
+    // The real line's text, at the same offset the masked one's starts.
+    const written = (lines[index] ?? "").slice(line.length - rest.length);
+    definitions.set(key, { key, text: `[${label}]: ${written}` });
+  }
+  return [...definitions.values()];
+};
+
+/**
+ * Every link in the masked `text` (see `maskCode`) of `lines` that can span
+ * lines, with its 1-based position: an element's `href` (see `ELEMENT_HREF`),
+ * a media element's `src` (see `ELEMENT_SRC`), a `<Card>`'s `img` (see
+ * `CARD_IMG`, an image embed), and a link whose label wraps (see
+ * `WRAPPED_LINK`). A lowercase `<a>` is raw
+ * HTML in `.md` and a plain element in `.mdx`; the Markdown pipeline passes
+ * either through as written, so its target is marked `raw`.
+ */
+const multilineLinks = (
+  text: string,
   lines: readonly string[],
   lineOffset: number
 ): PageLink[] => {
   const links: PageLink[] = [];
-  const text = maskCode(lines);
-  for (const match of text.matchAll(COMPONENT_HREF)) {
+  const lineStarts = lineStartsOf(lines);
+  for (const match of text.matchAll(ELEMENT_HREF)) {
     const target = match.groups?.double ?? match.groups?.single ?? "";
     // The value ends one character (its closing quote) before the match does.
     const at = match.index + match[0].length - target.length - 1;
-    const before = text.slice(0, at);
-    const lineStart = before.lastIndexOf("\n") + 1;
-    links.push({
-      column: at - lineStart + 1,
-      line: lineOffset + before.split("\n").length,
+    const link: PageLink = {
+      ...positionIn(lineStarts, at, lineOffset),
       target,
-    });
+    };
+    if (match.groups?.anchor) {
+      link.raw = true;
+    }
+    links.push(link);
+  }
+  links.push(
+    ...mediaSourceLinks(text, lineStarts, lineOffset),
+    ...cardImages(text).flatMap(({ at, target }): PageLink[] =>
+      target === ""
+        ? []
+        : [{ ...positionIn(lineStarts, at, lineOffset), image: true, target }]
+    )
+  );
+  for (const match of text.matchAll(WRAPPED_LINK)) {
+    const written = match.groups?.target ?? "";
+    const at = match.index + targetStart(match);
+    const link = destinationLink(
+      written,
+      positionIn(lineStarts, at, lineOffset)
+    );
+    if (link) {
+      // As on one line, a preceding `!` makes it an image embed.
+      if (text[match.index - 1] === "!") {
+        link.image = true;
+      }
+      links.push(link);
+    }
   }
   return links;
 };
 
-export const extractLinks = (body: string, lineOffset = 0): PageLink[] => {
+/**
+ * Extract link targets from a markdown body for later validation, recording the
+ * 1-based line/column of each target. Skips fenced code blocks, inline code,
+ * and — given the page's `format` — comments, none of which render a link.
+ * `lineOffset` shifts every recorded line: the body is frontmatter-stripped, so
+ * diagnostics that point into the raw file must add the stripped block's height.
+ */
+export const extractLinks = (
+  body: string,
+  lineOffset = 0,
+  format?: "md" | "mdx"
+): PageLink[] => {
   const links: PageLink[] = [];
-  let fence: FenceState = null;
-  let lineNumber = lineOffset;
-
+  const defined = new Set<string>();
   const lines = body.split("\n");
-  for (const line of lines) {
-    lineNumber += 1;
-    fence = scanLinkLine(line, lineNumber, fence, links);
+  const text = maskCode(lines, format);
+  for (const [index, line] of text.split("\n").entries()) {
+    scanLinkLine(line, lineOffset + index + 1, links, defined);
   }
+  return [...links, ...multilineLinks(text, lines, lineOffset)];
+};
 
-  return body.includes("href=")
-    ? [...links, ...componentHrefs(lines, lineOffset)]
-    : links;
+/**
+ * A `<Component>` example's string `path` (`<Component path="forms/login" />`),
+ * wrapped onto a later line or not, read the way `ELEMENT_HREF` reads an
+ * `href`. An expression-valued `path={…}` isn't a literal, so it isn't matched,
+ * and an escaped `\<Component>` is text (see `HTML_ID`).
+ */
+const COMPONENT_PATH =
+  /(?<=(?:^|[^\\])(?:\\\\)*)<Component(?=[\s/>])[^<>]*?\spath=(?:"(?<double>[^"]*)"|'(?<single>[^']*)')/gu;
+
+/**
+ * Every `<Component path>` in an `.mdx` body, with the 1-based position of its
+ * value; lines are shifted by `lineOffset`, as {@link extractLinks} does. Code
+ * blocks and inline code are skipped.
+ */
+export const extractExampleUses = (
+  body: string,
+  lineOffset = 0
+): ExampleUse[] => {
+  if (!body.includes("<Component")) {
+    return [];
+  }
+  const lines = body.split("\n");
+  const lineStarts = lineStartsOf(lines);
+  return [...maskCode(lines).matchAll(COMPONENT_PATH)].map((match) => {
+    const path = match.groups?.double ?? match.groups?.single ?? "";
+    // The value ends one character (its closing quote) before the match does.
+    const at = match.index + match[0].length - path.length - 1;
+    return { ...positionIn(lineStarts, at, lineOffset), path };
+  });
 };
 
 // Double-quoted strings hold JSX attribute values and JSON in `{...}` props; a
@@ -1024,13 +1809,15 @@ export const extractLinks = (body: string, lineOffset = 0): PageLink[] => {
 // isn't a real usage. Single quotes are left alone so prose apostrophes don't
 // swallow a real tag between two words.
 const DOUBLE_QUOTED = /"[^"]*"/gu;
-const JSX_OPEN = /<(?<tag>[A-Z][A-Za-z0-9]*)/gu;
+// An escaped `Promise\<App>` renders `Promise<App>` as text, so it uses no
+// component (see `HTML_ID`); `\\<App>` is an escaped backslash, then a tag.
+const JSX_OPEN = /(?<=(?:^|[^\\])(?:\\\\)*)<(?<tag>[A-Z][A-Za-z0-9]*)/gu;
 
 /**
  * Capitalized JSX component tags used in an `.mdx` body (`<Callout>`,
- * `<Tree.File>` → `Tree`). Skips fenced code, inline code, and double-quoted
- * strings so code samples and prose don't count. Powers the missing-component
- * diagnostic.
+ * `<Tree.File>` → `Tree`). Skips fenced code, inline code, double-quoted
+ * strings, and escaped `\<Tag>` text so code samples and prose don't count.
+ * Powers the missing-component diagnostic.
  */
 /** Scan one line for JSX component tags; returns the next fenced-block state. */
 const scanTagLine = (
@@ -1082,23 +1869,29 @@ export const strippedLineOffset = (
 const entryLineOffset = (entry: SourceEntry): number =>
   entry.bodyLineOffset ?? strippedLineOffset(entry.raw, entry.body.text);
 
+/** A link (or `<Component>` example) found in a body: its line, and file. */
+interface Located {
+  file?: string;
+  line: number;
+}
+
 /**
  * Map links extracted from include-expanded text back to the file and raw
  * line each expanded line came from, so a broken link inside a partial is
  * reported against the partial. Links whose origin is the page's own source
  * carry no `file` override (origins already hold raw-file lines).
  */
-const remapExpandedLinks = (
-  links: PageLink[],
+const remapExpandedLinks = <T extends Located>(
+  links: T[],
   origins: { file: string; line: number }[],
   sourcePath: string | undefined
-): PageLink[] =>
+): T[] =>
   links.map((link) => {
     const origin = origins[link.line - 1];
     if (!origin) {
       return link;
     }
-    const remapped: PageLink = { ...link, line: origin.line };
+    const remapped: T = { ...link, line: origin.line };
     if (origin.file !== sourcePath) {
       remapped.file = origin.file;
     }
@@ -1112,47 +1905,118 @@ const entryIncludes = (entry: SourceEntry): string[] | undefined =>
     : undefined;
 
 /**
- * Extract an entry's links for validation. When the scan expanded includes,
- * extraction runs over the expanded text (origins already hold raw-file
- * lines); otherwise over the stripped body, shifted by the stripped front
- * matter block's height.
+ * Extract an entry's links (or `<Component>` examples) for validation. When
+ * the scan expanded includes, extraction runs over the expanded text (origins
+ * already hold raw-file lines); otherwise over the stripped body, shifted by
+ * the stripped front matter block's height.
  */
-const entryLinks = (entry: SourceEntry): PageLink[] =>
+const entryLinks = <T extends Located>(
+  entry: SourceEntry,
+  extract: (body: string, lineOffset?: number) => T[]
+): T[] =>
   entry.expanded
     ? remapExpandedLinks(
-        extractLinks(entry.expanded.text),
+        extract(entry.expanded.text),
         entry.expanded.origins,
         entry.sourcePath
       )
-    : extractLinks(entry.body.text, entryLineOffset(entry));
+    : extract(entry.body.text, entryLineOffset(entry));
 
 /**
- * Diagnostics for `{#id}` heading markers in an `.mdx` page. The MDX parser
+ * Diagnostics for `{#id}` heading markers (and the spaced `{ #id }` and
+ * kramdown `{: #id }` spellings) in an `.mdx` page. The MDX parser
  * reads a bare `{…}` as a JSX expression, so the page fails to compile —
  * reported here, at the marker's source line, instead of as a raw acorn error
  * at render time. An included `.md` partial is spliced into the including
  * page and parsed in *its* format (see `markdown/include.ts`), so a partial's
  * markers count too and are reported against the partial via the expansion's
- * origins. `.md` pages render the marker as text and get no diagnostic.
+ * origins. `.md` pages pin the unspaced `{#id}` and are warned about the
+ * other spellings instead (see {@link mdCurlyMarkerDiagnostics}). A marker
+ * that also sets classes or attributes is an attribute list, which
+ * `BLUME_MDX_ATTRIBUTE_LIST` reports (see `core/syntax-diagnostics.ts`).
  */
 const curlyMarkerDiagnostics = (
   entry: SourceEntry,
   markers: CurlyMarker[],
   sourceName: string
 ): Diagnostic[] =>
-  markers.map(({ id, line }) => {
-    const origin = entry.expanded?.origins[line - 1];
-    const page = entry.sourcePath ?? `${sourceName}:${entry.ref}`;
-    const inPartial = origin !== undefined && origin.file !== entry.sourcePath;
+  markers
+    .filter(({ attributes }) => !attributes)
+    .map(({ id, line, marker }) => {
+      const origin = entry.expanded?.origins[line - 1];
+      const page = entry.sourcePath ?? `${sourceName}:${entry.ref}`;
+      const inPartial =
+        origin !== undefined && origin.file !== entry.sourcePath;
+      return {
+        code: "BLUME_MDX_CURLY_ANCHOR",
+        file: origin?.file ?? page,
+        line: origin?.line ?? line + entryLineOffset(entry),
+        message: inPartial
+          ? `\`${marker}\` is a JSX expression once this partial is included in ${page} (.mdx), so that page fails to compile.`
+          : `\`${marker}\` is a JSX expression in .mdx, so this page fails to compile.`,
+        severity: "error",
+        suggestion: `Write \`[#${id}]\` or escape it as \`\\{#${id}\\}\` — both pin the same anchor in .md and .mdx.`,
+      };
+    });
+
+/**
+ * Warnings for the spaced `{ #id }` and kramdown `{: #id }` heading markers
+ * (MkDocs' `attr_list` writes both) in an `.md` page. Only the unspaced
+ * `{#id}` pins an anchor there; the other spellings stay in the heading's
+ * text, so the page shows them and the heading's id is slugged from them
+ * (`## Setup { #setup }` anchors as `setup--setup`). So does an attribute
+ * list that sets the id beside classes or attributes (`{ #setup .wide }`),
+ * whose other attributes no heading takes either.
+ */
+const mdCurlyMarkerDiagnostics = (
+  entry: SourceEntry,
+  markers: CurlyMarker[],
+  sourceName: string
+): Diagnostic[] =>
+  markers
+    .filter(({ id, marker }) => marker !== `{#${id}}`)
+    .map(({ attributes, id, line, marker }) => {
+      const origin = entry.expanded?.origins[line - 1];
+      return {
+        code: "BLUME_MD_CURLY_ANCHOR",
+        file: origin?.file ?? entry.sourcePath ?? `${sourceName}:${entry.ref}`,
+        line: origin?.line ?? line + entryLineOffset(entry),
+        message: `\`${marker}\` doesn't pin an anchor: only the unspaced \`{#${id}}\` does, so this one shows in the heading and its id is slugged from it.`,
+        severity: "warning",
+        suggestion: `Write \`{#${id}}\` or \`[#${id}]\` to pin the anchor \`#${id}\`.${
+          attributes
+            ? " Blume sets no classes or other attributes on a heading."
+            : ""
+        }`,
+      };
+    });
+
+const LIST = new Intl.ListFormat("en", { type: "conjunction" });
+
+/**
+ * Diagnostics for JavaScript event handlers on HTML elements in an `.mdx`
+ * page (`<button onClick={() => …}>`). The page is static HTML: Astro writes
+ * the function's source into the attribute, where the browser reads it as a
+ * handler body that only defines a function, so nothing happens. Reported at
+ * the element's line, in the partial that holds it when an `<include>`
+ * brought it in.
+ */
+const eventHandlerDiagnostics = (
+  entry: SourceEntry,
+  handlers: ElementUse[],
+  sourceName: string
+): Diagnostic[] =>
+  handlers.map(({ column, file, line, props, tag }) => {
+    const names = LIST.format(props.map((prop) => `\`${prop}\``));
     return {
-      code: "BLUME_MDX_CURLY_ANCHOR",
-      file: origin?.file ?? page,
-      line: origin?.line ?? line + entryLineOffset(entry),
-      message: inPartial
-        ? `\`{#${id}}\` is a JSX expression once this partial is included in ${page} (.mdx), so that page fails to compile.`
-        : `\`{#${id}}\` is a JSX expression in .mdx, so this page fails to compile.`,
-      severity: "error",
-      suggestion: `Write \`[#${id}]\` or escape it as \`\\{#${id}\\}\` — both pin the same anchor in .md and .mdx.`,
+      code: "BLUME_MDX_EVENT_HANDLER",
+      column,
+      file: file ?? entry.sourcePath ?? `${sourceName}:${entry.ref}`,
+      line,
+      message: `${names} on \`<${tag}>\` ${props.length === 1 ? "is a JavaScript function" : "are JavaScript functions"}, which a static page never runs.`,
+      severity: "warning",
+      suggestion:
+        "Move the interactive markup into an island (islands/Name.tsx), which runs in the browser, and use that component in the page.",
     };
   });
 
@@ -1256,6 +2120,12 @@ export interface EntryRoute extends Pick<
    * through {@link localizedRoute} for the route one locale publishes at.
    */
   logicalRoute: string;
+  /**
+   * The logical route an earlier Blume published the entry at, when it
+   * differs: a date-named file or folder (`12-05-2022`) lost its first number
+   * as an ordering prefix. Its old URL redirects to the new one.
+   */
+  formerLogicalRoute?: string;
   /** The prefixed, locale- and version-stripped nav path. */
   navPath: string;
   segments: string[];
@@ -1294,16 +2164,21 @@ export const resolveEntryRoute = (
   // A frontmatter slug is a route spelled out; an adapter's `entry.slug` is
   // one too unless the source's names are ordered file names (a vault note's
   // path), which lose their prefixes like the ref does.
-  const ordered =
-    ctx.orderingPrefixes === true && frontmatterSlug === undefined;
+  const ordered = slug
+    ? ctx.orderingPrefixes === true && frontmatterSlug === undefined
+    : ctx.orderingPrefixes === true;
+  const input = slug ? `${slug}${ext}` : navPath;
   const {
     segments,
     groups,
     route: versionKey,
-  } = slug
-    ? mapRoute(ctx.prefix, `${slug}${ext}`, ordered)
-    : mapRoute(ctx.prefix, navPath, ctx.orderingPrefixes === true);
+  } = mapRoute(ctx.prefix, input, ordered);
+  const former = ordered
+    ? mapRoute(ctx.prefix, input, true, true).route
+    : versionKey;
   return {
+    formerLogicalRoute:
+      former === versionKey ? undefined : versionizeRoute(former, version),
     groups,
     locales,
     logicalRoute: versionizeRoute(versionKey, version),
@@ -1505,19 +2380,12 @@ export const normalizeEntry = (
     return { diagnostics: parsed.diagnostics, pages: [] };
   }
 
+  // The schema has already folded the top-level `hidden`/`noindex` shorthands
+  // into `sidebar.hidden`/`seo.noindex` (see `foldShorthands`).
   const { meta } = parsed;
 
-  // Top-level `hidden`/`noindex` are accepted as shorthands for their nested
-  // equivalents — the schema declares them, so silently ignoring them would
-  // strand authors with no diagnostic.
-  if (meta.hidden) {
-    meta.sidebar.hidden = true;
-  }
-  if (meta.noindex) {
-    meta.seo.noindex = true;
-  }
-
   const {
+    formerLogicalRoute,
     groups,
     locales,
     logicalRoute,
@@ -1537,6 +2405,9 @@ export const normalizeEntry = (
   const bodyText = entry.expanded?.text ?? entry.body.text;
   const { anchors, curlyMarkers, headings } = scanBody(bodyText);
   const { staged } = ctx.source;
+  const elements =
+    format === "mdx" ? entryLinks(entry, extractElementUses) : [];
+  const unknownProps = elements.filter((use) => use.kind === "prop");
 
   const base = {
     anchors,
@@ -1549,13 +2420,20 @@ export const normalizeEntry = (
     description: meta.description,
     editUrl: entry.editUrl,
     entryId: staged ? `${ctx.source.name}/${entry.ref}` : undefined,
+    examplesUsed:
+      format === "mdx" ? entryLinks(entry, extractExampleUses) : undefined,
     format,
     groups,
     headings,
     id: `${ctx.source.name}:${entry.ref}`,
     includes: entryIncludes(entry),
     lastModified: meta.lastModified ?? entry.lastModified,
-    links: [...entryLinks(entry), ...relatedPageLinks(meta.related)],
+    links: [
+      ...entryLinks(entry, (text, lineOffset) =>
+        extractLinks(text, lineOffset, format)
+      ),
+      ...relatedPageLinks(meta.related),
+    ],
     meta,
     monolingual: ctx.source.monolingual,
     navPath,
@@ -1564,6 +2442,7 @@ export const normalizeEntry = (
     sourcePath: entry.sourcePath,
     title: deriveTitle(meta, headings, navPath),
     translationKey: logicalRoute,
+    unknownProps: unknownProps.length > 0 ? unknownProps : undefined,
     version,
     versionKey,
   } satisfies Omit<PageRecord, "locale" | "route">;
@@ -1575,20 +2454,33 @@ export const normalizeEntry = (
   // stay base-less so the nav tree and translation matching are unaffected.
   // The base is mounted unconditionally: a `docs/` folder under a `/docs`
   // base is a real `/docs/docs/…` route, not an already-based one.
+  const routeIn = (logical: string, locale: string): string =>
+    mountBasePath(
+      ctx.basePath ?? "",
+      localizedRoute(logical, locale, ctx.i18n)
+    );
   const pages = locales.map((locale) => ({
     ...base,
+    formerRoute:
+      formerLogicalRoute === undefined
+        ? undefined
+        : routeIn(formerLogicalRoute, locale),
     locale,
-    route: mountBasePath(
-      ctx.basePath ?? "",
-      localizedRoute(logicalRoute, locale, ctx.i18n)
-    ),
+    route: routeIn(logicalRoute, locale),
   }));
 
   return {
     diagnostics:
       format === "mdx"
-        ? curlyMarkerDiagnostics(entry, curlyMarkers, ctx.source.name)
-        : [],
+        ? [
+            ...curlyMarkerDiagnostics(entry, curlyMarkers, ctx.source.name),
+            ...eventHandlerDiagnostics(
+              entry,
+              elements.filter((use) => use.kind === "handler"),
+              ctx.source.name
+            ),
+          ]
+        : mdCurlyMarkerDiagnostics(entry, curlyMarkers, ctx.source.name),
     pages,
   };
 };

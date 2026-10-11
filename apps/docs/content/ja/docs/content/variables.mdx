@@ -1,0 +1,44 @@
+---
+title: 変数
+description: >-
+  blume.config.ts で値を一度定義すれば、本文、コード、リンク、コンポーネントの props など、ページ内の必要な場所に {{name}} と書くだけでその値を使えます。
+---
+
+値を一度定義すれば、すべてのページで使えます。バージョン番号、API ホスト、製品名などを `blume.config.ts` に定義しておくと、ページ内の `{{name}}` がその値を読み込みます。
+
+```ts blume.config.ts lineNumbers
+export default defineConfig({
+  variables: {
+    version: "2.1.0",
+    "api-url": "https://api.example.com",
+  },
+});
+```
+
+```mdx docs/quickstart.mdx
+Install version {{version}}, then call {{api-url}}.
+
+## What's new in {{version}}
+
+<Card title="Release {{version}}" href="{{api-url}}/changelog" />
+```
+
+参照は、`.md` と `.mdx` のページ、およびそれらが[インクルード](/docs/content/includes)するファイルの中で使えます。本文、見出し、リンク、コードブロック、インラインコード、コンポーネントの props のいずれにも書けます。波括弧の内側にスペースを入れても問題ありません（`{{ version }}`）。設定の値を変更すると、次回のビルドですべてのページに反映されます。
+
+名前には英字、数字、`_`、`-` を使用できます。値は 1 行のプレーンテキストです。
+
+## 適用される範囲 [#where-they-apply]
+
+変数は、ほかの処理がページを読み込む前に置換されます。そのため、レンダリングされた HTML、[検索](/docs/configuration/search)、ページの [`.md` ミラー](/docs/discoverability/markdown)、`llms-full.txt` のすべてに値が表示されます。
+
+フロントマターは置換されず、記述したとおりに残ります。`title` や `description` に `{{version}}` を含めた場合は、波括弧がそのまま表示されます。
+
+## 未定義の名前 [#undefined-names]
+
+本文中にある未定義の `{{name}}` は、ビルドエラー `BLUME_UNDEFINED_VARIABLE` になり、その行の位置が報告されます。そのため、タイプミスが読者の目に触れることはありません。コードブロックやインラインコードの中では、未定義の名前は記述したとおりに残ります。これらの場所では Handlebars の `{{title}}` のようなテンプレートの例がよく使われるためです。
+
+定義していない参照を本文中にそのまま表示するには、インラインコードで囲みます：`` `{{name}}` ``。
+
+変数を 1 つも定義していないサイトには影響しません。`.md` ページ内の `{{…}}` は記述したとおりに残ります。`.mdx` では波括弧が JavaScript の式として扱われるため、未定義の `{{name}}` があるとレンダリング時にページがエラーになり、その行の位置で [`BLUME_MDX_UNDEFINED_NAME`](/docs/content#markdown-and-mdx) として報告されます。開き波括弧を両方ともエスケープする（`\{\{name}}`）か、インラインコードで囲んでください。
+
+Liquid の `{{ site.title }}` や `{{ page.url | relative_url }}` のように、名前以外のものを含む `{{…}}` が変数として扱われることはありません。`.md` ページにこのような記述があると、ページ上にそのまま表示されてしまうため、Blume は `BLUME_TEMPLATE_TAG` として警告します。

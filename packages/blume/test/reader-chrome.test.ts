@@ -52,22 +52,47 @@ describe("print stylesheet", () => {
         "[data-blume-toc]",
         "[data-blume-assistant-panel]",
         "[data-blume-page-actions]",
+        // Everything after the article, the site footer (or its override),
+        // and the buttons layered onto code blocks.
+        "[data-blume-page-end]",
+        "[data-blume-footer]",
+        "body > footer",
+        "[data-blume-copy]",
+        "[data-blume-ask]",
+        "[data-blume-code-expand]",
       ])
     );
   });
 
   it("marks every chrome element the rule names", async () => {
-    const [header, root, page, assistant] = await sources([
+    const [header, root, page, assistant, footer] = await sources([
       "components/layout/Header.astro",
       "components/layout/RootLayout.astro",
       "components/layout/PageLayout.astro",
       "components/islands/assistant.tsx",
+      "components/layout/SiteFooter.astro",
     ]);
     expect(header).toContain("data-blume-header\n");
     expect(root).toContain("data-blume-nav-drawer");
     expect(root).toContain("data-blume-toc");
+    expect(root).toContain("data-blume-page-end\n");
+    expect(root).toContain('button.setAttribute("data-blume-copy", "");');
+    expect(root).toContain('button.setAttribute("data-blume-ask", "");');
+    expect(root).toContain(
+      'button.setAttribute("data-blume-code-expand", "");'
+    );
     expect(page).toContain("data-blume-nav-drawer");
     expect(assistant).toContain('data-blume-assistant-panel=""');
+    expect(footer).toContain("data-blume-footer\n");
+  });
+
+  it("prints a collapsed expandable block in full", () => {
+    // The print rule repeats the collapse's selector so it wins by order; a
+    // weaker selector lost to it and printed the first lines plus the fade.
+    const print = entry.slice(entry.indexOf("@media print {"));
+    expect(print).toContain(
+      ".prose pre[data-expandable]:not([data-expanded]) > code {\n    mask-image: none;\n    max-height: none;"
+    );
   });
 });
 
@@ -85,9 +110,42 @@ describe("sidebar", () => {
       `const navPanelId = (id: string): string => \`blume-nav-panel-\${id}\`;`
     );
     expect(tree).toContain("id={navPanelId(panel.id)}");
+    // A routeless page-mode group's whole row drills in. A routed one links
+    // its label to the index page and keeps the chevron as the drill button.
     expect(tree).toMatch(
-      /aria-controls=\{navPanelId\(id\)\}\s*aria-expanded="false"\s*class="blume-nav-drill"\s*data-nav-to=\{id\}/u
+      /<button\s+aria-controls=\{navPanelId\(id\)\}\s+aria-current=\{current\}\s+aria-expanded="false"\s+class="blume-nav-drill"\s+data-nav-to=\{id\}\s+type="button"/u
     );
+    expect(tree).toMatch(
+      /<a\s+aria-current=\{current\}\s+class="blume-nav-drill-link"\s+href=\{withMountedBase\(item\.route\)\}\s*>/u
+    );
+    expect(tree).toMatch(
+      /<button\s+aria-controls=\{navPanelId\(id\)\}\s+aria-expanded="false"\s+aria-label=\{item\.label\}\s+class="blume-nav-drill-toggle"\s+data-nav-to=\{id\}\s+type="button"/u
+    );
+  });
+
+  it("drills in only from buttons, so a link always navigates", async () => {
+    // A drill row that was itself a link either navigated (no way to open
+    // the panel without loading the page, and on mobile the drawer closed)
+    // or had its click cancelled, so it never reached the page it named.
+    const tree = await source("components/layout/NavTree.astro");
+    const drills = [...tree.matchAll(/<(?<tag>\w+)\s[^>]*data-nav-to=/gu)];
+    expect(drills.map((match) => match.groups?.tag)).toEqual([
+      "button",
+      "button",
+    ]);
+  });
+
+  it("slides the current section back in from its name", async () => {
+    // After the back arrow, the name of the section on screen followed its
+    // link and reloaded the page it was already on to reopen the panel.
+    const script = await source("components/layout/NavTreeScript.astro");
+    expect(script).toContain(
+      `target.closest('.blume-nav-drill-link[aria-current="page"]')`
+    );
+    expect(script).toContain(
+      "!(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)"
+    );
+    expect(script).toContain("void this.show(ownId, true);");
   });
 
   it("moves focus into the panel it shows and syncs aria-expanded", async () => {
@@ -255,5 +313,40 @@ describe("content components", () => {
     expect(assistant).toMatch(
       /className="rtl:-scale-x-100"\s*path=\{icons\.close\}/u
     );
+  });
+});
+
+describe("page dates", () => {
+  it("marks up Last updated as a machine-readable <time>", async () => {
+    const layout = await source("components/layout/RootLayout.astro");
+    // Without a `datetime` search engines take whatever other date the page
+    // shows (an example component's epoch date, say) as the page's.
+    expect(layout).toContain(
+      "{strings.page.lastUpdated} <time datetime={lastModifiedIso}>{formattedLastModified}</time>"
+    );
+  });
+
+  it("dates the homepage JSON-LD from both layouts", async () => {
+    const [root, page] = await sources([
+      "components/layout/RootLayout.astro",
+      "components/layout/PageLayout.astro",
+    ]);
+    // A locale's, basePath's, or version's root is its homepage too.
+    expect(root).toContain("homeRoute: navigation.root,");
+    expect(root).toContain("modified: lastModified,");
+    expect(page).toContain("modified: lastModified,");
+  });
+});
+
+describe("page end", () => {
+  it("renders on API operation pages too, beside their request column", async () => {
+    const layout = await source("components/layout/RootLayout.astro");
+    // Only `custom` and `frame` pages, which drop the page's own chrome, go
+    // without it; an operation page keeps the rating and the PageFooter slot.
+    expect(layout).not.toContain("!isApiOperation && showChrome");
+    expect(layout).toContain('isApiLayout && "xl:pe-[30.5rem]"');
+    const end = layout.slice(layout.indexOf("data-blume-page-end"));
+    expect(end).toContain("<PageFooterSlot");
+    expect(end).toContain("<FeedbackSlot");
   });
 });

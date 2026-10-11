@@ -1,6 +1,6 @@
 # Blume
 
-[![npm downloads](https://img.shields.io/npm/dm/blume.svg)](https://www.npmjs.com/package/blume) [![Socket Badge](https://socket.dev/api/badge/npm/package/blume)](https://socket.dev/npm/package/blume) ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/haydenbleasel/blume?utm_source=oss&utm_medium=github&utm_campaign=haydenbleasel%2Fblume&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
+[![npm downloads](https://img.shields.io/npm/dm/blume.svg)](https://www.npmjs.com/package/blume) [![Socket Badge](https://badge.socket.dev/npm/package/blume/latest)](https://socket.dev/npm/package/blume/overview/latest) ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/haydenbleasel/blume?utm_source=oss&utm_medium=github&utm_campaign=haydenbleasel%2Fblume&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 
 **The open-source docs framework for humans and agents.** Fast, AI-ready, and zero-config. Free and open source, forever.
 
@@ -10,7 +10,7 @@ Drop Markdown or MDX into a folder, start the dev server, and get a production-g
 
 ## Quickstart
 
-Blume needs **Node.js 22.12 or newer** and a content folder with at least one `.md`/`.mdx` file — there's nothing else to set up.
+Blume needs **Node.js 22.19 or newer** and a content folder with at least one `.md`/`.mdx` file — there's nothing else to set up.
 
 ```bash
 npx blume init
@@ -30,7 +30,7 @@ npm run build
 
 In a project that already has a `package.json`, `blume init` leaves it alone: add `"dev": "blume dev"` and `"build": "blume build"` to its scripts, or run `npx blume dev`. Blume works with any package manager and never requires you to set up Astro or Tailwind yourself.
 
-Moving from another docs framework? `npx blume migrate` hands a Mintlify, Fumadocs, Docusaurus, Starlight, or Nextra site to Claude Code or Codex — see [Migrate to Blume](https://useblume.dev/docs/migrating). On Blume 1, run `npx blume@latest upgrade` — see [Upgrade to Blume 2](https://useblume.dev/docs/upgrading).
+Moving from another docs framework? `npx blume migrate` hands a Mintlify, Docusaurus, GitBook, MkDocs, ReadMe, or other docs site to Claude Code or Codex — see [Migrate to Blume](https://useblume.dev/docs/migrating). On Blume 1, run `npx blume@latest upgrade` — see [Upgrade to Blume 2](https://useblume.dev/docs/upgrading).
 
 ## Features
 
@@ -67,7 +67,7 @@ Moving from another docs framework? `npx blume migrate` hands a Mintlify, Fumado
 | `blume eval` | Test the docs: an agent answers your questions using only the documentation. |
 | `blume translate` | Translate docs into the configured locales with a local agent CLI. |
 | `blume version [id]` | Freeze the current docs as an archived version (no id lists configured versions). |
-| `blume migrate [source]` | Move a Mintlify, Fumadocs, Docusaurus, Starlight, or Nextra site to Blume with Claude Code or Codex. |
+| `blume migrate [source]` | Move a Mintlify, Docusaurus, GitBook, MkDocs, ReadMe, or other docs site to Blume with Claude Code or Codex. |
 | `blume upgrade` | Move to a new major: bump `blume`, then list the config changes left or hand them to Claude Code or Codex. |
 
 Run them through your package manager (`npx blume <command>`) or a `package.json` script. See the [CLI reference](https://useblume.dev/docs/cli) for every flag.
@@ -102,7 +102,7 @@ On Vercel, Netlify, and Cloudflare Pages the site URL is detected automatically.
 
 | Requirement      | Supported                         |
 | ---------------- | --------------------------------- |
-| Node             | 22.12+                            |
+| Node             | 22.19+                            |
 | Package managers | Bun, pnpm, npm, yarn              |
 | Adapters         | Vercel, Netlify, Node, Cloudflare |
 

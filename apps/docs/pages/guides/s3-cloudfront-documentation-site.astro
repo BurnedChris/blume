@@ -1,0 +1,667 @@
+---
+// Host static documentation on S3 and CloudFront: checked against the
+// deployment, Markdown, and JSON API docs, and on main against the static
+// platform and the `_headers` rules it writes (deploy/headers.ts,
+// deploy/artifacts.ts), the server-feature gate (cli/prepare.ts), the
+// `trailingSlash: "never"` Astro config (astro/templates.ts), and the layout
+// of a real build's output; AWS behavior against the CloudFront, S3, and ACM
+// docs on 2026-09-27. Ran: cfn-lint on the template (clean), the function
+// under Node against sample URLs, the deploy script against a local moto S3
+// server with a sample of real Blume output (media types, Cache-Control,
+// deletes, excluded files), and the check script against a local stand-in
+// for the distribution. Not yet run end to end in an AWS account.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("s3-cloudfront-documentation-site")}>
+  <p>
+    To host Blume docs in an AWS account, build them to static files with{" "}
+    <code>blume build</code>, upload <code>dist/</code> to a private S3
+    bucket, and serve the bucket through CloudFront with origin access
+    control. Two details decide whether it works: a small CloudFront Function
+    that maps page URLs like <code>/quickstart</code> to the{" "}
+    <code>index.html</code> Blume writes for them, and uploads that give each
+    file the right media type and cache lifetime.
+  </p>
+  <p>
+    You end up with one CloudFormation stack (the bucket, the distribution,
+    the function, and the bucket policy), a deploy script that builds,
+    uploads, and clears the cache, and a check script that tests pages,
+    Markdown, JSON, 404s, and caching on the live site. The docs get their own
+    subdomain, <code>docs.acme.example</code> in the examples.
+  </p>
+  <p>
+    Choose this when the docs have to live in your AWS account. If they
+    don't, Vercel, Netlify, and Cloudflare serve the same <code>dist/</code>{" "}
+    with less setup, because Blume detects the site URL there and writes the
+    header and redirect files they read. Everything here is static, so
+    features that answer requests at runtime, like the MCP server,{" "}
+    <a href="#what-needs-a-server">need a server</a>.
+  </p>
+
+  <h2>Choose the S3 endpoint</h2>
+  <p>
+    CloudFront can read a bucket through two S3 endpoints. They differ in
+    who can read the bucket and in how a URL finds its file:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col"></th>
+        <th scope="col">REST endpoint (this guide)</th>
+        <th scope="col">Website endpoint</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Bucket access</td>
+        <td>Private; CloudFront signs each request with origin access control</td>
+        <td>Objects must be public; origin access control isn't supported</td>
+      </tr>
+      <tr>
+        <td>CloudFront to S3</td>
+        <td>HTTPS</td>
+        <td>HTTP only</td>
+      </tr>
+      <tr>
+        <td>A request for <code>/quickstart</code></td>
+        <td>
+          Looks up the key <code>quickstart</code> exactly, so a function adds{" "}
+          <code>/index.html</code>
+        </td>
+        <td>
+          Answers <code>302</code> to <code>/quickstart/</code>, then serves{" "}
+          <code>quickstart/index.html</code>
+        </td>
+      </tr>
+      <tr>
+        <td>A missing file</td>
+        <td>
+          <code>403</code>, or <code>404</code> when CloudFront may list the
+          bucket
+        </td>
+        <td>The bucket's error document</td>
+      </tr>
+      <tr>
+        <td>Redirect rules</td>
+        <td>None</td>
+        <td>Per object and per bucket</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Blume writes each page as <code>&lt;route&gt;/index.html</code> and links
+    to it without a trailing slash, which is also the canonical URL in the
+    page's head. The website endpoint answers every one of those links with a
+    redirect to the slashed form, and it needs a public bucket. The REST
+    endpoint keeps the bucket private and serves the canonical URL directly
+    once a function rewrites it, so that's the setup here.
+  </p>
+
+  <h2>Set the site URL and build</h2>
+  <p>
+    S3 and CloudFront don't tell the build where the site lives, so set it
+    yourself. Blume needs the origin for the sitemap, canonical URLs, and Open
+    Graph images:
+  </p>
+  <CodeBlock code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme",
+  deployment: {
+    site: "https://docs.acme.example",
+  },
+});`} lang="ts" title="blume.config.ts" />
+  <p>
+    Leave <code>deployment</code> as a plain object: naming a host adapter
+    switches the build to server output. Then build and preview it the way a
+    static host serves it:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+npx blume preview`}
+    lang="bash"
+  />
+  <p>Here's what lands in <code>dist/</code> and matters on S3:</p>
+  <ul>
+    <li>
+      <code>index.html</code> and a <code>&lt;route&gt;/index.html</code> for
+      every page, plus <code>404.html</code>.
+    </li>
+    <li>
+      A Markdown mirror of each page at <code>&lt;route&gt;.md</code> and{" "}
+      <code>&lt;route&gt;.mdx</code>, with the home page's at{" "}
+      <code>index.md</code>, and <code>llms.txt</code>,{" "}
+      <code>llms-full.txt</code>, <code>robots.txt</code>, and{" "}
+      <code>sitemap.xml</code>.
+    </li>
+    <li>
+      JSON: the search index (<code>blume-search.json</code>), the page index
+      at <code>api/docs/pages.json</code> with a document per page, and{" "}
+      <code>openapi.json</code>.
+    </li>
+    <li>
+      Discovery files in <code>.well-known/</code>. One of them,{" "}
+      <code>api-catalog</code>, has no file extension.
+    </li>
+    <li>Fingerprinted CSS and JavaScript in <code>_astro/</code>.</li>
+    <li>
+      Config for other hosts: <code>_headers</code>, <code>vercel.json</code>,
+      and, when you have redirects, <code>_redirects</code> and{" "}
+      <code>blume-redirects.json</code>. CloudFront reads none of them, so the
+      deploy script applies their rules itself and leaves them out of the
+      bucket.
+    </li>
+  </ul>
+
+  <h2>Request a certificate</h2>
+  <p>
+    CloudFront only uses ACM certificates from <code>us-east-1</code>,
+    whatever region your bucket is in. Request one for the docs domain, then
+    print the DNS record ACM needs to validate it:
+  </p>
+  <CodeBlock code={`CERT_ARN="$(aws acm request-certificate --region us-east-1 \\
+  --domain-name docs.acme.example --validation-method DNS \\
+  --query CertificateArn --output text)"
+
+aws acm describe-certificate --region us-east-1 --certificate-arn "$CERT_ARN" \\
+  --query "Certificate.DomainValidationOptions[0].ResourceRecord"`} lang="bash" />
+  <p>
+    Add that <code>CNAME</code> record at your DNS provider. The certificate
+    is issued once the record resolves, and the stack in the next step waits
+    for it.
+  </p>
+
+  <h2>Create the bucket and distribution</h2>
+  <p>This template creates everything that serves the site:</p>
+  <CodeBlock code={`AWSTemplateFormatVersion: "2010-09-09"
+Description: Static Blume docs in a private S3 bucket behind CloudFront
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: The docs domain, like docs.acme.example.
+  CertificateArn:
+    Type: String
+    Description: An ACM certificate for DomainName, requested in us-east-1.
+    AllowedPattern: "^arn:aws[a-z-]*:acm:us-east-1:[0-9]{12}:certificate/.+$"
+
+Resources:
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "\${AWS::StackName}-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  DirectoryIndexFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub "\${AWS::StackName}-directory-index"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Serve /page from /page/index.html
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+
+          // "/" and "/guides/" are folders: serve their index.html.
+          if (uri.endsWith("/")) {
+            request.uri = uri + "index.html";
+            return request;
+          }
+
+          // "/guides/setup" has no extension in its last segment, so it's a
+          // page: serve /guides/setup/index.html. "/guides/setup.md" and
+          // "/_astro/app.js" are files and pass through unchanged.
+          var last = uri.slice(uri.lastIndexOf("/") + 1);
+          if (last.indexOf(".") === -1) {
+            request.uri = uri + "/index.html";
+          }
+          return request;
+        }
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        HttpVersion: http2and3
+        Aliases:
+          - !Ref DomainName
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Origins:
+          - Id: site
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          # Managed policy CachingOptimized: honors each file's Cache-Control.
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt DirectoryIndexFunction.FunctionMetadata.FunctionARN
+        CacheBehaviors:
+          # Discovery files: served exactly as named, readable cross-origin.
+          - PathPattern: /.well-known/*
+            TargetOriginId: site
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+            # Managed policy SimpleCORS: Access-Control-Allow-Origin: *
+            ResponseHeadersPolicyId: 60669652-455b-4ae9-85a4-c4c02393f86c
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 404
+            ResponsePagePath: /404.html
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "\${SiteBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:\${AWS::Partition}:cloudfront::\${AWS::AccountId}:distribution/\${Distribution}"
+          # Lets S3 answer a missing file with 404 instead of 403.
+          - Sid: AllowCloudFrontList
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:ListBucket
+            Resource: !GetAtt SiteBucket.Arn
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:\${AWS::Partition}:cloudfront::\${AWS::AccountId}:distribution/\${Distribution}"
+
+Outputs:
+  BucketName:
+    Value: !Ref SiteBucket
+  DistributionId:
+    Value: !Ref Distribution
+  DistributionDomain:
+    Value: !GetAtt Distribution.DomainName`} lang="yaml" title="docs-site.yaml" />
+  <p>What each part does:</p>
+  <ul>
+    <li>
+      <strong>SiteBucket</strong> blocks all public access and keeps the{" "}
+      <strong>Bucket owner enforced</strong> ownership setting, which origin
+      access control requires.
+    </li>
+    <li>
+      <strong>OriginAccessControl</strong> signs every request CloudFront
+      sends to S3. Signing always (<code>SigningBehavior: always</code>) also
+      keeps that connection on HTTPS.
+    </li>
+    <li>
+      <strong>DirectoryIndexFunction</strong> runs on each request before the
+      cache lookup. A path whose last segment has no dot is a page, so{" "}
+      <code>/guides/setup</code> becomes{" "}
+      <code>/guides/setup/index.html</code>. Files like <code>/guides/setup.md</code> pass through unchanged.
+    </li>
+    <li>
+      <strong>Distribution</strong> uses the managed{" "}
+      <strong>CachingOptimized</strong> policy: no cookies or query strings in
+      the cache key, compression on, and each file cached for as long as its{" "}
+      <code>Cache-Control</code> header says. The <code>/.well-known/*</code>{" "}
+      behavior skips the function, so the extensionless discovery files are
+      served as named, and adds <code>Access-Control-Allow-Origin: *</code>{" "}
+      through the managed <strong>SimpleCORS</strong> policy, since agent
+      registries read them cross-origin. A missing file serves{" "}
+      <code>404.html</code> with a <code>404</code> status.
+    </li>
+    <li>
+      <strong>SiteBucketPolicy</strong> lets only this distribution read the
+      bucket. The <code>s3:ListBucket</code> statement makes S3 report a
+      missing file as <code>404</code> rather than <code>403</code>, so the
+      error mapping above works. The function rewrites <code>/</code> to{" "}
+      <code>/index.html</code> before a request reaches S3, so the permission
+      never exposes a listing.
+    </li>
+  </ul>
+  <p>
+    Wait for the certificate, deploy the stack in any region, and print its
+    outputs:
+  </p>
+  <CodeBlock code={`aws acm wait certificate-validated --region us-east-1 --certificate-arn "$CERT_ARN"
+
+aws cloudformation deploy --stack-name acme-docs --template-file docs-site.yaml \\
+  --parameter-overrides DomainName=docs.acme.example CertificateArn="$CERT_ARN"
+
+aws cloudformation describe-stacks --stack-name acme-docs \\
+  --query "Stacks[0].Outputs" --output table`} lang="bash" />
+  <p>
+    Point <code>docs.acme.example</code> at the{" "}
+    <code>DistributionDomain</code> output: a <code>CNAME</code> record, or an
+    alias record if the zone is in Route 53.
+  </p>
+
+  <h2>Upload with the right types and caching</h2>
+  <p>
+    S3 serves each file with the <code>Content-Type</code> and{" "}
+    <code>Cache-Control</code> stored when it was uploaded, so the upload is
+    where both get decided. This script does the whole deploy:
+  </p>
+  <CodeBlock code={`#!/usr/bin/env bash
+# Build the docs, upload them to the stack's bucket, and refresh CloudFront.
+set -euo pipefail
+
+STACK="acme-docs"
+output() {
+  aws cloudformation describe-stacks --stack-name "$STACK" \\
+    --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
+}
+BUCKET="$(output BucketName)"
+DISTRIBUTION="$(output DistributionId)"
+
+# Fingerprinted assets never change. Everything else is revalidated by
+# browsers on every visit and kept at the edge until the next deploy.
+IMMUTABLE="public, max-age=31536000, immutable"
+REVALIDATE="public, max-age=0, s-maxage=86400, must-revalidate"
+
+# Files the CLI can't type correctly from their extension: pattern, type.
+TYPED=(
+  "*.md" "text/markdown; charset=utf-8"
+  "*.mdx" "text/markdown; charset=utf-8"
+  "*.txt" "text/plain; charset=utf-8"
+  "*.tar.gz" "application/gzip"
+  ".well-known/api-catalog"
+  'application/linkset+json; profile="https://www.rfc-editor.org/info/rfc9727"'
+)
+# Never uploaded: assets go up separately, and the rest are the host config
+# files Blume writes for other platforms.
+EXCLUDES=(--exclude "_astro/*" --exclude "_headers" --exclude "_redirects"
+  --exclude "vercel.json" --exclude "blume-redirects.json")
+
+npx blume build
+
+# 1. Assets first, so no new page points at a file that isn't there yet.
+aws s3 sync dist/_astro "s3://$BUCKET/_astro" --cache-control "$IMMUTABLE"
+
+# 2. The typed files, one pattern at a time.
+for ((i = 0; i < \${#TYPED[@]}; i += 2)); do
+  aws s3 sync dist "s3://$BUCKET" --delete --exclude "*" \\
+    --include "\${TYPED[i]}" --content-type "\${TYPED[i + 1]}" \\
+    --cache-control "$REVALIDATE"
+  EXCLUDES+=(--exclude "\${TYPED[i]}")
+done
+
+# 3. Everything else, deleting what the build no longer has.
+aws s3 sync dist "s3://$BUCKET" --delete "\${EXCLUDES[@]}" \\
+  --cache-control "$REVALIDATE"
+
+# 4. Clear the edge caches, and wait so a check afterward sees this deploy.
+INVALIDATION="$(aws cloudfront create-invalidation \\
+  --distribution-id "$DISTRIBUTION" --paths "/*" \\
+  --query Invalidation.Id --output text)"
+aws cloudfront wait invalidation-completed \\
+  --distribution-id "$DISTRIBUTION" --id "$INVALIDATION"`} lang="bash" title="deploy.sh" />
+  <h3>Media types</h3>
+  <p>
+    The AWS CLI guesses each file's type from its extension. HTML, CSS,
+    JavaScript, JSON, XML, and images come out right. Markdown doesn't:{" "}
+    <code>.mdx</code> is never recognized, whether <code>.md</code> is
+    depends on the Python the CLI runs on, and neither gets a{" "}
+    <code>charset</code>. Without <code>charset=utf-8</code>, browsers read
+    the raw Markdown as Windows-1252, so any non-ASCII text turns into
+    mojibake. The extensionless <code>api-catalog</code> gets no guess at
+    all.
+  </p>
+  <p>
+    The <code>TYPED</code> list sets those types explicitly. It mirrors the{" "}
+    <code>Content-Type</code> rules in <code>dist/_headers</code>, so if your
+    build's copy lists another one, add a pattern and type for it. See{" "}
+    <a href="/docs/deployment#content-types">Content types</a> for why Blume
+    pins the charset. CloudFront compresses the types on its list, like HTML
+    and JSON, but <code>text/markdown</code> isn't one of them, so the{" "}
+    <code>.md</code> mirrors travel uncompressed.
+  </p>
+  <h3>Caching</h3>
+  <p>
+    Files in <code>_astro/</code> get a new name whenever their content
+    changes, so they're cached for a year as <code>immutable</code>.
+    Everything else gets two lifetimes. <code>max-age=0</code> with{" "}
+    <code>must-revalidate</code> makes browsers check with CloudFront on each
+    visit, which answers <code>304 Not Modified</code> when nothing changed.{" "}
+    <code>s-maxage=86400</code> lets CloudFront keep its copy for a day, and
+    the invalidation at the end of every deploy clears it as soon as the new
+    files are in. A day is the ceiling if an invalidation is ever missed, not
+    the normal delay.
+  </p>
+  <h3>Order and deletes</h3>
+  <p>
+    Assets go up first, so no new page points at a file that isn't there
+    yet. <code>--delete</code> removes pages you deleted, but it skips{" "}
+    <code>_astro/</code> on purpose: a tab opened before the deploy may still
+    load a script chunk it hasn't fetched yet, like the search dialog's. Prune
+    old assets now and then, well after a deploy:
+  </p>
+  <CodeBlock code={`BUCKET="$(aws cloudformation describe-stacks --stack-name acme-docs \\
+  --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue" --output text)"
+aws s3 sync dist/_astro "s3://$BUCKET/_astro" --delete`} lang="bash" />
+  <p>
+    To run the deploy from CI, the credentials need{" "}
+    <code>s3:ListBucket</code>, <code>s3:PutObject</code>, and{" "}
+    <code>s3:DeleteObject</code> on the bucket,{" "}
+    <code>cloudfront:CreateInvalidation</code> and{" "}
+    <code>cloudfront:GetInvalidation</code> on the distribution, and{" "}
+    <code>cloudformation:DescribeStacks</code> for the outputs.
+  </p>
+
+  <h2>Check the live site</h2>
+  <p>
+    This script requests the URLs that break first on S3 and prints one line
+    per check, then exits non-zero if any failed:
+  </p>
+  <CodeBlock code={`#!/usr/bin/env bash
+# Check a deployed Blume site's routing, media types, and caching.
+# Usage: ./check-site.sh https://docs.acme.example /guides/setup
+set -uo pipefail
+
+SITE="\${1%/}"
+PAGE="\${2:?pass a page path, like /guides/setup}"
+FAILED=0
+
+# check PATH STATUS HEADER EXPECTED
+# Passes when the response has STATUS and HEADER contains EXPECTED.
+check() {
+  local response status value
+  response="$(curl -s -o /dev/null -D - -H "Origin: https://example.com" \\
+    "$SITE$1" | tr -d '\\r')"
+  status="$(printf '%s\\n' "$response" | awk 'NR == 1 { print $2 }')"
+  value="$(printf '%s\\n' "$response" | grep -i "^$3:" | head -n 1 |
+    cut -d ' ' -f 2-)"
+  if [ "$status" = "$2" ] && [[ "$value" == *"$4"* ]]; then
+    echo "ok    $1 -> $status, $3: $value"
+  else
+    echo "FAIL  $1 -> $status (want $2), $3: $value (want $4)"
+    FAILED=1
+  fi
+}
+
+check "$PAGE" 200 content-type "text/html"
+check "$PAGE" 200 cache-control "max-age=0"
+check "$PAGE/" 200 content-type "text/html"
+check "$PAGE.md" 200 content-type "text/markdown; charset=utf-8"
+check "/llms.txt" 200 content-type "text/plain; charset=utf-8"
+check "/api/docs/pages.json" 200 content-type "application/json"
+check "/sitemap.xml" 200 content-type "xml"
+check "/.well-known/api-catalog" 200 content-type "application/linkset+json"
+check "/.well-known/api-catalog" 200 access-control-allow-origin "*"
+check "/no-such-page-$RANDOM" 404 content-type "text/html"
+
+ASSET="$(curl -s "$SITE$PAGE" | grep -o '/_astro/[^"]*\\.css' | head -n 1)"
+check "$ASSET" 200 cache-control "immutable"
+
+# The page was fetched above, so this request should come from the edge.
+check "$PAGE" 200 x-cache "Hit from cloudfront"
+
+exit "$FAILED"`} lang="bash" title="check-site.sh" />
+  <p>Run it against the domain and a page a few levels deep:</p>
+  <CodeBlock
+    code="./check-site.sh https://docs.acme.example /guides/setup"
+    lang="bash"
+  />
+  <p>
+    Before DNS resolves, pass the distribution's <code>cloudfront.net</code>{" "}
+    domain instead. It checks that:
+  </p>
+  <ul>
+    <li>
+      A deep link loads as HTML without redirecting, with a trailing slash
+      too, and browsers are told to revalidate it.
+    </li>
+    <li>
+      The page's <code>.md</code> mirror and <code>llms.txt</code> carry{" "}
+      <code>charset=utf-8</code>.
+    </li>
+    <li>
+      The JSON page index, the sitemap, and the API catalog have their media
+      types, and the catalog answers cross-origin requests.
+    </li>
+    <li>
+      A URL with no page behind it returns <code>404</code> with the HTML 404
+      page.
+    </li>
+    <li>
+      The page's stylesheet is <code>immutable</code>, and a repeat request
+      for the page comes from the edge. Each edge location fills its own
+      cache, so if that last check reports a miss, run the script again.
+    </li>
+  </ul>
+  <p>
+    Add it to the end of your deploy, so a bad upload fails the pipeline
+    instead of waiting for a reader to find it.
+  </p>
+
+  <h2>What needs a server</h2>
+  <p>
+    Everything Blume prerenders works from S3: pages, the built-in search
+    index, the Markdown mirrors, <code>llms.txt</code>, the JSON page index
+    and page documents, Open Graph images, and the sitemap. What doesn't is
+    anything that answers a request at runtime:
+  </p>
+  <ul>
+    <li>
+      The <a href="/docs/configuration/assistant">assistant</a>'s generated
+      endpoint. Point it at a backend you run with an{" "}
+      <a href="/docs/configuration/assistant#external-endpoint">
+        external endpoint
+      </a>{" "}
+      and the site stays static.
+    </li>
+    <li>The <a href="/docs/discoverability/mcp">MCP server</a>.</li>
+    <li>The API playground's built-in proxy.</li>
+    <li>Server-side search providers, like Mixedbread.</li>
+    <li>
+      The JSON API's live search at <code>/api/docs/search</code>.
+    </li>
+    <li>
+      <code>Accept: text/markdown</code> negotiation at a page's own URL.
+      Agents fetch the <code>.md</code> URL instead, which each docs page
+      links from its head.
+    </li>
+  </ul>
+  <p>
+    A static build with any of the first four turned on stops with{" "}
+    <code>BLUME_SERVER_FEATURE_REQUIRED</code>. To keep them, build with the{" "}
+    <code>node()</code> adapter and run the server in a container, as{" "}
+    <a href="/guides/self-host-documentation-docker">
+      Self-host documentation with Docker and Node.js
+    </a>{" "}
+    shows. <a href="/guides/static-vs-server-documentation">
+      Static or server-rendered documentation
+    </a>{" "}
+    helps you decide.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>Every page returns 403</h3>
+  <p>
+    S3 refused CloudFront's request. Check that the bucket policy's{" "}
+    <code>AWS:SourceArn</code> names this distribution, that the origin uses
+    the origin access control, and that the deploy uploaded to the stack's
+    bucket. If you removed the <code>s3:ListBucket</code> statement, a
+    missing file also shows up as <code>403</code>.
+  </p>
+  <h3>The home page loads, but other pages 404</h3>
+  <p>
+    Look for the page's <code>index.html</code> in the bucket, like{" "}
+    <code>guides/setup/index.html</code>. If it's there, the function isn't
+    running: check that it's associated with the default behavior as a{" "}
+    <code>viewer-request</code> function, and that it's published, which{" "}
+    <code>AutoPublish: true</code> does in the template.
+  </p>
+  <h3>Markdown shows garbled characters</h3>
+  <p>
+    The <code>.md</code> files went up without their type, usually from a
+    plain <code>aws s3 sync</code>. Check with{" "}
+    <code>curl -sI https://docs.acme.example/guides/setup.md</code>, then run{" "}
+    <code>deploy.sh</code> again: every build rewrites every file, so the
+    sync uploads them all with the right metadata.
+  </p>
+  <h3>A deploy doesn't show up</h3>
+  <p>
+    CloudFront is still serving its copy. Check that the invalidation ran and
+    completed; the script waits for it. Browsers revalidate each visit, so
+    readers see the new version as soon as the edge does.
+  </p>
+  <h3>Old URLs return 200 instead of a redirect</h3>
+  <p>
+    A static build serves each exact redirect as a small HTML page that sends
+    the browser on, and pattern redirects get no page, so they 404 here. So
+    do a moved page's <code>.md</code> and <code>.mdx</code> copies: their
+    redirect pages sit at paths like <code>old.md/index.html</code>, and the
+    function passes a path with a dot through unchanged. CloudFront reads
+    neither <code>_redirects</code> nor <code>vercel.json</code>. For real
+    status codes, return them from the viewer-request function, using the
+    pairs in <code>blume-redirects.json</code>, which lists the Markdown
+    copies' redirects too.
+  </p>
+  <h3>A page with a dot in its URL 404s</h3>
+  <p>
+    The function treats a last segment with a dot as a file, so a page built
+    from <code>v1.2.md</code> at <code>/v1.2</code> is never rewritten.
+    Rename the file, like <code>v1-2.md</code>, and add a redirect from the
+    old URL.
+  </p>
+  <h3>The sitemap is missing</h3>
+  <p>
+    The build summary shows <code>no (set deployment.site)</code>: the build
+    had no site URL. Set <code>deployment.site</code> as above and deploy
+    again.
+  </p>
+</GuidePage>

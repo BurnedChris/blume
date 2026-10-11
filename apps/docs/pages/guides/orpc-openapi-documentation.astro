@@ -1,0 +1,703 @@
+---
+// Publish API docs from oRPC contracts: checked against the OpenAPI reference
+// and deployment docs, the spec parser and operation routes
+// (openapi/parse.ts, openapi/model.ts), the parameter table and Try it panel
+// (components/openapi/ParametersTable.astro, Playground.astro), and the dev
+// watcher (cli/commands/dev.ts) on main; the oRPC side against the oRPC 1
+// docs (v1.orpc.dev) and the oRPC 2 beta docs (orpc.dev). Ran in a scratch
+// project on Node 24 with @orpc/* 1.15.4, zod 4.6.5, and tsx 4.23.15: the
+// API's TypeScript type-checks with tsc, the server answered the REST, RPC, and
+// CORS preflight requests shown, the script wrote OpenAPI 3.1.1, and Blume's
+// own parseSpec and extractOperations read that file into the routes in the
+// tables, before and after the contract change. The oRPC 2 notes were checked
+// by generating with @orpc/* 2.0.0-beta.40. blume dev and blume build were
+// not run on the project. Not yet run end to end. Review: moved Blume out of
+// the API's package into its own docs-site/ project, to match the other
+// framework guides. Later: dropped the script's description-copying loop
+// (Blume reads a parameter schema's description, helpers.ts
+// parameterDescription), the dev restart (dev watches local specs), and the
+// 3.1-only note (3.2 renders); checked in source, not re-run.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("orpc-openapi-documentation")}>
+  <p>
+    To publish REST documentation from oRPC contracts, give each procedure a
+    method, path, and summary with <code>.route()</code>, generate an OpenAPI
+    3.1 document from the contract with oRPC's <code>OpenAPIGenerator</code>{" "}
+    and its Zod converter, and point Blume's <code>openapi()</code> reference at
+    the file. Blume turns each operation into its own page, with parameter and
+    schema tables, code samples, and a Try it panel.
+  </p>
+  <p>
+    By the end, you have a small oRPC server for a fictional Acme Messages API,
+    a script that writes <code>openapi.json</code> from its contract, and a docs
+    site that renders the reference at <code>/api</code> beside the pages you
+    write. The last step changes the contract and follows the change through to
+    the published pages.
+  </p>
+  <p>
+    The guide uses contract-first oRPC with Zod 4. A router built with{" "}
+    <code>os</code> works the same way, since the generator accepts a router
+    too. If one reference page served by your API is enough, you may not need a
+    docs site at all: oRPC's <code>OpenAPIReferencePlugin</code> serves a
+    Scalar UI and the spec straight from the server. Blume is for when the
+    reference belongs in a documentation site, with guides, search, and{" "}
+    <code>llms.txt</code> around it.
+  </p>
+  <Callout type="info">
+    orpc.dev now documents oRPC 2, which is in beta. This guide uses oRPC 1, the
+    current <code>latest</code> release on npm, documented at{" "}
+    <a href="https://v1.orpc.dev/docs/openapi/openapi-specification">v1.orpc.dev</a>.
+    oRPC 2 moves route metadata to <code>.meta(openapi(...))</code> and writes
+    OpenAPI 3.2 by default, which Blume also renders; the last troubleshooting
+    entry covers what to change.
+  </Callout>
+
+  <h2>RPC paths and documented paths</h2>
+  <p>
+    oRPC can serve the same router two ways, and only one of them belongs in
+    your docs.
+  </p>
+  <ul>
+    <li>
+      <strong><code>RPCHandler</code></strong> speaks oRPC's own protocol, for
+      oRPC's typed client. Its paths come from the router's keys, like{" "}
+      <code>/rpc/messages/send</code>, and it wraps bodies in its own envelope
+      (<code>{'{"json": ...}'}</code>). oRPC's docs warn against calling it by
+      hand, and it never appears in the OpenAPI document.
+    </li>
+    <li>
+      <strong><code>OpenAPIHandler</code></strong> serves plain REST at the
+      method and path you give each procedure, like <code>POST /v1/messages</code>,
+      with plain JSON bodies. This is the API the generated document describes.
+    </li>
+  </ul>
+  <p>Three things follow from that:</p>
+  <ul>
+    <li>
+      A path in the spec is the procedure's <code>path</code>. The prefix you
+      mount the handler at (<code>/v1</code> here) goes in the spec's{" "}
+      <code>servers</code> URL, not in every path.
+    </li>
+    <li>
+      A procedure with no <code>path</code> is still documented, as a{" "}
+      <code>POST</code> to a path built from its router keys, like{" "}
+      <code>/messages/send</code>, with the operation ID{" "}
+      <code>messages.send</code>. Give every public procedure an explicit
+      method and path, so your REST URLs are a decision rather than a side
+      effect of how you nested the router.
+    </li>
+    <li>
+      With oRPC's default input structure, fields named in the path become path
+      parameters. The rest become query parameters on a <code>GET</code> and
+      the JSON body on a <code>POST</code>.
+    </li>
+  </ul>
+
+  <h2>Set up the project</h2>
+  <p>
+    Start a project for the API, and install oRPC, Zod, and tsx to run the
+    TypeScript:
+  </p>
+  <CodeBlock
+    code={`mkdir acme-messages-api && cd acme-messages-api
+npm init -y
+npm pkg set type=module
+npm install @orpc/contract@1.15.4 @orpc/server@1.15.4 @orpc/openapi@1.15.4 @orpc/zod@1.15.4 zod@4.6.5
+npm install --save-dev tsx@4.23.15`}
+    lang="bash"
+  />
+  <p>
+    In an existing oRPC project, add only what's missing, usually{" "}
+    <code>@orpc/openapi</code> and <code>@orpc/zod</code>. Then add two
+    scripts to <code>package.json</code>, one to run the API and one to write
+    its spec:
+  </p>
+  <CodeBlock
+    code={`{
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "openapi": "tsx scripts/openapi.ts"
+  }
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <p>
+    The docs get a Blume project of their own in <code>docs-site/</code>, with
+    its own <code>package.json</code>. That keeps Blume's dependencies out of
+    the API's install, keeps its <code>dist/</code> apart from any build of the
+    API, and lets your docs host build the docs without the API. Scaffold it
+    now, since the spec script writes into it:
+  </p>
+  <CodeBlock
+    code="npx blume init docs-site --template docs --yes"
+    lang="bash"
+  />
+  <p>
+    That writes <code>docs-site/</code> with a <code>blume.config.ts</code>, a{" "}
+    <code>docs/index.mdx</code> home page, and a <code>package.json</code>{" "}
+    whose <code>dev</code> and <code>build</code> scripts run Blume, then
+    installs Blume there.
+  </p>
+
+  <h2>Add route metadata to the contract</h2>
+  <p>
+    The contract is where the documentation comes from. Each procedure gets its
+    REST shape and its prose from <code>.route()</code>, and each field gets its
+    description and example from the Zod schema:
+  </p>
+  <CodeBlock
+    code={`import { oc } from "@orpc/contract";
+import * as z from "zod";
+
+const Channel = z.enum(["email", "sms"]).describe("How to deliver the message.");
+
+export const Message = z.object({
+  id: z.string().meta({ examples: ["msg_8f2k"] }),
+  status: z.enum(["queued", "sent", "delivered", "failed"]),
+  channel: Channel,
+});
+
+const SendMessageInput = z.object({
+  channel: Channel,
+  to: z.string().meta({
+    description: "An email address, or a phone number in E.164 format.",
+    examples: ["ada@example.com"],
+  }),
+  template: z.string().meta({
+    description: "The ID of the template to send.",
+    examples: ["welcome"],
+  }),
+  variables: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe("Values for the template's variables."),
+});
+
+const MessageId = z.object({
+  id: z.string().meta({
+    description: "The message ID, from the response to Send a message.",
+    examples: ["msg_8f2k"],
+  }),
+});
+
+export const contract = oc.tag("Messages").router({
+  messages: {
+    send: oc
+      .route({
+        method: "POST",
+        path: "/messages",
+        operationId: "sendMessage",
+        summary: "Send a message",
+        description:
+          "Queues an email or SMS for delivery and returns its ID right away.",
+        successStatus: 202,
+        successDescription: "The message is queued.",
+      })
+      .input(SendMessageInput)
+      .output(Message),
+    get: oc
+      .route({
+        method: "GET",
+        path: "/messages/{id}",
+        operationId: "getMessage",
+        summary: "Get a message",
+        description: "Returns a message and its delivery status.",
+      })
+      .errors({ NOT_FOUND: { message: "No message has that ID." } })
+      .input(MessageId)
+      .output(Message),
+  },
+});`}
+    lang="ts"
+    title="src/contract.ts"
+  />
+  <p>Here's where each piece ends up on the docs site:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In the contract</th>
+        <th scope="col">On the Blume page</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>method</code> and <code>path</code></td>
+        <td>The endpoint on the page and in search, and what Try it calls</td>
+      </tr>
+      <tr>
+        <td><code>operationId</code></td>
+        <td>
+          The page's URL: <code>sendMessage</code> becomes{" "}
+          <code>send-message</code>
+        </td>
+      </tr>
+      <tr>
+        <td><code>oc.tag("Messages")</code></td>
+        <td>The sidebar group, and the <code>messages</code> segment of the URL</td>
+      </tr>
+      <tr>
+        <td><code>summary</code></td>
+        <td>The page title and sidebar label</td>
+      </tr>
+      <tr>
+        <td><code>description</code></td>
+        <td>The page's introduction and its search result description</td>
+      </tr>
+      <tr>
+        <td><code>successStatus</code>, <code>successDescription</code></td>
+        <td>The success response: <code>202</code>, "The message is queued."</td>
+      </tr>
+      <tr>
+        <td><code>.errors()</code></td>
+        <td>An error response, here a <code>404</code> with oRPC's error body</td>
+      </tr>
+      <tr>
+        <td><code>.describe()</code> and <code>.meta()</code></td>
+        <td>
+          Field descriptions in the schema tables, and the values Try it starts
+          with
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    <code>.describe()</code> sets only a description. <code>.meta()</code> sets
+    a description and examples together, which is worth doing for any field a
+    reader has to fill in.
+  </p>
+
+  <h2>Implement and serve it</h2>
+  <p>
+    <code>implement()</code> turns the contract into a builder for handlers, and
+    TypeScript holds the router to it. The middleware rejects requests without
+    a bearer token, so the API enforces what the docs will say about
+    authentication:
+  </p>
+  <CodeBlock
+    code={`import type { IncomingHttpHeaders } from "node:http";
+import { implement, ORPCError } from "@orpc/server";
+import type * as z from "zod";
+import { contract, type Message } from "./contract.ts";
+
+const os = implement(contract).$context<{ headers: IncomingHttpHeaders }>();
+
+const authed = os.use(({ context, next }) => {
+  if (!context.headers.authorization?.startsWith("Bearer ")) {
+    throw new ORPCError("UNAUTHORIZED");
+  }
+  return next();
+});
+
+const messages = new Map<string, z.infer<typeof Message>>();
+
+export const router = authed.router({
+  messages: {
+    send: authed.messages.send.handler(({ input }) => {
+      const message = {
+        id: \`msg_\${crypto.randomUUID().slice(0, 8)}\`,
+        status: "queued" as const,
+        channel: input.channel,
+      };
+      messages.set(message.id, message);
+      return message;
+    }),
+    get: authed.messages.get.handler(({ input, errors }) => {
+      const message = messages.get(input.id);
+      if (!message) {
+        throw errors.NOT_FOUND();
+      }
+      return message;
+    }),
+  },
+});`}
+    lang="ts"
+    title="src/router.ts"
+  />
+  <p>
+    The server mounts the REST handler at <code>/v1</code> and the RPC handler
+    at <code>/rpc</code>. The CORS plugin lets the docs dev server, on port
+    4321, call the API from Try it later on:
+  </p>
+  <CodeBlock
+    code={`import { createServer } from "node:http";
+import { OpenAPIHandler } from "@orpc/openapi/node";
+import { RPCHandler } from "@orpc/server/node";
+import { CORSPlugin } from "@orpc/server/plugins";
+import { router } from "./router.ts";
+
+const rest = new OpenAPIHandler(router, {
+  plugins: [new CORSPlugin({ origin: "http://localhost:4321" })],
+});
+const rpc = new RPCHandler(router);
+
+const server = createServer(async (req, res) => {
+  const context = { headers: req.headers };
+
+  const restResult = await rest.handle(req, res, { prefix: "/v1", context });
+  if (restResult.matched) {
+    return;
+  }
+
+  const rpcResult = await rpc.handle(req, res, { prefix: "/rpc", context });
+  if (rpcResult.matched) {
+    return;
+  }
+
+  res.statusCode = 404;
+  res.end("Not found");
+});
+
+server.listen(3000, () => {
+  console.log("Listening on http://localhost:3000");
+});`}
+    lang="ts"
+    title="src/server.ts"
+  />
+  <p>
+    Run <code>npm run dev</code>, then call the same procedure both ways from
+    another terminal:
+  </p>
+  <CodeBlock
+    code={`curl -X POST http://localhost:3000/v1/messages \\
+  -H "Authorization: Bearer test" \\
+  -H "Content-Type: application/json" \\
+  -d '{"channel":"email","to":"ada@example.com","template":"welcome"}'
+
+curl -X POST http://localhost:3000/rpc/messages/send \\
+  -H "Authorization: Bearer test" \\
+  -H "Content-Type: application/json" \\
+  -d '{"json":{"channel":"email","to":"ada@example.com","template":"welcome"}}'`}
+    lang="bash"
+  />
+  <p>
+    The first answers <code>202</code> with the message as plain JSON, like{" "}
+    <code>{'{"id":"msg_5815f40e","status":"queued","channel":"email"}'}</code>.
+    The second answers <code>200</code> with the same message inside oRPC's{" "}
+    <code>json</code> envelope. Both run the same handler, but only the first is
+    the API you're documenting. Leave out the token and the REST call answers{" "}
+    <code>401</code>.
+  </p>
+
+  <h2>Generate the OpenAPI document</h2>
+  <p>
+    The generator reads the contract, not the server, so this script never
+    starts the API or touches its handlers:
+  </p>
+  <CodeBlock
+    code={`import { writeFile } from "node:fs/promises";
+import { OpenAPIGenerator } from "@orpc/openapi";
+import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
+import { contract } from "../src/contract.ts";
+
+const generator = new OpenAPIGenerator({
+  schemaConverters: [new ZodToJsonSchemaConverter()],
+});
+
+const spec = await generator.generate(contract, {
+  info: {
+    title: "Acme Messages API",
+    version: "1.0.0",
+    description: "Send transactional email and SMS.",
+  },
+  servers: [{ url: "https://api.acme.example/v1" }],
+  tags: [
+    {
+      name: "Messages",
+      description: "Send a message and check whether it arrived.",
+    },
+  ],
+  components: {
+    securitySchemes: {
+      bearerAuth: {
+        type: "http",
+        scheme: "bearer",
+        description: "An API key, sent as a bearer token.",
+      },
+    },
+  },
+  security: [{ bearerAuth: [] }],
+});
+
+await writeFile("docs-site/openapi.json", \`\${JSON.stringify(spec, null, 2)}\\n\`);
+console.log("Wrote docs-site/openapi.json");`}
+    lang="ts"
+    title="scripts/openapi.ts"
+  />
+  <p>What each part does:</p>
+  <ul>
+    <li>
+      <strong><code>schemaConverters</code></strong> turns Zod schemas into JSON
+      Schema. Zod 4 uses the converter from <code>@orpc/zod/zod4</code>; the
+      one from <code>@orpc/zod</code> is for Zod 3. Valibot and ArkType have
+      their own.
+    </li>
+    <li>
+      <strong>Everything else passed to <code>generate()</code></strong> is
+      copied into the document. The server URL carries the <code>/v1</code>{" "}
+      prefix, the tag's description becomes the paragraph under its section on
+      the reference's overview page, and the root <code>security</code> puts
+      an Authorization section on every operation.
+    </li>
+    <li>
+      <strong>Path and query fields</strong> keep their descriptions on the
+      parameter's schema, where oRPC writes them. Blume's parameter tables and
+      Try it panel read a description from there when the parameter has none
+      of its own, so the <code>id</code> parameter on Get a message shows its
+      description without any post-processing.
+    </li>
+  </ul>
+  <p>Run it:</p>
+  <CodeBlock code="npm run openapi" lang="bash" />
+  <p>
+    The file starts <code>"openapi": "3.1.1"</code>, the version oRPC 1 writes.
+    Blume reads 3.1 and 3.2 documents as written, and upgrades Swagger 2.0 and
+    OpenAPI 3.0 to 3.1 as it reads them.
+  </p>
+
+  <h2>Render the reference with Blume</h2>
+  <p>
+    Replace <code>docs-site/blume.config.ts</code>. It mounts the reference at{" "}
+    <code>/api</code> and adds header tabs, since a reference never adds a tab
+    on its own:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  navigation: {
+    tabs: [
+      { label: "Docs", path: "/" },
+      { label: "API reference", path: "/api" },
+    ],
+  },
+  reference: [openapi({ route: "/api", spec: "./openapi.json" })],
+});`}
+    lang="ts"
+    title="docs-site/blume.config.ts"
+  />
+  <p>Replace the scaffolded home page with one that points into the reference:</p>
+  <CodeBlock
+    code={`---
+title: Acme Messages API
+description: Send transactional email and SMS from your app with the Acme Messages API.
+---
+
+The Acme Messages API sends transactional email and SMS. Every request needs
+an API key, sent as a bearer token.
+
+Start with [Send a message](/api/messages/send-message), then check whether it
+arrived with [Get a message](/api/messages/get-message).`}
+    lang="mdx"
+    title="docs-site/docs/index.mdx"
+  />
+  <p>Start the docs:</p>
+  <CodeBlock
+    code={`cd docs-site
+npm run dev`}
+    lang="bash"
+  />
+  <p>
+    The API reference tab opens an overview at <code>/api</code>, with the
+    API's version, its server URL, and a Messages section listing both
+    operations. Each has its own page:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Procedure</th>
+        <th scope="col">Endpoint</th>
+        <th scope="col">Page</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>messages.send</code></td>
+        <td><code>POST /messages</code></td>
+        <td><code>/api/messages/send-message</code></td>
+      </tr>
+      <tr>
+        <td><code>messages.get</code></td>
+        <td><code>GET /messages/&#123;id&#125;</code></td>
+        <td><code>/api/messages/get-message</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    To try a request against your local server, keep the API's{" "}
+    <code>npm run dev</code> running in another terminal, open Try it on Send
+    a message, and enter{" "}
+    <code>http://localhost:3000/v1</code> as the Custom base URL. Any token
+    works, since the example only checks that one is there. The CORS plugin
+    allows the dev server's origin. For your production docs, add their origin
+    to the plugin or turn on Blume's{" "}
+    <a href="/docs/references/openapi#cors-and-the-proxy">playground proxy</a>.
+  </p>
+  <p>
+    For the rest of the reference, like choosing code sample languages and
+    adding hand-written pages beside the generated ones, see{" "}
+    <a href="/guides/openapi-documentation-website">Generate API docs from an OpenAPI spec</a>.
+    To publish, commit <code>docs-site/openapi.json</code> and point your host
+    at the <code>docs-site</code> folder, with <code>npm run build</code> as
+    the build command and <code>dist</code> as the output; the{" "}
+    <a href="/docs/deployment">deployment docs</a> cover each host.
+  </p>
+
+  <h2>Change the contract, update the docs</h2>
+  <p>
+    Say the API gains a way to cancel a queued message. The change starts in
+    the contract. Add a status to <code>Message</code>:
+  </p>
+  <CodeBlock
+    code={`status: z.enum(["queued", "sent", "delivered", "failed", "canceled"]),`}
+    lang="ts"
+    title="src/contract.ts"
+  />
+  <p>Then add the procedure after <code>get</code>, inside <code>messages</code>:</p>
+  <CodeBlock
+    code={`    cancel: oc
+      .route({
+        method: "POST",
+        path: "/messages/{id}/cancel",
+        operationId: "cancelMessage",
+        summary: "Cancel a message",
+        description: "Stops a queued message before it's sent.",
+      })
+      .errors({ NOT_FOUND: { message: "No message has that ID." } })
+      .input(MessageId)
+      .output(Message),`}
+    lang="ts"
+    title="src/contract.ts"
+  />
+  <p>
+    TypeScript now fails on <code>router.ts</code> with "Property 'cancel' is
+    missing", because the router no longer matches the contract. Add the
+    handler after <code>get</code>:
+  </p>
+  <CodeBlock
+    code={`    cancel: authed.messages.cancel.handler(({ input, errors }) => {
+      const message = messages.get(input.id);
+      if (!message) {
+        throw errors.NOT_FOUND();
+      }
+      message.status = "canceled";
+      return message;
+    }),`}
+    lang="ts"
+    title="src/router.ts"
+  />
+  <p>
+    Regenerate the spec from the API project. <code>blume dev</code> watches{" "}
+    <code>docs-site/openapi.json</code>, so a running docs dev server picks up
+    the new file without a restart:
+  </p>
+  <CodeBlock code="npm run openapi" lang="bash" />
+  <p>
+    Two things change on the site. A Cancel a message page appears at{" "}
+    <code>/api/messages/cancel-message</code>, in the sidebar and in search.
+    And <code>canceled</code> joins the allowed values for <code>status</code>{" "}
+    on every page that returns a message, because each operation's schema is
+    generated from the one <code>Message</code> schema.
+  </p>
+  <p>
+    Renames need more care. A page's URL comes from its tag and operation ID, so
+    renaming <code>sendMessage</code> or the <code>Messages</code> tag moves the
+    page. Add a redirect for the old URL:
+  </p>
+  <CodeBlock
+    code={`redirects: [
+  { from: "/api/messages/send-message", to: "/api/messages/create-message" },
+],`}
+    lang="ts"
+    title="docs-site/blume.config.ts"
+  />
+  <p>
+    Commit <code>docs-site/openapi.json</code> with the contract change. Then
+    every pull request that changes the contract shows the change to the
+    public API as a diff a reviewer can read. A CI step that runs{" "}
+    <code>npm run openapi</code> and then{" "}
+    <code>git diff --exit-code docs-site/openapi.json</code> fails when
+    someone forgets to regenerate. <a href="/guides/openapi-documentation-ci">Keep API documentation in sync with backend changes in CI</a>{" "}
+    builds that into a full workflow.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>Pages land under /api/operations with dotted names</h3>
+  <p>
+    A procedure with no <code>operationId</code> gets oRPC's default, its
+    router keys joined with dots, like <code>messages.send</code>. With no tag,
+    Blume files it under an Operations group, so the page ends up at{" "}
+    <code>/api/operations/messages-send</code> with <code>POST /messages/send</code>{" "}
+    as its title. Give each procedure an <code>operationId</code> and a{" "}
+    <code>summary</code>, and tag the router with <code>oc.tag()</code>.
+  </p>
+  <h3>Requests return 404 Not found</h3>
+  <p>
+    The request reached the server but no handler matched. Check that the base
+    URL includes the prefix the REST handler is mounted at, so{" "}
+    <code>http://localhost:3000/v1</code> rather than{" "}
+    <code>http://localhost:3000</code>, and that you're calling the documented
+    path. The RPC path, like{" "}
+    <code>/v1/messages/send</code>, doesn't exist on the REST handler once a
+    procedure has its own <code>path</code>.
+  </p>
+  <h3>Send fails in the browser but curl works</h3>
+  <p>
+    That's CORS. The browser only lets the docs page call your API when the API
+    allows the docs origin. Add the origin to <code>CORSPlugin</code>, which
+    accepts an array, or use the playground proxy.{" "}
+    <a href="/guides/api-documentation-cors-errors">Fix CORS errors in an API documentation playground</a>{" "}
+    walks through both.
+  </p>
+  <h3>The build fails with BLUME_OPENAPI_UNAVAILABLE</h3>
+  <p>
+    Blume couldn't read <code>docs-site/openapi.json</code>. Either{" "}
+    <code>spec</code> points somewhere else (it's relative to{" "}
+    <code>docs-site/</code>), or the file was never generated or committed, so
+    the docs host's checkout doesn't have it. Run <code>npm run openapi</code>{" "}
+    and commit the file. In <code>blume dev</code> the same problem is only a
+    warning, and the reference is left out.
+  </p>
+  <h3>An error response is described only as "404"</h3>
+  <p>
+    oRPC labels each error response with its status code. To write your own
+    description, extend the generated operation with <code>spec</code> in the
+    procedure's <code>.route()</code>:
+  </p>
+  <CodeBlock
+    code={`spec: (operation) => ({
+  ...operation,
+  responses: {
+    ...operation.responses,
+    404: {
+      ...operation.responses?.[404],
+      description: "No message has that ID.",
+    },
+  },
+}),`}
+    lang="ts"
+  />
+  <h3>The spec says "openapi": "3.2.0"</h3>
+  <p>
+    You're on oRPC 2. Its generator writes OpenAPI 3.2 unless told otherwise,
+    and Blume renders 3.2 as written, so the spec itself needs no change. If
+    Blume logs <code>BLUME_OPENAPI_UNSUPPORTED</code>, the spec uses a 3.2
+    addition it doesn't render yet (<code>additionalOperations</code> or an{" "}
+    <code>in: querystring</code> parameter); pass <code>version: "3.1.1"</code>{" "}
+    to <code>generate()</code> to get a 3.1 document instead. The code in this
+    guide needs these oRPC 2 changes: route metadata moves from{" "}
+    <code>.route(...)</code> to <code>.meta(openapi(...))</code>, with{" "}
+    <code>openapi</code> imported from <code>@orpc/openapi</code>; the
+    generator's option is <code>converters</code>, with{" "}
+    <code>ZodToJsonSchemaConverter</code> imported from <code>@orpc/zod</code>;
+    and document fields like <code>info</code> and <code>servers</code> go
+    inside <code>base</code>.
+  </p>
+</GuidePage>

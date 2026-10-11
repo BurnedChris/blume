@@ -5,6 +5,8 @@ description: Cards, steps, tabs, accordions, badges, code groups, frames, trees,
 
 Blume ships an accessible, themeable component set available in any `.mdx` page with **no imports**. Each one is shown below with a live preview and its source. Components are vanilla and React-free; React switches on only when your project uses it — any `.tsx` or `.jsx` file in the project, a React [island](/docs/content/islands), [`<Component>`](#component) example, or [component override](/docs/configuration/customization) — or when the [assistant](/docs/configuration/assistant) is enabled.
 
+A component ignores props it doesn't take. Most show their children, so other docs tools' spellings can render empty: VitePress's `<Badge type="tip" text="beta" />` is a Badge with no children, which shows nothing. Blume warns about a childless component given props it doesn't take as `BLUME_UNKNOWN_PROP`, with the props it does take. Write the content between the tags instead: `<Badge>beta</Badge>`.
+
 ## Card and CardGroup
 
 Cards link to a destination with an icon, title, and short blurb. Group them with `CardGroup` for a responsive grid. Reach for them on landing pages, section indexes, and “next steps” — anywhere you’re guiding the reader onward.
@@ -31,7 +33,7 @@ Cards link to a destination with an icon, title, and short blurb. Group them wit
 
 `Card` takes `title`, an optional `href` (omit it for a non-clickable card), and an `icon` from Blume's built-in icon set. `CardGroup` takes `cols` (default `2`).
 
-A card also takes `img`, an image across its top (or beside the text from the `sm` breakpoint up, with `horizontal`); `cta`, a call-to-action line in the accent color beneath the text; `arrow`, an arrow after the title and the CTA (shown by default only for external links); `type`, which tints the card and picks a matching icon the way a callout does (`note`, `info`, `tip`, `check`, `warning`, or `danger`); and `color`, any CSS color for the icon.
+A card also takes `img`, an image across its top (or beside the text from the `sm` breakpoint up, with `horizontal`), given like a Markdown image's path: a file next to the page (`./cover.png`), a path under `public/`, or a URL; `cta`, a call-to-action line in the accent color beneath the text; `arrow`, an arrow after the title and the CTA (shown by default only for external links); `type`, which tints the card and picks a matching icon the way a callout does (`note`, `info`, `tip`, `check`, `warning`, or `danger`); and `color`, any CSS color for the icon.
 
 ## Steps
 
@@ -88,6 +90,52 @@ The active tab is written to the URL hash, so a link opens on it; pass `hash={fa
   <Tab title="Windows">Use winget to install the toolchain.</Tab>
 </Tabs>
 ```
+
+## View
+
+Write one page for several audiences, such as readers of different programming languages or frameworks, with `<View>` blocks. Each distinct `title` becomes an option in a picker above the page's content, and only the chosen view's blocks show. The table of contents follows: headings inside hidden views drop out of it. Prose outside any `<View>` shows in every view, and blocks sharing a title show and hide together, so a page can alternate shared and view-specific sections. `icon` shows beside the view's name in the picker.
+
+````mdx lineNumbers
+Everyone reads this paragraph.
+
+<View title="JavaScript" icon="braces">
+
+## Install the client
+
+```bash
+npm install @acme/commerce
+```
+
+</View>
+
+<View title="Python" icon="terminal">
+
+## Install the client
+
+```bash
+pip install acme-commerce
+```
+
+</View>
+````
+
+The first view shows until the reader picks another. Blume remembers that pick across pages written in views, and writes it to the URL as `?view=Python`, so a link opens on the same view. A link to a heading inside a view opens that view. Use `<View>` when most of the page changes with the choice, and [Tabs](#tabs) when only one part of the page does. The agent-facing Markdown includes every view, each under its name.
+
+## Callout
+
+`<Callout>` is the component behind [callout directives](/docs/content/syntax#callouts): `:::warning[Heads up]` renders `<Callout type="warning" title="Heads up">`. Write the component itself when a callout needs its own icon or color, which a directive can't set.
+
+<Callout type="tip" title="Ship it" icon="rocket">
+  Run `blume build` before you deploy.
+</Callout>
+
+```astro
+<Callout type="tip" title="Ship it" icon="rocket">
+  Run `blume build` before you deploy.
+</Callout>
+```
+
+`type` sets the tint and the default icon: `note`, `info` (the default), `tip`, `success` (or `check`), `warning`, or `danger`. The aliases `caution`, `error`, `important`, and `warn` work only in the `:::` form. `title` adds a bold first line. `icon` replaces the type's icon and takes the same inputs as [`<Icon>`](#icon): a Lucide name, an image path or URL, or an inline SVG. `color`, any CSS color, replaces the type's tint: the border, the icon, and the body text take that color over the page background.
 
 ## Badge
 
@@ -195,7 +243,7 @@ Illustrate a project or folder layout. Wrap a normal Markdown list and Blume sty
 
 ## Accordion
 
-Stack related collapsibles in a single bordered container with dividers between them — FAQs, optional steps, or long examples. Each child is an `AccordionItem` (`title`, optional `icon`, `description`, `defaultOpen`). For a single standalone disclosure, use [Expandable](#expandable).
+Stack related collapsibles in a single bordered container with dividers between them — FAQs, optional steps, or long examples. Each child is an `AccordionItem` (`title`, optional `icon`, `description`, `defaultOpen`). The `title` renders inline Markdown, so code spans, emphasis, and links in it show as they would in a sentence; raw HTML in it shows as text. For a single standalone disclosure, use [Expandable](#expandable).
 
 <Accordion>
   <AccordionItem title="Does it support MDX?">
@@ -219,7 +267,7 @@ Stack related collapsibles in a single bordered container with dividers between 
 
 ## Expandable
 
-A lightweight inline disclosure for nested detail — expanding a field's sub-properties or an optional aside. `title` labels the toggle (defaults to “Show more”); set `defaultOpen` to start expanded.
+A lightweight inline disclosure for nested detail — expanding a field's sub-properties or an optional aside. `title` labels the toggle (defaults to “Show more”) and renders inline Markdown, as an accordion item's does; set `defaultOpen` to start expanded.
 
 <Expandable title="Show advanced options">
   These settings are optional and rarely need changing.
@@ -265,7 +313,7 @@ Lay cards or blocks out in a responsive grid of equal columns that reflows on mo
 
 ## CodeGroup
 
-Group several code blocks into one tabbed switcher — a tab per language or file. The tab label is each block's title (the text after the language), and the group's copy button sits in the tab bar and copies the block that is showing. Add `dropdown` to switch with a menu instead of a tab bar.
+Group several code blocks into one tabbed switcher — a tab per language or file. The tab label is each block's title (the text after the language), or its language's name (`TypeScript`, `Python`) for a block without one, and the group's copy button sits in the tab bar and copies the block that is showing. Add `dropdown` to switch with a menu instead of a tab bar.
 
 <CodeGroup>
 
@@ -337,7 +385,7 @@ Wrap an image or any visual in a centered, bordered frame with an optional `capt
 
 ## YouTube
 
-Embed a YouTube video in a responsive, privacy-friendly (`youtube-nocookie.com`) 16:9 frame that ships no client JavaScript. Pass a video `id` or a full `url`, plus an optional `title` (for accessibility) and a `start` time in seconds.
+Embed a YouTube video in a responsive, privacy-friendly (`youtube-nocookie.com`) 16:9 frame that ships no client JavaScript. Pass a video `id` or a full `url`, plus an optional `title` (for accessibility) and a `start` time in seconds. A playlist `url` (`youtube.com/playlist?list=…` or `youtube.com/embed/videoseries?list=…`) embeds the whole playlist.
 
 <YouTube id="aqz-KE-bpKQ" title="Big Buck Bunny" />
 
@@ -438,7 +486,7 @@ A clickable preview that leads with a visual — an icon or image — above a ti
 
 ## Prompt
 
-A single row with a label and a copy button. The `description` (Markdown) is the visible label; the body is the prompt itself — hidden, and copied to the clipboard as Markdown, with its links, lists, and code intact, when the **Copy prompt** button is pressed. `actions` controls the buttons (e.g. `["copy", "cursor"]`).
+A single row with a label and a copy button. The `description` (Markdown) is the visible label; the body is the prompt itself — hidden, and copied to the clipboard as Markdown, with its links, lists, and code intact, when the **Copy prompt** button is pressed. Its punctuation copies as you typed it: straight quotes, `--`, and `...` stay as written, though prose elsewhere on the page shows them as curly quotes, dashes, and ellipses. `actions` controls the buttons (e.g. `["copy", "cursor"]`).
 
 <Prompt
   description="Ask the model to **document** an endpoint."
@@ -514,7 +562,7 @@ A **Prop / Type** grid where each row expands to reveal its description and deta
 
 ### Auto type table
 
-Generate a type table from a TypeScript type so the docs stay in sync with the source. Point `AutoTypeTable` at a file with `path` (resolved from your project root) and a type `name`. Descriptions come from JSDoc comments, defaults from `@default` tags, and optional properties (`?`) are marked accordingly.
+Generate a type table from a TypeScript type so the docs stay in sync with the source. Point `AutoTypeTable` at a file with `path` (resolved from your project root, the folder you run `blume` in) and a type `name`. Descriptions come from JSDoc comments, defaults from `@default` tags, and optional properties (`?`) are marked accordingly.
 
 ```astro
 <AutoTypeTable path="./src/button.ts" name="ButtonProps" />
@@ -655,7 +703,7 @@ The card reads the instance from [`github.host`](/docs/configuration#github-ente
 
 ## Component
 
-`Component` renders an example file from your project's `examples/` directory as a live preview alongside its highlighted source, in tabs. Point it at a file with `path` — its location under `examples/`, without the extension (so `examples/counter.tsx` is `path="counter"`). React, Vue, Svelte, and Astro examples are all supported; framework examples hydrate, Astro ones render statically. It keeps the preview and the code in sync from a single file.
+`Component` renders an example file from your project's `examples/` directory as a live preview alongside its highlighted source, in tabs. Point it at a file with `path` — its location under `examples/`, without the extension (so `examples/counter.tsx` is `path="counter"`). React, Vue, Svelte, and Astro examples are all supported; framework examples hydrate, Astro ones render statically. It keeps the preview and the code in sync from a single file. A `path` that names no example renders a "No example found" box instead, and `blume dev`, `blume build`, and [`blume doctor`](/docs/cli/doctor) warn about it (`BLUME_EXAMPLE_NOT_FOUND`) at its line.
 
 The preview renders in an isolated frame that the docs styles never reach — no prose margins, typography, or theme chrome bleed into your component. The frame gets Tailwind (preflight + utilities scanned from your project and your examples directory), Blume's design tokens so classes like `bg-background` follow the site palette by default, and it follows the site's light/dark toggle live. The pane sizes itself to the rendered example — and keeps tracking it if the example grows or shrinks after load — with the Preview and Code tabs sharing one height so toggling them never shifts the page.
 
@@ -750,6 +798,8 @@ import CodeBlock from "blume/components/content/CodeBlock.astro";
 ```
 
 `title` sets the header label — a filename, say — which otherwise shows the language, and `icons={false}` hides the language's brand icon, as [`markdown.code.icons`](/docs/content/syntax#code-blocks) does for fences.
+
+Without `code`, `CodeBlock` renders its children as written, so a fenced block wrapped in `<CodeBlock>…</CodeBlock>` (the way Fern and Mintlify write code) shows as that fence. `title` and the other props don't apply to it then: give the fence its [title](/docs/content/syntax#code-blocks) after the language instead.
 
 To highlight to an HTML string yourself (e.g. inside your own component), import the underlying helper from `blume/markdown`:
 

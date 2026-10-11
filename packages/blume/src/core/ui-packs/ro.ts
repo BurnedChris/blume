@@ -34,6 +34,7 @@ export const ro: UIStringsOverride = {
     error: "Ne pare rău, ceva nu a mers bine.",
     explainCode: "Explică acest cod.",
     label: "Pune o întrebare",
+    open: "Deschide asistentul",
     placeholder: "Pune o întrebare…",
     rateLimited:
       "Ai pus multe întrebări. Încearcă din nou peste câteva minute.",
@@ -49,6 +50,7 @@ export const ro: UIStringsOverride = {
   banner: { dismiss: "Închide anunțul" },
   changelog: {
     description: "Actualizări ale produsului și note de lansare.",
+    empty: "Încă nu există intrări în jurnalul de modificări.",
     title: "Jurnal de modificări",
   },
   consent: {
@@ -70,6 +72,7 @@ export const ro: UIStringsOverride = {
     preview: "Previzualizare",
     prop: "Proprietate",
     selectTab: "Selectează fila",
+    selectView: "Selectează vizualizarea",
     showLess: "Afișează mai puțin",
     showMore: "Afișează mai mult",
     stars: "Stele",

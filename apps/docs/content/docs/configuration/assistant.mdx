@@ -1,6 +1,6 @@
 ---
 title: Assistant
-description: An in-page assistant grounded in your docs — suggested questions, custom instructions, retrieval sizing, provider adapters from the Vercel AI Gateway to any OpenAI-compatible endpoint, and the server output it needs.
+description: An in-page assistant grounded in your docs — suggested questions, custom instructions, retrieval sizing, provider adapters for OpenAI, Anthropic, Gemini, Grok, the Vercel AI Gateway, and any OpenAI-compatible endpoint, and the server output it needs.
 ---
 
 Add an assistant that answers reader questions in an in-page chat panel, backed by a streaming server endpoint and the [AI SDK](https://ai-sdk.dev). It's opt-in, and static docs stay fully static until you turn it on:
@@ -75,7 +75,7 @@ Your text is **appended to** the built-in instructions rather than replacing the
 
 The assistant is **grounded in your docs**. For each question it retrieves the most relevant pages — using the same lexical [Orama](/docs/configuration/search) index that powers on-page search — and injects them into the model's system prompt, so answers come from your content instead of the model's own knowledge. The assistant is told to answer only from the retrieved pages, to say when something isn't covered, and to cite the pages it drew from.
 
-The page the reader is currently on is added to the context first and used to scope retrieval to that page's language — and, on a [versioned](/docs/content/versioning) site, to its docs version — so answers stay relevant to where they are in the docs. Retrieval runs at request time from a snapshot baked into the build, so it works regardless of your [search](/docs/configuration/search) provider — even with `search: false` — and needs no configuration.
+The page the reader is currently on is added to the context first and used to scope retrieval to that page's language — and, on a [versioned](/docs/content/versioning) site, to its docs version — so answers stay relevant to where they are in the docs. A question from outside the docs, such as a landing page, keeps to the language the URL's locale prefix names (`/ja`), or to the default language. Retrieval runs at request time from a snapshot baked into the build, so it works regardless of your [search](/docs/configuration/search) provider — even with `search: false` — and needs no configuration.
 
 Grounding is on for every adapter except **[Inkeep](#inkeep)**, which runs its own retrieval over the content you've indexed in its dashboard.
 
@@ -83,13 +83,13 @@ Grounding is on for every adapter except **[Inkeep](#inkeep)**, which runs its o
 
 The retrieved pages are a head start. The assistant can also look things up itself: it has a `search_docs` tool that searches your docs, and a `read_page` tool that reads a whole page, for when an excerpt stops short of the answer. It can search, read a page or two, search again, and then answer, all within one question. Tool calls run on your server against the same snapshot as the grounding, keep to the reader's language and docs version, and never reach the reader; they only see the answer.
 
-The tools are on by default for the [Vercel AI Gateway](#vercel-ai-gateway), [OpenRouter](#openrouter), and [LLMGateway](#llmgateway) adapters, whose models support tool calling. They're off for [OpenAI-compatible endpoints](#openai-compatible-endpoints), since a self-hosted model may not. Set `tools` to change either default:
+The tools are on by default for every adapter whose models support tool calling. They're off for [OpenAI-compatible endpoints](#openai-compatible-endpoints), since a self-hosted model may not. Set `tools` to change either default:
 
 ```ts blume.config.ts lineNumbers
 ai: {
   assistant: {
     enabled: true,
-    provider: openaiCompatible({ baseUrl, name, model, apiKeyEnv }),
+    provider: openai({ baseUrl, model, apiKeyEnv }),
     tools: true, // this model supports tool calling
   },
 }
@@ -124,6 +124,8 @@ The three aren't interchangeable. `contextBudget` caps the whole injection, `exc
 
 The defaults suit a hosted model. Lower them when you're serving from your own hardware and time-to-first-token matters more than recall; answers stay grounded either way, and the assistant is told to say when something isn't covered rather than fill the gap.
 
+On your own hardware, also size the model's context window for the whole prompt, not only the excerpts: the conversation so far adds as many as 24,000 characters, and with `tools` on, one `read_page` result as many as 20,000, about 5,000 tokens on its own. Ollama, for one, defaults to a 4k-token window on smaller GPUs, and a prompt that outgrows it doesn't fail: Ollama drops the start of the prompt, where the instructions and excerpts are, and the model answers without your docs.
+
 ## External endpoint
 
 Already have an API backend for AI? Point the panel at it and keep the docs build static:
@@ -146,6 +148,8 @@ Blume sends the same `POST` body as its built-in route:
 }
 ```
 
+`messages` is the conversation so far, ending with the new question. The built-in route takes at most 40 messages and 24,000 characters of them as JSON, so once a conversation outgrows either, the panel sends its latest turns that fit and drops the oldest.
+
 Return a successful response whose body is a plain UTF-8 text stream. If the endpoint is on another origin, allow the docs origin with CORS: accept `OPTIONS` and `POST`, permit the `content-type` request header, and return the CORS headers on both the preflight and streamed response. With `endpoint` set, Blume generates the chat UI but no server route, grounding snapshot, provider dependency, or provider-secret warning; your backend owns retrieval, authentication, rate limiting, model access, and citations. An adapter set alongside it is ignored.
 
 ## Cross-origin callers
@@ -161,7 +165,7 @@ ai: {
 }
 ```
 
-The route then answers the browser's `OPTIONS` preflight and names a listed origin on every response — the streamed answer and the error statuses alike, so the caller can tell a rejected body from a provider failure. Origins that aren't listed get no header and stay subject to the browser's same-origin rule. Each entry is reduced to its origin, so `https://www.example.com/docs/` and `https://www.example.com` mean the same thing. To let any page call the route, list `"*"` instead of origins.
+The route then answers the browser's `OPTIONS` preflight and names a listed origin on every response — the streamed answer and the error statuses alike, so the caller can tell a rejected body from a provider failure. Those responses expose `Retry-After` too, so after a [rate limit's](/docs/configuration/rate-limiting) `429` the caller can read how many seconds to wait. Origins that aren't listed get no header and stay subject to the browser's same-origin rule. Each entry is reduced to its origin, so `https://www.example.com/docs/` and `https://www.example.com` mean the same thing. To let any page call the route, list `"*"` instead of origins.
 
 The caller sends the same `POST` body the [external endpoint](#external-endpoint) contract describes and reads back the same text stream. Send it as JSON with a `content-type: application/json` header:
 
@@ -199,13 +203,13 @@ A static build with the assistant enabled and no external `endpoint` fails fast 
 
 ```ts blume.config.ts lineNumbers
 import { defineConfig } from "blume";
-import { openrouter } from "blume/ai";
+import { anthropic } from "blume/ai";
 
 export default defineConfig({
   ai: {
     assistant: {
       enabled: true,
-      provider: openrouter({ model: "anthropic/claude-sonnet-4-5" }),
+      provider: anthropic({ model: "claude-sonnet-5" }),
     },
   },
 });
@@ -213,15 +217,119 @@ export default defineConfig({
 
 | Adapter | Answers with | API key env var | SDK to install |
 | --- | --- | --- | --- |
+| [`openai()`](#openai) | an [OpenAI](https://platform.openai.com) model, or any [OpenAI-compatible endpoint](#openai-compatible-endpoints) | `OPENAI_API_KEY` | `@ai-sdk/openai` (`@ai-sdk/openai-compatible` with a `baseUrl`) |
+| [`anthropic()`](#anthropic) | a [Claude](https://platform.claude.com) model | `ANTHROPIC_API_KEY` | `@ai-sdk/anthropic` |
+| [`gemini()`](#gemini) | a [Gemini](https://ai.google.dev) model | `GEMINI_API_KEY` | `@ai-sdk/google` |
+| [`grok()`](#grok) | an [xAI](https://x.ai/api) Grok model | `XAI_API_KEY` | `@ai-sdk/xai` |
 | [`gateway()`](#vercel-ai-gateway) (default) | a `provider/model` string via the Vercel AI Gateway | `AI_GATEWAY_API_KEY` | none — ships with Blume |
 | [`openrouter()`](#openrouter) | any [OpenRouter](https://openrouter.ai) model | `OPENROUTER_API_KEY` | `@openrouter/ai-sdk-provider` |
 | [`llmgateway()`](#llmgateway) | any [LLMGateway](https://llmgateway.io) model | `LLMGATEWAY_API_KEY` | `@ai-sdk/openai-compatible` |
 | [`inkeep()`](#inkeep) | an [Inkeep](https://inkeep.com) QA model | `INKEEP_API_KEY` | `@ai-sdk/openai-compatible` |
-| [`openaiCompatible()`](#openai-compatible-endpoints) | whatever your endpoint serves | the `apiKeyEnv` you name | `@ai-sdk/openai-compatible` |
 
-The SDKs are optional peer dependencies, so add the one your adapter needs to your project (`npm install @openrouter/ai-sdk-provider`, say). If it's missing, `blume build` stops before Vite runs, naming the package and the command that installs it, and [`blume doctor`](/docs/cli/doctor) reports it too.
+`openai()`, `anthropic()`, `gemini()`, and `grok()` call the provider's own API with your key — nothing sits in between. The SDKs are optional peer dependencies, so add the one your adapter needs to your project (`npm install @ai-sdk/anthropic`, say). If it's missing, `blume build` stops before Vite runs, naming the package and the command that installs it, and [`blume doctor`](/docs/cli/doctor) reports it too.
 
 The descriptor an adapter returns is plain data — its kind, its options, the env vars it reads, and the SDK it needs — so the generated route (and the [ejected](/docs/configuration/customization#eject) one) inlines it as literals and imports the provider SDK by name. Nothing reads `blume.config.ts` at request time, and no secret is ever written into a route: adapters take the **name** of the env var holding the key, and the route reads the value through Astro's [`getSecret()`](https://docs.astro.build/en/guides/environment-variables/#retrieving-secrets-programmatically), so each deployment adapter supplies it its own way — environment variables on Node, Vercel, and Netlify, and the Worker's [bindings](https://docs.astro.build/en/guides/integrations-guide/cloudflare/#environment-variables-and-secrets) on Cloudflare.
+
+### OpenAI
+
+Any [OpenAI](https://platform.openai.com) model, called directly through OpenAI's own AI SDK provider:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { openai } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: openai({ model: "gpt-5.5" }),
+    },
+  },
+});
+```
+
+#### OpenAI-compatible endpoints
+
+Any endpoint that speaks the OpenAI API — a self-hosted model, an internal gateway — works through `openai()` too: add its `baseUrl`, and usually `apiKeyEnv` for the env var holding its key (it defaults to `OPENAI_API_KEY`). `name` is the provider name the AI SDK reports, and the key the endpoint reads [`providerOptions`](#options-every-adapter-takes) under; it defaults to `openai-compatible`:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { openai } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: openai({
+        baseUrl: "https://my-gateway.example.com/v1",
+        apiKeyEnv: "MY_GATEWAY_API_KEY",
+        model: "gpt-4o",
+        name: "my-gateway",
+      }),
+    },
+  },
+});
+```
+
+With a `baseUrl`, the route calls the endpoint's Chat Completions API through `@ai-sdk/openai-compatible`, so install that package instead of `@ai-sdk/openai`: most compatible endpoints don't serve OpenAI's Responses API. The [docs tools](#searching-and-reading-pages) are off by default, since a self-hosted model may not support tool calling.
+
+:::note
+`openaiCompatible()` from earlier Blume versions still works: it's the same adapter as `openai()` with a `baseUrl`.
+:::
+
+### Anthropic
+
+Any [Claude](https://platform.claude.com) model, called directly through Anthropic's AI SDK provider:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { anthropic } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: anthropic({ model: "claude-sonnet-5" }),
+    },
+  },
+});
+```
+
+### Gemini
+
+Any [Gemini](https://ai.google.dev) model, called directly through Google's AI SDK provider. The key is an API key from Google AI Studio:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { gemini } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: gemini({ model: "gemini-3.5-flash" }),
+    },
+  },
+});
+```
+
+### Grok
+
+Any [xAI](https://x.ai/api) Grok model, called directly through xAI's AI SDK provider:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { grok } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: grok({ model: "grok-4.7" }),
+    },
+  },
+});
+```
 
 ### Vercel AI Gateway
 
@@ -304,29 +412,6 @@ export default defineConfig({
 
 `baseUrl` overrides the preset endpoint (`https://api.inkeep.com/v1`).
 
-### OpenAI-compatible endpoints
-
-Any endpoint that speaks the OpenAI API works through `openaiCompatible()` — supply its `baseUrl`, the `model` it serves, and the env var holding its key. A generic endpoint has no preset for any of these, so all three are required; `name` is the provider name the AI SDK reports and defaults to `openai-compatible`:
-
-```ts blume.config.ts lineNumbers
-import { defineConfig } from "blume";
-import { openaiCompatible } from "blume/ai";
-
-export default defineConfig({
-  ai: {
-    assistant: {
-      enabled: true,
-      provider: openaiCompatible({
-        baseUrl: "https://my-gateway.example.com/v1",
-        apiKeyEnv: "MY_GATEWAY_API_KEY",
-        model: "gpt-4o",
-        name: "my-gateway",
-      }),
-    },
-  },
-});
-```
-
 ### Options every adapter takes
 
 **`apiKeyEnv`** points an adapter at a different env var than its default — `gateway({ apiKeyEnv: "DOCS_GATEWAY_KEY" })` reads that variable instead of `AI_GATEWAY_API_KEY`, and the missing-secret warning at `blume dev`/`build` checks it too. Until the key is set, the deployed route answers `503` with a message naming the variable. The route reads a request body only up to 64 KB and answers anything larger with `413`.
@@ -334,7 +419,7 @@ export default defineConfig({
 **`headers`** sends static request headers with every call — a caller-identifying header for a shared backend, say, so its own observability or rate limiting can tell your docs apart from other traffic:
 
 ```ts blume.config.ts lineNumbers
-provider: openaiCompatible({
+provider: openai({
   baseUrl: "https://llm.internal.example.com/v1",
   apiKeyEnv: "INTERNAL_LLM_API_KEY",
   model: "gpt-4o",
@@ -353,7 +438,7 @@ provider: gateway({
 }),
 ```
 
-Blume maps only the options it names (`model`, `reasoning`, `apiKeyEnv`, `headers`) and forwards `providerOptions` verbatim, so it has to be JSON — it's inlined into the route — and it has to use the key the underlying provider expects (`openai` for an OpenAI model behind the gateway, `openrouter` on OpenRouter). Enabling the assistant also turns on React for the in-page island — see [Customization](/docs/configuration/customization#interactive-islands).
+Blume maps only the options it names (`model`, `reasoning`, `apiKeyEnv`, `headers`) and forwards `providerOptions` verbatim, so it has to be JSON — it's inlined into the route — and it has to use the key the underlying provider expects (`openai` for `openai()` or an OpenAI model behind the gateway, `anthropic` for `anthropic()`, `google` for `gemini()`, `xai` for `grok()`, `openrouter` on OpenRouter, and the adapter's `name` on an OpenAI-compatible endpoint). Enabling the assistant also turns on React for the in-page island — see [Customization](/docs/configuration/customization#interactive-islands).
 
 ## Reasoning
 
@@ -367,10 +452,13 @@ Each adapter sends the level as its backend's own reasoning control, which is wh
 
 | Adapter | What the level becomes |
 | --- | --- |
+| `openai()` | OpenAI's `reasoning_effort`. With a `baseUrl`, it's sent as `reasoning_effort` in the request, so the endpoint has to accept that parameter. |
+| `anthropic()` | Claude's thinking: an effort level on models with adaptive thinking, a thinking budget on older ones, and thinking off for `"none"`. |
+| `gemini()` | Gemini's thinking level, or a thinking budget on models that take one. |
+| `grok()` | xAI's reasoning effort, on the models that offer one. |
 | `gateway()` | The AI SDK's [`reasoning`](https://ai-sdk.dev/docs/ai-sdk-core/reasoning) call option, which the gateway maps to the model's own setting — OpenAI's `reasoning_effort`, for example. |
 | `openrouter()` | OpenRouter's `reasoning.effort`, set on the model. Its provider ignores the AI SDK's call option, so the level is placed where OpenRouter reads it. |
 | `llmgateway()` | `reasoning_effort` in the request, through the AI SDK's call option. |
-| `openaiCompatible()` | `reasoning_effort` in the request, so the endpoint has to accept that parameter. |
 | `inkeep()` | Not available. Inkeep runs its own QA pipeline with no reasoning control, so the adapter has no `reasoning` option and setting one is a config error. |
 
 The model has to support the level you pick: OpenAI rejects a level a model doesn't offer (`"none"` and `"xhigh"` exist only on some), so check the model's documentation before setting one. Leave it unset to keep the model's default. Like [retrieval size](#retrieval-size), it trades thoroughness for time-to-first-token, and answers stay grounded either way.

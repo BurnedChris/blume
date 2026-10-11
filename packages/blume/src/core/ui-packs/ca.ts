@@ -34,6 +34,7 @@ export const ca: UIStringsOverride = {
     error: "Ho sentim, alguna cosa ha anat malament.",
     explainCode: "Explica aquest codi.",
     label: "Fes una pregunta",
+    open: "Obre l'assistent",
     placeholder: "Fes una pregunta…",
     rateLimited:
       "Has fet moltes preguntes. Torna-ho a provar d'aquí a uns minuts.",
@@ -50,6 +51,7 @@ export const ca: UIStringsOverride = {
   banner: { dismiss: "Tanca l'anunci" },
   changelog: {
     description: "Actualitzacions del producte i notes de la versió.",
+    empty: "Encara no hi ha entrades al registre de canvis.",
     title: "Registre de canvis",
   },
   consent: {
@@ -71,6 +73,7 @@ export const ca: UIStringsOverride = {
     preview: "Previsualització",
     prop: "Propietat",
     selectTab: "Selecciona una pestanya",
+    selectView: "Selecciona una vista",
     showLess: "Mostra'n menys",
     showMore: "Mostra'n més",
     stars: "Estrelles",

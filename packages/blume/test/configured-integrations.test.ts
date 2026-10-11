@@ -543,6 +543,63 @@ it("passes invalid integration elements through to Astro validation", async () =
   // Budget for a killed-and-retried 90s build attempt.
 }, 240_000);
 
+it("renders agents.mcp.clients in the built Connect to MCP menu", async () => {
+  const root = await writeProject({
+    "blume.config.ts": `
+import { node } from "blume/deploy";
+
+export default {
+  agents: {
+    mcp: {
+      clients: [
+        {
+          command: "copilot mcp add --transport http {name} {url}",
+          label: "Copy Copilot CLI command",
+        },
+        "vscode",
+      ],
+      enabled: true,
+    },
+  },
+  deployment: node({ site: "https://docs.example.com" }),
+  ${offlineFontsSource},
+};
+`,
+    "docs/index.md": "# Home\n",
+  });
+
+  const built = await runIsolatedBuild(root);
+  expect(built.exitCode, built.output).toBe(0);
+  const html = await readFile(
+    join(root, ".blume-verify/dist/client/index.html"),
+    "utf-8"
+  );
+  // The menu's rows in order: the server URL, the configured clients, and a
+  // rule where the commands to copy give way to the install links.
+  const menu = html.slice(
+    html.indexOf("data-mcp-copy-url"),
+    html.indexOf("</details>", html.indexOf("data-mcp-copy-url"))
+  );
+  expect(
+    [...menu.matchAll(/<hr\b|data-mcp-(?:copy-[a-z]+|cursor|vscode)\b/gu)].map(
+      ([row]) => row
+    )
+  ).toStrictEqual([
+    "data-mcp-copy-url",
+    "data-mcp-copy-command",
+    "<hr",
+    "data-mcp-vscode",
+  ]);
+  // The custom row carries its command for the script to fill in, under its
+  // label, beside the server the script fills it with.
+  expect(menu).toContain(
+    'data-mcp-copy-command="copilot mcp add --transport http {name} {url}"'
+  );
+  expect(menu).toContain("Copy Copilot CLI command");
+  expect(html).toContain('data-mcp-url="https://docs.example.com/mcp"');
+  // Budget for a killed-and-retried 90s build attempt.
+}, 240_000);
+
 it("serves a renamed content folder in dev without restarting the server", async () => {
   // Astro's glob watcher misses directory renames. Rather than restart the
   // dev server, the regenerate loop asks Astro's content layer to re-sync
@@ -613,6 +670,47 @@ it("negotiates Markdown for content routes under deployment.base in dev", async 
     expect(response.headers.get("content-type")).toContain("text/markdown");
     expect(response.headers.get("vary")).toContain("Accept");
     expect(await response.text()).toContain("probe body");
+  } catch (error) {
+    failure = error;
+  } finally {
+    await stopDev(proc);
+  }
+  const [stdout, stderr] = await drainOutput(output);
+  if (failure) {
+    throw new Error(`${String(failure)}\n${stdout}\n${stderr}`);
+  }
+}, 180_000);
+
+it("answers trailing slashes the way a static host does in dev", async () => {
+  // Astro's own dev middleware, which `trailingSlash: "never"` makes 404 a
+  // slashed URL, runs ahead of every integration middleware; the redirect
+  // has to come first, base and all.
+  const root = await writeProject({
+    "blume.config.ts": `export default { deployment: { base: "/sub" }, ${offlineFontsSource} };\n`,
+    "docs/guide.md": "---\ntitle: Guide\n---\n# Guide\n",
+    "docs/index.md": "# Home\n",
+    "public/demo/index.html": "<p>demo folder</p>\n",
+  });
+  const { output, port, proc } = await startDevReady(root);
+  const get = (path: string) =>
+    fetch(`http://127.0.0.1:${port}${path}`, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(60_000),
+    });
+  let failure: unknown;
+  try {
+    const page = await get("/sub/guide/?tab=1");
+    expect(page.status).toBe(301);
+    expect(page.headers.get("location")).toBe("/sub/guide?tab=1");
+    const slashless = await get("/sub/guide");
+    expect(slashless.status).toBe(200);
+    // A folder of HTML in `public/` is served at its slashed URL.
+    const folder = await get("/sub/demo");
+    expect(folder.status).toBe(301);
+    expect(folder.headers.get("location")).toBe("/sub/demo/");
+    const index = await get("/sub/demo/");
+    expect(index.status).toBe(200);
+    expect(await index.text()).toContain("demo folder");
   } catch (error) {
     failure = error;
   } finally {

@@ -1,0 +1,851 @@
+---
+// Migrate from Nextra: checked against the migration docs, the blume-migrate
+// skill (references/nextra.md), `blume migrate` (migrate/migrate.ts), and
+// Blume's navigation (core/navigation.ts: page hoisting per display mode),
+// islands (astro/islands.ts), frontmatter, i18n, redirect, and code-fence
+// (markdown/code-title.ts) source on main. Nextra facts checked against
+// Nextra's docs and its published packages 2.13.4, 3.3.1, and 4.6.1.
+// Ran: the example site below with `next build` on Nextra 4.6.1 (Next.js
+// 16.3.6) and a Nextra 3.3.1 copy (Next.js 14.2.35, pages/ + guides.mdx),
+// read the sidebar order and page titles from the built HTML, and ran the
+// URL-listing command against both. Loaded the migrated Blume version
+// through Blume's config, content, meta, and navigation modules, in flat and
+// group display. Nextra 2 was checked against its package only.
+// Reviewer: checked `blume migrate` (cli/commands/migrate.ts,
+// migrate/migrate.ts), the dot parser's default-locale suffix
+// (core/i18n.ts), inline `$$` math, and the vercel() deploy against the
+// deployment docs. `blume migrate`, `blume build`, and the Vercel deploy were
+// not run. Not yet run end to end. Rechecked for the fence keywords Blume
+// now keeps out of a code block's title (`showLineNumbers`).
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("migrate-from-nextra")}>
+  <p>
+    To migrate from Nextra to Blume, run{" "}
+    <code>npx blume migrate nextra --claude</code> in your Nextra project. A
+    coding agent turns every <code>_meta</code> file into a{" "}
+    <code>meta.ts</code>, writes page titles into frontmatter, swaps Nextra's
+    components for Blume's, and carries your redirects over. Your MDX stays
+    MDX. What needs your review is nested sidebar order, your own React
+    components, and old URLs.
+  </p>
+  <p>
+    By the end, your docs build with <code>blume build</code> instead of{" "}
+    <code>next build</code>, keep their URLs, and deploy on Vercel.
+    The walkthrough follows a small Nextra 4 site with nested ordering and a
+    custom React component, and notes where Nextra 2 and 3 differ.
+  </p>
+  <p>
+    This moves the docs, not the Next.js app around them. Other routes,
+    middleware, and sign-in stay in Next.js. If your docs must render inside
+    that app, behind its session or in its React layout, Nextra is the better
+    fit, and <a href="/compare/nextra">Blume vs Nextra</a> covers that
+    trade-off.
+  </p>
+
+  <h2>What carries over</h2>
+  <p>Your MDX pages move with targeted rewrites. The rest maps like this:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In Nextra</th>
+        <th scope="col">In Blume</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>theme.config.jsx</code>, or the props in <code>app/layout.jsx</code></td>
+        <td><code>blume.config.ts</code></td>
+      </tr>
+      <tr>
+        <td><code>_meta</code> files</td>
+        <td>
+          A <code>meta.ts</code> per folder, plus <code>sidebar.label</code> and{" "}
+          <code>sidebar.hidden</code> in page frontmatter
+        </td>
+      </tr>
+      <tr>
+        <td>Components from <code>nextra/components</code></td>
+        <td>Blume's built-in components, with no imports</td>
+      </tr>
+      <tr>
+        <td>Your React components</td>
+        <td><a href="/docs/content/islands">Islands</a></td>
+      </tr>
+      <tr>
+        <td><code>redirects()</code> in <code>next.config</code></td>
+        <td><code>redirects</code>, patterns included</td>
+      </tr>
+      <tr>
+        <td><code>public/</code></td>
+        <td><code>public/</code>, at the same URLs</td>
+      </tr>
+      <tr>
+        <td>Built-in search, or Pagefind after <code>next build</code></td>
+        <td>Built-in search, with no extra build step</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    What doesn't carry over: <code>_meta</code> separators and menus, footer
+    content, <code>&lt;Bleed&gt;</code>, most per-page <code>theme</code>{" "}
+    switches, and anything the Next.js app does besides serving pages.
+  </p>
+
+  <h2>Before you start</h2>
+  <p>
+    The agent edits your repository in place, so start on a new branch with a
+    clean working tree:
+  </p>
+  <CodeBlock code="git switch -c migrate-to-blume" lang="bash" />
+  <p>
+    Nextra 4 was close to a rewrite, so your version decides where the config,
+    pages, and navigation files live. Check what your lockfile installs:
+  </p>
+  <CodeBlock code="npm ls nextra nextra-theme-docs next --depth=0" lang="bash" />
+  <table>
+    <thead>
+      <tr>
+        <th scope="col"></th>
+        <th scope="col">Nextra 2</th>
+        <th scope="col">Nextra 3</th>
+        <th scope="col">Nextra 4</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <th scope="row">Router</th>
+        <td>Pages Router</td>
+        <td>Pages Router</td>
+        <td>App Router</td>
+      </tr>
+      <tr>
+        <th scope="row">Pages</th>
+        <td><code>pages/</code></td>
+        <td><code>pages/</code></td>
+        <td><code>content/</code>, or <code>app/**/page.mdx</code></td>
+      </tr>
+      <tr>
+        <th scope="row">Navigation</th>
+        <td><code>_meta.json</code></td>
+        <td><code>_meta.js</code> or <code>.ts</code></td>
+        <td>
+          <code>_meta.js</code> or <code>.ts</code>, or one{" "}
+          <code>_meta.global</code> file
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">Site config</th>
+        <td><code>theme.config.jsx</code></td>
+        <td><code>theme.config.jsx</code></td>
+        <td>Props in <code>app/layout.jsx</code></td>
+      </tr>
+      <tr>
+        <th scope="row">Folder landing page</th>
+        <td><code>guides.mdx</code> beside <code>guides/</code></td>
+        <td><code>guides.mdx</code> beside <code>guides/</code></td>
+        <td>
+          <code>guides/index.mdx</code> with <code>asIndexPage: true</code>
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">Components</th>
+        <td>Flat names: <code>Tab</code>, <code>Card</code></td>
+        <td><code>Tabs.Tab</code>, <code>Cards.Card</code></td>
+        <td><code>Tabs.Tab</code>, <code>Cards.Card</code></td>
+      </tr>
+      <tr>
+        <th scope="row">Search</th>
+        <td>Built in</td>
+        <td>Built in</td>
+        <td>Pagefind, run by a <code>postbuild</code> script</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Then build the current site and save the list of URLs it serves, to check
+    against the new site later. Next.js writes an HTML file per prerendered
+    page, so the build output has the full list:
+  </p>
+  <CodeBlock
+    code={`npm ci
+npm run build
+out=.next/server/app   # .next/server/pages on Nextra 2 and 3
+find "$out" -name '*.html' ! -name '_*' ! -name '404.html' ! -name '500.html' \\
+  | sed -e "s#^$out##" -e 's#\\.html$##' -e 's#^/index$#/#' \\
+  | sort > ../old-urls.txt`}
+    lang="bash"
+  />
+  <p>
+    Use <code>npm ci</code>, not a fresh install: an old Nextra can break on
+    dependencies newer than itself (see{" "}
+    <a href="#troubleshooting">Troubleshooting</a>). You also need Node.js
+    22.19 or later, and Claude Code or Codex installed and signed in.
+  </p>
+
+  <h2>Separate the docs from the Next.js app</h2>
+  <p>
+    Nextra is a plugin inside a Next.js app, so decide what that app becomes
+    before anything moves:
+  </p>
+  <ul>
+    <li>
+      <strong>The app is only docs.</strong> Every route comes from Nextra:
+      a <code>pages/</code> folder, <code>page.mdx</code> files, or{" "}
+      <code>content/</code> behind the <code>[[...mdxPath]]</code> catch-all.
+      Blume replaces the app.
+    </li>
+    <li>
+      <strong>The docs are one part of a bigger app.</strong> Keep the app.
+      The docs become their own Blume project in a separate folder, like{" "}
+      <code>apps/docs</code> in a{" "}
+      <a href="/guides/monorepo-documentation-site">monorepo</a>, and the app
+      drops the <code>nextra()</code> wrapper, the docs routes, and the{" "}
+      <code>_meta</code> files. Serve the docs on a subdomain, or at{" "}
+      <code>/docs</code> through one rewrite, as{" "}
+      <a href="/guides/nextjs-documentation-subpath">
+        Serve a separate docs site under /docs in Next.js
+      </a>{" "}
+      shows.
+    </li>
+  </ul>
+  <p>
+    Sign-in doesn't move with the docs. Blume has no auth of its own, so docs
+    your <code>middleware.ts</code> or <code>proxy.ts</code> gated need your
+    host's <a href="/docs/deployment#private-docs">access protection</a>. A
+    rewrite can keep <code>/docs</code> behind your middleware, but the docs
+    deployment's own URL bypasses it.
+  </p>
+  <p>
+    If Blume will serve the whole domain and the docs lived under{" "}
+    <code>/docs</code> (Nextra 4's <code>contentDirBasePath</code>, or a{" "}
+    <code>pages/docs/</code> folder), keep the prefix with{" "}
+    <a href="/docs/deployment#mount-the-docs-under-a-path">basePath</a>. A
+    React landing page like <code>app/page.jsx</code> needs rebuilding as a{" "}
+    <a href="/docs/advanced/custom-pages">custom page</a>.
+  </p>
+
+  <h2>The example site</h2>
+  <p>
+    This guide migrates a Nextra 4 site that uses the <code>content</code>{" "}
+    directory. It nests a <code>webhooks</code> folder between two pages,
+    hides one page, links to a status page, and imports a React component:
+  </p>
+  <CodeBlock
+    code={`acme-docs/
+├── app/
+│   ├── layout.jsx
+│   └── [[...mdxPath]]/page.jsx
+├── components/
+│   └── segment-counter.jsx
+├── content/
+│   ├── _meta.js
+│   ├── index.mdx
+│   ├── quickstart.mdx
+│   ├── legacy-api.mdx
+│   └── guides/
+│       ├── _meta.js
+│       ├── index.mdx
+│       ├── send-email.mdx
+│       ├── send-sms.mdx
+│       └── webhooks/
+│           ├── _meta.js
+│           ├── setup.mdx
+│           ├── verify.mdx
+│           └── events.mdx
+├── mdx-components.jsx
+├── next.config.mjs
+└── package.json`}
+    lang="txt"
+  />
+  <p>The three <code>_meta</code> files set the order and labels:</p>
+  <CodeBlock
+    code={`// content/_meta.js
+export default {
+  index: 'Introduction',
+  quickstart: 'Quickstart',
+  guides: 'Guides',
+  'legacy-api': { display: 'hidden' },
+  status: { title: 'Status', href: 'https://status.acme.example' }
+}
+
+// content/guides/_meta.js
+export default {
+  'send-email': 'Send an email',
+  webhooks: { title: 'Webhooks', theme: { collapsed: false } },
+  'send-sms': 'Send an SMS'
+}
+
+// content/guides/webhooks/_meta.js
+export default {
+  setup: 'Set up an endpoint',
+  verify: 'Verify signatures',
+  events: 'Event types'
+}`}
+    lang="js"
+  />
+  <p>
+    <code>guides/index.mdx</code> sets <code>asIndexPage: true</code>, so it's
+    the page behind the Guides folder, and <code>send-email.mdx</code> starts
+    with <code># Send your first email</code>, a longer heading than its
+    sidebar label. The component and the page that uses it:
+  </p>
+  <CodeBlock
+    code={`'use client'
+
+import { useState } from 'react'
+
+// Assumes GSM-7 text: one SMS holds 160 characters, and a longer
+// message is sent as parts of 153, since each part carries a header.
+export function SegmentCounter() {
+  const [text, setText] = useState('Your Acme code is 123456')
+  const segments = text.length <= 160 ? 1 : Math.ceil(text.length / 153)
+  return (
+    <div>
+      <textarea rows={3} value={text} onChange={(event) => setText(event.target.value)} />
+      <p>
+        {text.length} characters, {segments} {segments === 1 ? 'segment' : 'segments'}
+      </p>
+    </div>
+  )
+}`}
+    lang="jsx"
+    title="components/segment-counter.jsx"
+  />
+  <CodeBlock
+    code={`import { Callout } from 'nextra/components'
+import { SegmentCounter } from '../../components/segment-counter'
+
+# Send an SMS
+
+Carriers split long texts into segments. Type a message to count them:
+
+<SegmentCounter />
+
+<Callout type="warning">
+  Some countries require a registered sender ID before you can send.
+</Callout>
+
+> [!NOTE]
+> Replies to your number arrive as \`message.received\` webhook events.`}
+    lang="mdx"
+    title="content/guides/send-sms.mdx"
+  />
+  <p>
+    Nextra renders this sidebar: Introduction, Quickstart, then Guides with
+    Send an email, the three Webhooks pages, and Send an SMS, then Status. On
+    Nextra 3, the same site keeps its pages in <code>pages/</code>, has a{" "}
+    <code>theme.config.jsx</code>, and uses <code>pages/guides.mdx</code>{" "}
+    instead of <code>asIndexPage</code>. On Nextra 2, each{" "}
+    <code>_meta.js</code> is a <code>_meta.json</code> with the same keys.
+  </p>
+
+  <h2>Run the migration</h2>
+  <p>
+    From the folder whose <code>package.json</code> lists <code>nextra</code>,
+    run:
+  </p>
+  <CodeBlock code="npx blume migrate nextra --claude" lang="bash" />
+  <p>
+    To use Codex, swap <code>--claude</code> for <code>--codex</code>. On pnpm
+    12, run it with <code>pnpm dlx --allow-build=esbuild</code> instead of{" "}
+    <code>npx</code>, since pnpm 12 won't run esbuild's install script until you
+    approve it. Leave out <code>nextra</code> and Blume detects the source from
+    the <code>nextra</code> dependency. Run it with neither flag and it only
+    prints where the skill lives, for another agent to use.
+  </p>
+  <p>
+    <code>blume migrate</code> converts nothing itself. It names the source,
+    then opens the agent in your terminal on the <code>blume-migrate</code>{" "}
+    skill that ships inside the package, pointed at the skill's Nextra
+    reference. The agent runs interactively, so its edits go through its usual
+    permission prompts. Tell it up front whether the Next.js app stays and
+    whether the docs keep a <code>/docs</code> prefix. Following the skill,
+    it:
+  </p>
+  <ol>
+    <li>
+      Reads <code>theme.config.jsx</code> (or the props in{" "}
+      <code>app/layout.jsx</code> on Nextra 4) and <code>next.config</code>,
+      and writes <code>blume.config.ts</code>.
+    </li>
+    <li>Turns every <code>_meta</code> file into a <code>meta.ts</code> plus page frontmatter.</li>
+    <li>Rewrites components, imports, and code block options.</li>
+    <li>Copies your <code>next.config</code> redirects, and adds one for any page it moves.</li>
+    <li>
+      Swaps Nextra for Blume in <code>package.json</code>, points the scripts
+      at <code>blume dev</code>, <code>blume build</code>, and{" "}
+      <code>blume preview</code>, then runs <code>blume build</code> and{" "}
+      <code>blume validate</code> until both pass.
+    </li>
+  </ol>
+  <p>For the example, the config comes out like this:</p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme Docs",
+  content: { root: "content" },
+  github: { owner: "acme", repo: "docs" },
+  navigation: {
+    featured: [
+      { label: "Status", href: "https://status.acme.example", icon: "activity" },
+    ],
+    sidebar: { display: "group" },
+  },
+  redirects: [
+    { from: "/guides/email", to: "/guides/send-email", status: 308 },
+    { from: "/webhooks/:path*", to: "/guides/webhooks/:path*", status: 308 },
+  ],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>content.root</code> points at Nextra 4's <code>content/</code>{" "}
+    folder. On Nextra 2 and 3, move <code>pages/</code> to <code>docs/</code>,
+    Blume's default, since Blume uses <code>pages/</code> for custom{" "}
+    <code>.astro</code> pages. The agent finishes with a summary of what it
+    migrated, dropped, and approximated. Keep it: it's your checklist for the
+    review.
+  </p>
+
+  <h2>Review the sidebar</h2>
+  <p>
+    Start with <code>git diff --stat</code> for the shape of the change, then
+    run <code>npx blume dev</code> and compare the sidebar with the old site.
+    Blume reads each folder's <code>meta.ts</code>, so a folder's title, which
+    Nextra keeps in the parent's <code>_meta</code>, moves into the folder's
+    own file:
+  </p>
+  <CodeBlock
+    code={`// content/meta.ts
+import { defineMeta } from "blume";
+
+export default defineMeta({
+  pages: ["index", "quickstart", "guides", "legacy-api"],
+});
+
+// content/guides/meta.ts
+import { defineMeta } from "blume";
+
+export default defineMeta({
+  title: "Guides",
+  collapsed: false,
+  pages: ["send-email", "webhooks", "send-sms"],
+});
+
+// content/guides/webhooks/meta.ts
+import { defineMeta } from "blume";
+
+export default defineMeta({
+  title: "Webhooks",
+  collapsed: false,
+  pages: ["setup", "verify", "events"],
+});`}
+    lang="ts"
+  />
+
+  <h3>Pages after a nested folder</h3>
+  <p>
+    Check that Send an SMS still comes after Webhooks. By default, Blume
+    draws each folder as a flat section header. So that a page after a header
+    can't pass for part of that section, it lists a folder's pages before its
+    subfolders. Nextra draws folders as collapsible rows instead. Blume's{" "}
+    <code>group</code> display does too, and keeps the order as written, so
+    the agent sets it:
+  </p>
+  <CodeBlock
+    code={`navigation: {
+  sidebar: { display: "group" },
+},`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    It works for the whole sidebar, or in one subfolder's{" "}
+    <code>meta.ts</code>. If Send an SMS sits above Webhooks, neither is set.
+    A group starts closed unless it holds the current page or sets{" "}
+    <code>collapsed: false</code>, and Nextra opens top-level folders by
+    default, so Guides sets it too. At the top level, Blume lists loose pages
+    before folders in every{" "}
+    <a href="/docs/content/navigation#display-modes">display mode</a>, so a
+    root <code>_meta</code> that puts a page after a folder can't be matched.
+  </p>
+
+  <h3>Folder landing pages</h3>
+  <p>
+    Blume makes <code>guides/index.mdx</code> the page behind the Guides row,
+    and also lists it as the folder's first entry. Hide that entry to keep
+    Nextra's single row:
+  </p>
+  <CodeBlock
+    code={`---
+title: Guides
+sidebar:
+  hidden: true
+---
+
+Task-by-task guides for the Acme API.`}
+    lang="mdx"
+    title="content/guides/index.mdx"
+  />
+  <p>
+    Keep this <code>title</code> and the folder's <code>meta.ts</code> title
+    the same, or Blume warns with{" "}
+    <code>BLUME_NAV_INDEX_TITLE_MISMATCH</code>. To keep a different heading,
+    set the page's <code>sidebar.label</code> to the folder's title. The file
+    differs by version: Nextra 4's <code>asIndexPage</code> key has to go, and
+    Nextra 2 and 3's{" "}
+    <code>guides.mdx</code> beside the folder moves to{" "}
+    <code>guides/index.mdx</code>, which keeps the <code>/guides</code> URL.
+    Left beside the folder, it shows up as a second Guides entry.
+  </p>
+
+  <h3>Titles and labels</h3>
+  <p>
+    Nextra takes a page's sidebar label from <code>_meta</code> and its title
+    from the first heading. Blume renders frontmatter <code>title</code> as
+    the heading, with <code>sidebar.label</code> for the sidebar, so the
+    agent keeps the old heading as <code>title</code> and the{" "}
+    <code>_meta</code> label as <code>sidebar.label</code>. Where the two
+    differ, check that each page's heading didn't change:
+  </p>
+  <CodeBlock
+    code={`---
+title: Send your first email
+sidebar:
+  label: Send an email
+---`}
+    lang="mdx"
+    title="content/guides/send-email.mdx"
+  />
+  <p>
+    The body's <code># Send your first email</code> line goes, or the page
+    shows its title twice.
+  </p>
+
+  <h3>The rest of _meta</h3>
+  <ul>
+    <li>
+      <code>display: 'hidden'</code> becomes <code>sidebar.hidden: true</code>.
+      The page still builds at its URL.
+    </li>
+    <li>
+      An <code>href</code> link becomes a{" "}
+      <a href="/docs/content/navigation#featured-links">featured link</a>{" "}
+      above the sidebar, like Status above, or a header link in{" "}
+      <code>navigation.actions</code>.
+    </li>
+    <li>A root entry with <code>type: 'page'</code> becomes a header tab in <code>navigation.tabs</code>.</li>
+    <li>
+      Separators, menus, and most <code>theme</code> options have no
+      equivalent, and the agent lists them. A page with{" "}
+      <code>{"theme: { layout: 'full' }"}</code> becomes{" "}
+      <a href="/docs/content/frontmatter#layout">mode: wide</a>, the closest
+      match.
+    </li>
+  </ul>
+
+  <h3>Translated docs</h3>
+  <p>
+    Nextra 2 and 3's filename suffixes, like <code>index.en.mdx</code>, work
+    in place with{" "}
+    <a href="/docs/content/i18n#filename-suffixes">parser: "dot"</a>. Nextra
+    4 gives every language a folder, and the other languages' folders stay as
+    they are. Blume keeps the default language at the content root, though,
+    so the agent moves the contents of <code>content/en/</code> up a level.
+    To keep serving them under <code>/en/</code>, as Nextra did, it sets{" "}
+    <a href="/docs/content/i18n#default-locale-urls">hideDefaultLocalePrefix: false</a>;
+    to drop the prefix, it adds a redirect per page instead, so tell it which
+    you want. A default language folder left in place publishes as ordinary
+    pages and warns with <code>BLUME_I18N_DEFAULT_LOCALE_FOLDER</code>.
+  </p>
+
+  <h2>Review pages and components</h2>
+  <p>
+    Blume's components need no imports, so the agent deletes every{" "}
+    <code>nextra</code> import and rewrites what it imported:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In Nextra</th>
+        <th scope="col">In Blume</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>&lt;Callout type="warning"&gt;</code></td>
+        <td><code>:::warning</code>, and <code>type="error"</code> becomes <code>:::danger</code></td>
+      </tr>
+      <tr>
+        <td><code>&gt; [!NOTE]</code> alerts</td>
+        <td>The same alerts, which render as callouts</td>
+      </tr>
+      <tr>
+        <td>
+          <code>{"<Tabs items={['curl', 'Node.js']}>"}</code> of{" "}
+          <code>&lt;Tabs.Tab&gt;</code>
+        </td>
+        <td><code>&lt;Tabs&gt;</code> of <code>&lt;Tab title="curl"&gt;</code></td>
+      </tr>
+      <tr>
+        <td>
+          <code>&lt;Cards.Card&gt;</code>, or <code>&lt;Card&gt;</code> on
+          Nextra 2
+        </td>
+        <td><code>&lt;CardGroup&gt;</code> of <code>&lt;Card&gt;</code></td>
+      </tr>
+      <tr>
+        <td><code>&lt;Steps&gt;</code> around <code>###</code> headings</td>
+        <td><code>&lt;Steps&gt;</code> of <code>&lt;Step title="…"&gt;</code></td>
+      </tr>
+      <tr>
+        <td><code>&lt;FileTree.Folder&gt;</code></td>
+        <td><code>&lt;Tree.Folder&gt;</code></td>
+      </tr>
+      <tr>
+        <td><code>```js filename="send.js" showLineNumbers</code></td>
+        <td><code>```js send.js lineNumbers</code></td>
+      </tr>
+      <tr>
+        <td><code>```sh npm2yarn</code></td>
+        <td><code>```package-install</code></td>
+      </tr>
+      <tr>
+        <td>Inline math <code>$x$</code>, with <code>latex: true</code></td>
+        <td><code>$$x$$</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Directives, alerts, and these fences only work in <code>.mdx</code> pages,
+    so the agent renames any <code>.md</code> page that has one. Line ranges like{" "}
+    <code>{"{1,4-5}"}</code> carry over unchanged. Inline math takes two
+    dollar signs in Blume, since a single <code>$</code> stays literal text,
+    so check that each <code>$x$</code> now reads <code>$$x$$</code>, still
+    inside its sentence.
+  </p>
+
+  <h3>React components become islands</h3>
+  <p>
+    Blume renders pages as static HTML. A component that runs in the browser
+    becomes an <a href="/docs/content/islands">island</a>: a file in{" "}
+    <code>islands/</code> at the project root, used by its filename in any{" "}
+    <code>.mdx</code> page with no import. The segment counter becomes:
+  </p>
+  <CodeBlock
+    code={`import { useState } from "react";
+
+// Assumes GSM-7 text: one SMS holds 160 characters, and a longer
+// message is sent as parts of 153, since each part carries a header.
+export default function SegmentCounter() {
+  const [text, setText] = useState("Your Acme code is 123456");
+  const segments = text.length <= 160 ? 1 : Math.ceil(text.length / 153);
+  return (
+    <div>
+      <textarea rows={3} value={text} onChange={(event) => setText(event.target.value)} />
+      <p>
+        {text.length} characters, {segments} {segments === 1 ? "segment" : "segments"}
+      </p>
+    </div>
+  );
+}`}
+    lang="jsx"
+    title="islands/SegmentCounter.jsx"
+  />
+  <p>
+    The filename is PascalCase because it becomes the tag, the component is
+    the default export, and <code>'use client'</code> is gone: an island
+    always hydrates, by default when it scrolls into view. Add{" "}
+    <code>export const client = "only"</code> to one that needs{" "}
+    <code>window</code>. The page loses its imports and heading:
+  </p>
+  <CodeBlock
+    code={`---
+title: Send an SMS
+---
+
+Carriers split long texts into segments. Type a message to count them:
+
+<SegmentCounter />
+
+:::warning
+Some countries require a registered sender ID before you can send.
+:::
+
+> [!NOTE]
+> Replies to your number arrive as \`message.received\` webhook events.`}
+    lang="mdx"
+    title="content/guides/send-sms.mdx"
+  />
+  <p>
+    Next.js APIs don't exist here: <code>next/link</code> becomes a plain
+    link, <code>next/image</code> a Markdown image, and a router hook{" "}
+    <code>usePage()</code> from <code>blume/hooks</code>. Keep{" "}
+    <code>react</code> and <code>react-dom</code> in your dependencies, since
+    islands import them.
+  </p>
+
+  <h2>Check every old URL</h2>
+  <p>
+    Pages keep their paths: <code>content/guides/send-email.mdx</code> is{" "}
+    <code>/guides/send-email</code> in both. The exception is a numeric prefix
+    like <code>01-</code>, which Blume reads as sort order and drops from the
+    URL. The agent copies each{" "}
+    <code>next.config</code> redirect as written, with{" "}
+    <code>permanent: true</code> as <code>status: 308</code> and{" "}
+    <code>false</code> as <code>307</code>. Rules with <code>has</code> or{" "}
+    <code>missing</code> conditions or regex parameters have no Blume form,
+    and the agent lists them for your host's config.
+  </p>
+  <p>
+    With <code>npx blume dev</code> running, print every old URL that no
+    longer lands on a page:
+  </p>
+  <CodeBlock
+    code={`while read -r route; do
+  code=$(curl -sL -o /dev/null -w "%{http_code}" "http://localhost:4321$route")
+  [ "$code" = "200" ] || echo "$code $route"
+done < ../old-urls.txt`}
+    lang="bash"
+  />
+  <p>
+    Redirects count as passing, since <code>-L</code> follows them. Add a
+    redirect for each path it prints, and run it until it prints nothing.
+    Blume's URLs never end in a slash, so if your <code>next.config</code> set{" "}
+    <code>trailingSlash: true</code>, check a few slashed links on the
+    deployed site too. For status codes, patterns, and
+    what each host does with them, see{" "}
+    <a href="/guides/documentation-url-migration-redirects">Move documentation URLs while preserving old links</a>.
+  </p>
+
+  <h2>Build and validate</h2>
+  <p>
+    In a docs-only app, check that the agent removed <code>next</code>,{" "}
+    <code>nextra</code>, <code>nextra-theme-docs</code>, any Pagefind{" "}
+    <code>postbuild</code> script, <code>next.config.mjs</code>,{" "}
+    <code>mdx-components.jsx</code>, <code>app/</code> (or{" "}
+    <code>theme.config.jsx</code> and <code>pages/_app.jsx</code> on Nextra 2
+    and 3), and <code>next-env.d.ts</code>. Then stop the dev server, build the
+    site, and check its links:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+npx blume validate --strict`}
+    lang="bash"
+  />
+  <p>
+    <code>blume build</code> fails on any page, route, or config error,
+    including Nextra frontmatter keys. <code>blume validate --strict</code>{" "}
+    checks every internal link, heading anchor, and asset, and fails on
+    warnings too. Fix what they report rather than passing{" "}
+    <code>--no-strict</code>, which drops the pages that fail.
+  </p>
+
+  <h2>Deploy and switch over</h2>
+  <p>
+    If your Nextra site runs on Vercel, the Blume site can stay in the same
+    project. Add the <code>vercel()</code> adapter, so redirects are answered
+    with real HTTP status codes:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { vercel } from "blume/deploy";
+
+export default defineConfig({
+  // ...everything the migration wrote
+  deployment: vercel(),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The project is still set to build Next.js, and a preset change in the
+    dashboard would apply to your main branch too. Commit a{" "}
+    <code>vercel.json</code> beside <code>package.json</code> instead.{" "}
+    <code>"framework": null</code> selects the Other preset for the deployments
+    that include it:
+  </p>
+  <CodeBlock
+    code={`{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "npm run build"
+}`}
+    lang="json"
+    title="vercel.json"
+  />
+  <p>
+    Check that the project's Node.js version is 22 or later, push the branch,
+    and run the URL loop against its preview URL. If Vercel Authentication
+    protects your previews, <code>curl</code> gets a login page, so check a
+    sample in the browser and run the full loop after the switch. Merging
+    deploys to your domain, and Vercel's Instant Rollback can put the last
+    Nextra deployment back. For other hosts, see{" "}
+    <a href="/docs/deployment">Deployment</a>.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The old Nextra site no longer builds</h3>
+  <p>
+    A fresh install resolves newer dependencies than your Nextra release
+    shipped with. Nextra 4.6.1 with zod 4.4 or later fails to prerender every
+    page with <code>Invalid input: expected nonoptional, received
+    undefined</code>. Nextra 3.3.1 with TypeScript 7 fails to compile pages
+    with <code>Cannot read properties of undefined (reading
+    'readFile')</code>. Install from your lockfile, or pin the package with{" "}
+    <code>overrides</code> in <code>package.json</code>, like{" "}
+    <code>{'"overrides": { "zod": "4.3.6" }'}</code>.
+  </p>
+  <h3>The build fails on asIndexPage or sidebarTitle</h3>
+  <p>
+    Blume's frontmatter is strict, so Nextra's keys stop the build with{" "}
+    <code>BLUME_FRONTMATTER_INVALID</code>. Rename <code>sidebarTitle</code>{" "}
+    to <code>sidebar.label</code>, and delete <code>asIndexPage</code>: the
+    name <code>index.mdx</code> already makes a file the folder's page.
+  </p>
+  <h3>A code block's title reads copy or npm2yarn</h3>
+  <p>
+    Blume titles a code block with every plain word after the language and
+    skips <code>key="value"</code> options, so leftover Nextra options like{" "}
+    <code>copy</code> and <code>npm2yarn</code> join the title.{" "}
+    <code>showLineNumbers</code> and <code>filename="…"</code> stay out of
+    it but do nothing, and Blume warns about both as{" "}
+    <code>BLUME_CODE_FENCE_OPTION</code>. Rewrite the fence as the table above
+    shows.
+  </p>
+  <h3>A page shows its title twice</h3>
+  <p>
+    The page sets a <code>title</code>, and its body still starts with the{" "}
+    <code>#</code> heading Nextra used as its title. Delete the heading. (A
+    page without a <code>title</code> takes it from that heading and shows it
+    once.) After a build, <code>blume audit</code> reports these
+    pages as <code>BLUME_AUDIT_H1_MULTIPLE</code>.
+  </p>
+  <h3>npm run build fails after Blume finishes</h3>
+  <p>
+    npm runs a <code>postbuild</code> script after every <code>build</code>.
+    Nextra 4's runs Pagefind against <code>.next/server/app</code>, which no
+    longer exists, and exits with "Pagefind was not able to build an index."
+    Delete the script and the <code>pagefind</code> dependency.
+  </p>
+  <h3>An island doesn't render</h3>
+  <p>
+    Blume skips an island named like <code>segment-counter.jsx</code>, with a
+    build warning. Use a PascalCase filename and a default export.
+  </p>
+  <h3>A redirect fails the build</h3>
+  <p>
+    <code>BLUME_REDIRECT_MATCHES_PAGE</code> means a redirect pattern, like one
+    copied from <code>next.config</code>, also covers a page you kept. Narrow
+    it to the URLs that moved. As a warning, which fails{" "}
+    <code>blume validate --strict</code>, it means an exact redirect starts at
+    a page you kept: the redirect takes the URL over, so the page never
+    publishes. Delete the page if it moved, or remove the redirect.
+  </p>
+</GuidePage>

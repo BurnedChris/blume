@@ -1,0 +1,746 @@
+---
+// Generate a Fastify docs site: checked against the OpenAPI reference,
+// navigation, validate, and deployment docs, the spec parser and upgrade
+// (openapi/parse.ts, @scalar/openapi-upgrader), the operation route model
+// (openapi/model.ts), the example and type-label helpers
+// (components/openapi/helpers.ts), the dev watcher (cli/commands/dev.ts), and
+// the OpenAPI diagnostics (openapi/source.ts) on main, and against the
+// @fastify/swagger 9.9.0 and @fastify/cors 11.3.0 READMEs and source. Ran the
+// Fastify app below (fastify 5.12.5, Node 24): inject requests against every
+// route, the CORS preflight, the export script, each failure mode under
+// Troubleshooting, and Blume's parseSpec and extractOperations over the
+// exported openapi.json (3.1.0, no warnings, routes as in the table). Not yet
+// run end to end: blume dev and blume build weren't run on the docs site.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("fastify-api-documentation")}>
+  <p>
+    To generate a docs site from Fastify route schemas, add the{" "}
+    <code>@fastify/swagger</code> plugin. Fastify already asks you to describe
+    each route with JSON Schema, for validation and fast serialization, and the
+    plugin reads those schemas and turns them into an OpenAPI document. Write
+    that
+    document to a file with a short script, point Blume at it, and you get a
+    docs site with a page per route, a Try it panel, and your own guides in the
+    same sidebar.
+  </p>
+  <p>
+    By the end, you have a Fastify app for a fictional Acme Messages API. Its
+    shared schemas become named components with examples, and its bearer auth
+    shows on every operation. A script exports its spec into a Blume project
+    that also holds a quickstart and an errors page. All the code is on this
+    page.
+  </p>
+  <p>
+    If you only want an interactive explorer served by the API itself,{" "}
+    <code>@fastify/swagger-ui</code> or Scalar's Fastify plugin does that
+    without a second project. Blume fits when you want a public docs site where
+    guides and reference share navigation, search, and a deploy. The example
+    uses plain JSON Schema. TypeBox schemas are JSON Schema too, so they work
+    the same way. With Zod through <code>fastify-type-provider-zod</code>, pass
+    its <code>jsonSchemaTransform</code> as the plugin's{" "}
+    <code>transform</code> option; everything after that is the same. For the
+    spec-first version of this walkthrough, see{" "}
+    <a href="/guides/openapi-documentation-website">Generate API docs from an OpenAPI spec</a>.
+  </p>
+
+  <h2>Set up both projects</h2>
+  <p>
+    The API and its docs live in one repository as two packages: the Fastify
+    app at the root and a Blume project in <code>docs-site/</code>. Keeping
+    them apart keeps Blume's dependencies out of the API's install, and lets
+    your docs host build the docs without the API.
+  </p>
+  <CodeBlock
+    code={`acme-messages-api/
+  package.json
+  scripts/
+    export-openapi.js
+  src/
+    app.js
+    schemas.js
+    server.js
+    routes/
+      messages.js
+  docs-site/
+    blume.config.ts
+    openapi.json
+    package.json
+    docs/`}
+    lang="txt"
+  />
+  <p>Start with the API's <code>package.json</code>:</p>
+  <CodeBlock
+    code={`{
+  "name": "acme-messages-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "openapi": "node scripts/export-openapi.js"
+  },
+  "dependencies": {
+    "@fastify/swagger": "9.9.0",
+    "fastify": "5.12.5"
+  }
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <p>Install it, then scaffold the docs site beside the code:</p>
+  <CodeBlock
+    code={`npm install
+npx blume init docs-site --template docs --yes`}
+    lang="bash"
+  />
+  <p>
+    You get <code>docs-site/blume.config.ts</code>, a{" "}
+    <code>docs/index.mdx</code> home page, and a <code>package.json</code>{" "}
+    with <code>dev</code> and <code>build</code> scripts, and{" "}
+    <code>init</code> installs Blume there.
+  </p>
+
+  <h2>Register Fastify Swagger before your routes</h2>
+  <p>
+    <code>app.js</code> builds the app without starting it, so the server and
+    the export script can share it. The order of the three steps matters:
+  </p>
+  <CodeBlock
+    code={`import swagger from "@fastify/swagger";
+import Fastify from "fastify";
+
+import messageRoutes from "./routes/messages.js";
+import { schemas } from "./schemas.js";
+
+export async function buildApp(options = {}) {
+  const app = Fastify(options);
+
+  // 1. Register @fastify/swagger first: it only sees routes added after it.
+  await app.register(swagger, {
+    openapi: {
+      openapi: "3.1.0",
+      info: {
+        title: "Acme Messages API",
+        version: "1.0.0",
+        description:
+          "Send transactional email and SMS, and check whether they arrived.",
+      },
+      servers: [{ url: "https://api.acme.example/v1" }],
+      tags: [
+        {
+          name: "Messages",
+          description: "Send a message and check whether it arrived.",
+        },
+      ],
+      components: {
+        securitySchemes: {
+          bearerAuth: {
+            type: "http",
+            scheme: "bearer",
+            description: "An API key, sent as a bearer token.",
+          },
+        },
+      },
+      security: [{ bearerAuth: [] }],
+    },
+    // Keep each shared schema's $id as its component name.
+    refResolver: {
+      buildLocalReference(json, baseUri, fragment, i) {
+        return json.$id || \`def-\${i}\`;
+      },
+    },
+  });
+
+  // 2. Shared schemas, before the routes that reference them.
+  for (const schema of schemas) {
+    app.addSchema(schema);
+  }
+
+  // 3. Routes. A hidden health check stays out of the spec.
+  app.get("/health", { schema: { hide: true } }, async () => ({ ok: true }));
+  await app.register(messageRoutes, { prefix: "/v1" });
+
+  return app;
+}`}
+    lang="js"
+    title="src/app.js"
+  />
+  <p>
+    <code>@fastify/swagger</code> collects routes with an{" "}
+    <code>onRoute</code> hook, so it only sees routes added after it. Routes
+    added earlier are skipped without an error, and the spec comes out with
+    empty <code>paths</code>. Await the <code>register</code> call before any{" "}
+    <code>app.get()</code> or route plugin, and register it on the root
+    instance. Registered inside another plugin, its <code>swagger()</code>{" "}
+    method doesn't exist on the root app.
+  </p>
+  <p>
+    <code>components.securitySchemes</code> defines the bearer scheme, and the
+    root <code>security</code> applies it to every route. The plugin only
+    documents auth. The hook in the routes plugin below is what enforces it.
+  </p>
+  <p>
+    The routes mount under <code>/v1</code>, and the server URL ends in{" "}
+    <code>/v1</code>. The plugin strips that base path from each route (its{" "}
+    <code>stripBasePath</code> option, on by default), so the spec lists{" "}
+    <code>/messages</code> and Try it calls{" "}
+    <code>https://api.acme.example/v1/messages</code>. With no server URL
+    ending in the prefix, paths keep it: <code>/v1/messages</code>.
+  </p>
+
+  <h3>Choose OpenAPI 3.1</h3>
+  <p>
+    <code>@fastify/swagger</code> writes Swagger 2.0 unless you pass the{" "}
+    <code>openapi</code> option, and OpenAPI 3.0.3 unless you set a version
+    inside it. Set <code>"3.1.0"</code>. Blume's reference is built on OpenAPI
+    3.1, so a 3.1 document is read as written, and JSON Schema's{" "}
+    <code>null</code> types stay as they are instead of being rewritten to
+    3.0's <code>nullable</code>. A 3.0.3 document works too, because Blume
+    upgrades Swagger 2.0 and OpenAPI 3.0 as it reads them.
+  </p>
+  <p>
+    The plugin also supports <code>"3.2.0"</code>, and Blume reads a 3.2
+    document as written, <code>QUERY</code> routes included. A few 3.2
+    additions don't render yet, like nested tags, which come out as one flat
+    list; see <a href="/docs/references/openapi#openapi-32">OpenAPI 3.2</a>.
+  </p>
+
+  <h2>Define shared schemas and examples</h2>
+  <p>
+    Schemas that more than one route uses go in one file, each with an{" "}
+    <code>$id</code>:
+  </p>
+  <CodeBlock
+    code={`export const schemas = [
+  {
+    $id: "Channel",
+    type: "string",
+    enum: ["email", "sms"],
+    description: "How to deliver the message.",
+  },
+  {
+    $id: "SendMessageRequest",
+    type: "object",
+    required: ["channel", "to", "template"],
+    additionalProperties: false,
+    properties: {
+      channel: { $ref: "Channel#" },
+      to: {
+        type: "string",
+        description: "An email address, or a phone number in E.164 format.",
+      },
+      template: {
+        type: "string",
+        description: "The ID of the template to send.",
+      },
+      variables: {
+        type: "object",
+        additionalProperties: { type: "string" },
+        description: "Values for the template's variables.",
+      },
+    },
+    examples: [
+      {
+        channel: "email",
+        to: "ada@example.com",
+        template: "welcome",
+        variables: { name: "Ada" },
+      },
+    ],
+  },
+  {
+    $id: "Message",
+    type: "object",
+    required: ["id", "status", "channel"],
+    properties: {
+      id: { type: "string", description: "The message ID." },
+      status: {
+        type: "string",
+        enum: ["queued", "sent", "delivered", "failed"],
+      },
+      channel: { $ref: "Channel#" },
+    },
+    examples: [{ id: "msg_8f2k", status: "queued", channel: "email" }],
+  },
+  {
+    $id: "Error",
+    type: "object",
+    required: ["statusCode", "error", "message"],
+    properties: {
+      statusCode: { type: "integer" },
+      code: { type: "string" },
+      error: { type: "string" },
+      message: { type: "string" },
+    },
+  },
+];`}
+    lang="js"
+    title="src/schemas.js"
+  />
+  <p>
+    A route refers to a shared schema by its <code>$id</code>, as in{" "}
+    <code>{'{ $ref: "Message#" }'}</code>, and that one reference drives
+    Fastify's validation, its response serialization, and the spec. By
+    default, the plugin renames shared schemas to <code>def-0</code>,{" "}
+    <code>def-1</code>, and so on. Blume labels a referenced type by its
+    component name, so the schema tables would say <code>def-2</code> where
+    you want <code>Message</code>. The <code>refResolver</code> in{" "}
+    <code>app.js</code> keeps each <code>$id</code> as the component name.
+  </p>
+  <p>
+    <code>examples</code> is a standard JSON Schema keyword, so Fastify's
+    validator accepts it. The plugin turns the first entry into the
+    component's <code>example</code>, and Blume uses it to prefill the Try it
+    request body and to show the response example. Keep examples on the shared
+    schema: next to a <code>$ref</code> in a route, the plugin drops them.
+    Inline route schemas can carry their own <code>examples</code>.
+  </p>
+
+  <h2>Describe each route</h2>
+  <p>
+    The routes plugin holds the handlers, the auth hook, and the fields that
+    turn into page titles, descriptions, and URLs:
+  </p>
+  <CodeBlock
+    code={`import { randomUUID } from "node:crypto";
+
+const messages = new Map();
+
+export default async function messageRoutes(fastify) {
+  fastify.addHook("onRequest", async (request, reply) => {
+    const key = process.env.ACME_API_KEY;
+    if (!key || request.headers.authorization !== \`Bearer \${key}\`) {
+      return reply.code(401).send({
+        statusCode: 401,
+        error: "Unauthorized",
+        message: "Send a valid API key as a bearer token.",
+      });
+    }
+  });
+
+  fastify.post(
+    "/messages",
+    {
+      schema: {
+        operationId: "sendMessage",
+        tags: ["Messages"],
+        summary: "Send a message",
+        description:
+          "Queues an email or SMS for delivery and returns its ID right away.",
+        body: { $ref: "SendMessageRequest#" },
+        response: {
+          202: {
+            description: "The message is queued.",
+            $ref: "Message#",
+          },
+          400: { description: "The body failed validation.", $ref: "Error#" },
+          401: { description: "The API key is missing or wrong.", $ref: "Error#" },
+        },
+      },
+    },
+    async (request, reply) => {
+      const message = {
+        id: \`msg_\${randomUUID().slice(0, 8)}\`,
+        status: "queued",
+        channel: request.body.channel,
+      };
+      messages.set(message.id, message);
+      return reply.code(202).send(message);
+    }
+  );
+
+  fastify.get(
+    "/messages/:id",
+    {
+      schema: {
+        operationId: "getMessage",
+        tags: ["Messages"],
+        summary: "Get a message",
+        description: "Returns a message and its delivery status.",
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: {
+            id: {
+              type: "string",
+              description: "The message ID, from the response to Send a message.",
+            },
+          },
+        },
+        response: {
+          200: { description: "The message.", $ref: "Message#" },
+          401: { description: "The API key is missing or wrong.", $ref: "Error#" },
+          404: { description: "No message has that ID.", $ref: "Error#" },
+        },
+      },
+    },
+    async (request, reply) => {
+      const message = messages.get(request.params.id);
+      if (!message) {
+        return reply.code(404).send({
+          statusCode: 404,
+          error: "Not Found",
+          message: \`No message has the ID \${request.params.id}.\`,
+        });
+      }
+      return message;
+    }
+  );
+}`}
+    lang="js"
+    title="src/routes/messages.js"
+  />
+  <p>
+    The hook compares the header with an <code>ACME_API_KEY</code> environment
+    variable so the example runs on its own. Swap in your real auth, such as{" "}
+    <code>@fastify/bearer-auth</code>. Here's where each schema field ends up:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In the route schema</th>
+        <th scope="col">On the docs site</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>operationId</code></td>
+        <td>
+          The page URL: <code>sendMessage</code> becomes{" "}
+          <code>send-message</code>
+        </td>
+      </tr>
+      <tr>
+        <td><code>tags</code></td>
+        <td>The sidebar group, and the URL segment before the operation</td>
+      </tr>
+      <tr>
+        <td><code>summary</code></td>
+        <td>The page title and sidebar label</td>
+      </tr>
+      <tr>
+        <td><code>description</code></td>
+        <td>The page's introduction and its search result description</td>
+      </tr>
+      <tr>
+        <td><code>params</code>, <code>body</code>, <code>response</code></td>
+        <td>The parameter, request body, and response tables</td>
+      </tr>
+      <tr>
+        <td>A response's <code>description</code></td>
+        <td>The text beside that status code</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    To leave a route out of the docs, add <code>hide: true</code> to its
+    schema, like the health check in <code>app.js</code>. To mark one route
+    public in an API that needs auth everywhere else, give its schema{" "}
+    <code>security: []</code>. Blume then shows no Authorization section on
+    that page.
+  </p>
+
+  <h2>Export the spec to a file</h2>
+  <p>
+    The server and the export script both start from <code>buildApp()</code>:
+  </p>
+  <CodeBlock
+    code={`import { buildApp } from "./app.js";
+
+const app = await buildApp({ logger: true });
+await app.listen({ port: Number(process.env.PORT ?? 3000), host: "0.0.0.0" });`}
+    lang="js"
+    title="src/server.js"
+  />
+  <CodeBlock
+    code={`import { writeFile } from "node:fs/promises";
+
+import { buildApp } from "../src/app.js";
+
+const app = await buildApp();
+await app.ready();
+
+const spec = app.swagger();
+await writeFile(
+  new URL("../docs-site/openapi.json", import.meta.url),
+  \`\${JSON.stringify(spec, null, 2)}\\n\`
+);
+await app.close();
+
+console.log(\`Wrote \${Object.keys(spec.paths).length} paths to docs-site/openapi.json\`);`}
+    lang="js"
+    title="scripts/export-openapi.js"
+  />
+  <p>Run it:</p>
+  <CodeBlock code="npm run openapi" lang="bash" />
+  <p>
+    It prints <code>Wrote 2 paths to docs-site/openapi.json</code>. The script
+    never listens on a port. It waits for <code>ready()</code>, because the
+    plugin can't build the spec before every route is loaded, then writes{" "}
+    <code>app.swagger()</code> as JSON. Pass <code>{"{ yaml: true }"}</code> to{" "}
+    <code>swagger()</code> if you'd rather commit YAML.
+  </p>
+  <p>
+    A file is a better input than a running server's spec URL: the docs build
+    doesn't depend on the API being up, and every spec change shows up in code
+    review as a diff. One catch: <code>ready()</code> loads every plugin, so
+    anything a plugin does at startup, like opening a database connection,
+    happens during the export too. If that's a problem, give{" "}
+    <code>buildApp()</code> an option that skips those plugins.
+  </p>
+
+  <h2>Mount the spec in Blume</h2>
+  <p>
+    Point an <code>openapi()</code> reference at the exported file, and add
+    header tabs so readers can reach it:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  navigation: {
+    tabs: [
+      { label: "Docs", path: "/" },
+      { label: "API reference", path: "/api" },
+    ],
+  },
+  reference: [openapi({ route: "/api", spec: "./openapi.json" })],
+});`}
+    lang="ts"
+    title="docs-site/blume.config.ts"
+  />
+  <p>Start the dev server from the docs project:</p>
+  <CodeBlock
+    code={`cd docs-site
+npm run dev`}
+    lang="bash"
+  />
+  <p>
+    The API reference tab opens an overview at <code>/api</code> with the
+    API's description, version, and server URL, and a section for the Messages
+    tag. Each route gets its own page:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Fastify route</th>
+        <th scope="col">Page</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>POST /v1/messages</code></td>
+        <td><code>/api/messages/send-message</code></td>
+      </tr>
+      <tr>
+        <td><code>GET /v1/messages/:id</code></td>
+        <td><code>/api/messages/get-message</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Both pages show an Authorization section and send{" "}
+    <code>Authorization: Bearer YOUR_TOKEN</code> in their code samples,
+    because of the root <code>security</code>. The schema tables label types{" "}
+    <code>Message</code> and <code>Channel</code>, and the examples come from
+    the shared schemas. For code sample languages and the rest of the
+    reference's options, see the{" "}
+    <a href="/docs/references/openapi">OpenAPI reference docs</a>.
+  </p>
+
+  <h2>Write the usage guides</h2>
+  <p>
+    Route schemas answer "what does this endpoint take?" Readers also need
+    "how do I send my first message?" and "what does an error look like?"
+    Write those as pages in <code>docs-site/docs/api/</code>, a folder named
+    after the reference route, and they join the API reference tab's sidebar
+    beside the generated pages:
+  </p>
+  <CodeBlock
+    code={`---
+title: Quickstart
+description: Send your first email with the Acme Messages API, then check whether it was delivered.
+---
+
+Every request needs an API key, sent in the \`Authorization\` header as a
+bearer token.
+
+## Send a message
+
+\`\`\`bash
+curl https://api.acme.example/v1/messages \\
+  -H "Authorization: Bearer $ACME_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"channel":"email","to":"ada@example.com","template":"welcome"}'
+\`\`\`
+
+The API answers \`202\` with the queued message:
+
+\`\`\`json
+{ "id": "msg_8f2k", "status": "queued", "channel": "email" }
+\`\`\`
+
+## Check whether it arrived
+
+Pass the ID to [Get a message](/api/messages/get-message). Its \`status\`
+moves from \`queued\` to \`sent\` to \`delivered\`, or to \`failed\`.`}
+    lang="mdx"
+    title="docs-site/docs/api/quickstart.mdx"
+  />
+  <p>
+    The errors page documents the shape Fastify gives every error. When a body
+    fails validation, Fastify answers with a 400 and its own{" "}
+    <code>FST_ERR_VALIDATION</code> code, which is why the shared{" "}
+    <code>Error</code> schema has an optional <code>code</code>:
+  </p>
+  <CodeBlock
+    code={`---
+title: Errors
+description: Every Acme Messages API error has the same JSON shape, with the HTTP status and a message that says what to fix.
+---
+
+Errors come back as JSON:
+
+\`\`\`json
+{
+  "statusCode": 400,
+  "error": "Bad Request",
+  "message": "body must have required property 'template'",
+  "code": "FST_ERR_VALIDATION"
+}
+\`\`\`
+
+| Status | Meaning |
+| --- | --- |
+| 400 | The request body failed validation. \`message\` names the field. |
+| 401 | The API key is missing or wrong. |
+| 404 | No message has that ID. |
+
+See [Send a message](/api/messages/send-message) for the fields each request takes.`}
+    lang="mdx"
+    title="docs-site/docs/api/errors.mdx"
+  />
+  <p>
+    The pages live at <code>/api/quickstart</code> and{" "}
+    <code>/api/errors</code>, and they link to operation pages by URL like any
+    other page. Run <code>npx blume validate</code> in{" "}
+    <code>docs-site</code> to check those links.
+  </p>
+
+  <h2>Let Try it reach your API</h2>
+  <p>
+    The Try it panel on each operation page sends requests from the reader's
+    browser straight to the server in your spec. That only works when the API
+    allows the docs site's origin with CORS. In Fastify, that's{" "}
+    <code>@fastify/cors</code>:
+  </p>
+  <CodeBlock code="npm install @fastify/cors@11.3.0" lang="bash" />
+  <CodeBlock
+    code={`import cors from "@fastify/cors";
+
+// Inside buildApp(), after the shared schemas and before the routes:
+await app.register(cors, { origin: ["https://docs.acme.example"] });`}
+    lang="js"
+    title="src/app.js"
+  />
+  <p>
+    The plugin answers preflight requests with its own <code>OPTIONS</code>{" "}
+    route. That route is hidden from the spec by default (its{" "}
+    <code>hideOptionsRoute</code> option), and it sits outside the messages
+    plugin, so the auth hook never rejects a preflight. By default it allows{" "}
+    <code>GET</code>, <code>HEAD</code>, and <code>POST</code>. If your routes
+    use <code>PUT</code>, <code>PATCH</code>, or <code>DELETE</code>, list them
+    in its <code>methods</code> option. If you can't change the API's CORS
+    policy, Blume can proxy the requests instead; see{" "}
+    <a href="/guides/api-documentation-cors-errors">Fix CORS errors in an API documentation playground</a>.
+  </p>
+
+  <h2>Keep the spec and the site in sync</h2>
+  <p>
+    Commit <code>docs-site/openapi.json</code>. Your docs host then builds{" "}
+    <code>docs-site</code> on its own, with <code>npm run build</code> into
+    static files in <code>dist/</code>, and never installs or starts the API.
+    The <a href="/docs/deployment">deployment docs</a> cover each host.
+  </p>
+  <p>
+    The Blume dev server watches the spec file, so after{" "}
+    <code>npm run openapi</code>, a running <code>npm run dev</code> shows the
+    new routes.
+  </p>
+  <p>
+    To catch a route change that nobody re-exported, run the export in CI and
+    fail when the committed file differs:
+  </p>
+  <CodeBlock
+    code={`npm run openapi
+git diff --exit-code docs-site/openapi.json`}
+    lang="bash"
+  />
+  <p>
+    <a href="/guides/openapi-documentation-ci">Keep API documentation in sync with backend changes in CI</a>{" "}
+    covers the full workflow. Renaming an <code>operationId</code> or moving a
+    route to another tag changes its page URL, so add a{" "}
+    <a href="/docs/deployment#redirects">redirect</a> from the old one when you
+    do.
+  </p>
+
+  <Callout type="note">
+    If a spec generated from code includes routes or fields you don't want in
+    public docs, you can hide routes with <code>hide: true</code>, or leave the
+    code alone and{" "}
+    <a href="/guides/openapi-overlays-public-docs">remove internal endpoints with an overlay</a>.
+  </Callout>
+
+  <h2>Troubleshooting</h2>
+  <h3>The reference is empty</h3>
+  <p>
+    Blume warns with <code>BLUME_OPENAPI_EMPTY</code> when the spec has no
+    operations. With Fastify, that usually means{" "}
+    <code>@fastify/swagger</code> was registered after the routes, so{" "}
+    <code>paths</code> in <code>openapi.json</code> is empty. Move the awaited{" "}
+    <code>register</code> call above every route and route plugin, then export
+    again.
+  </p>
+  <h3>The export fails with ".swagger() must be called after .ready()"</h3>
+  <p>
+    The plugin resolves shared schemas when the app is ready. Call{" "}
+    <code>await app.ready()</code> before <code>app.swagger()</code>, as the
+    export script does.
+  </p>
+  <h3>The export fails with "app.swagger is not a function"</h3>
+  <p>
+    <code>@fastify/swagger</code> was registered inside another plugin, so its
+    decorator isn't on the root app. Register it directly on the instance that{" "}
+    <code>buildApp()</code> returns.
+  </p>
+  <h3>The export fails with "Cannot read properties of undefined"</h3>
+  <p>
+    A <code>security</code> requirement, at the root or on a route, names a
+    scheme that isn't in <code>components.securitySchemes</code>. The plugin
+    looks each one up while building the spec and crashes on a missing one.
+    Check that the names match exactly, like <code>bearerAuth</code> in both
+    places.
+  </p>
+  <h3>Schema tables show def-0 instead of a name</h3>
+  <p>
+    The plugin's default <code>refResolver</code> names shared schemas{" "}
+    <code>def-0</code>, <code>def-1</code>, and so on. Add the{" "}
+    <code>buildLocalReference</code> function from <code>app.js</code> so each
+    component keeps its <code>$id</code>.
+  </p>
+  <h3>The build fails with BLUME_OPENAPI_UNAVAILABLE</h3>
+  <p>
+    Blume couldn't read <code>openapi.json</code>. Usually the export never
+    ran on that machine, or the file isn't committed. Check that{" "}
+    <code>spec</code> is relative to <code>docs-site</code>, like{" "}
+    <code>./openapi.json</code>. In <code>blume dev</code> this is only a
+    warning, so a working dev server can hide it.
+  </p>
+</GuidePage>

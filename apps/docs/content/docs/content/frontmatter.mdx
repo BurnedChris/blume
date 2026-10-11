@@ -5,6 +5,8 @@ description: Every frontmatter field a page accepts, all optional — title, des
 
 Every page accepts the following frontmatter. All fields are optional.
 
+Frontmatter is YAML, so quote a value that holds a colon followed by a space, like `description: "Setup: the easy way"`. Unquoted, YAML reads the second colon as the start of a nested key, and Blume reports the file and line as `BLUME_FRONTMATTER_INVALID`.
+
 <TypeTable
   type={{
     title: { type: "string", description: "Page title." },
@@ -21,7 +23,7 @@ Every page accepts the following frontmatter. All fields are optional.
     authors: {
       type: "string | string[] | object[]",
       description:
-        "Post author(s) for blog/changelog content — a name, or objects with a name plus optional avatar/url and any extra fields. Preserved as-is.",
+        "Post author(s) for blog/changelog content — a name, or objects with a name plus optional avatar/url and any extra fields. Credited as Person nodes in the page's JSON-LD; other fields are preserved as-is.",
     },
     slug: {
       type: "string",
@@ -146,7 +148,7 @@ sidebar:
   display: page
 ```
 
-`hidden` removes the page from the sidebar and from previous/next pagination. On a folder's `index` page it removes only the page's own row: the group row keeps linking to the page, and previous/next links still pass through it.
+`hidden` removes the page from the sidebar and from previous/next pagination, and so from the sitemap, search, and `llms.txt` (see [Hidden pages](/docs/content/navigation#hidden-pages)). On a folder's `index` page it removes only the page's own row: the group row keeps linking to the page, so previous/next links still pass through it and the page stays in the sitemap, search, and `llms.txt`. On the home page, the root `index` page, it also removes only the row: the page stays in the sitemap, search, and `llms.txt`.
 
 `display` sets the render mode of the page's folder group ([per-group overrides](/docs/content/navigation#per-group-overrides)) and is only meaningful on a folder's `index` page under the generated sidebar — anywhere else (a non-index page, the content root's own `index` page, or any page under an explicit `navigation.sidebar`) it has no group to configure, and Blume warns with `BLUME_SIDEBAR_DISPLAY_IGNORED`.
 
@@ -163,7 +165,7 @@ seo:
     creator: "@jane"
 ```
 
-`noindex` emits a robots `noindex`, drops the page from the sitemap, and skips its structured data. `x.creator` credits the page to an X account (`twitter:creator`) — a guest post's author, say. See [Metadata](/docs/discoverability/metadata#per-page-overrides) for every field.
+`noindex` emits a robots `noindex`, drops the page from the sitemap, and skips its structured data. A `canonical` that names another URL drops the page from the sitemap too, since the sitemap lists canonical URLs only. `x.creator` credits the page to an X account (`twitter:creator`) — a guest post's author, say. See [Metadata](/docs/discoverability/metadata#per-page-overrides) for every field.
 
 ## Search
 
@@ -171,7 +173,11 @@ seo:
 search:
   exclude: false
   tags: [api]
+  keywords: [install, setup]
+  boost: 3
 ```
+
+`exclude` keeps the page out of search, and `tags` labels its record for a hosted search adapter to filter on (see [Tags](/docs/configuration/search#tags)). `keywords` are extra terms the page is found by, beyond its own text. `boost` multiplies the page's relevance: above 1 ranks it higher, below 1 lower. See [Ranking](/docs/configuration/search#ranking).
 
 ## AI
 
@@ -180,7 +186,7 @@ ai:
   exclude: true
 ```
 
-`ai.exclude` keeps the page out of [`llms.txt` and `llms-full.txt`](/docs/discoverability/llms-txt#excluding-a-page). The page still renders, stays in search, and keeps its place in the sitemap.
+`ai.exclude` keeps the page out of [`llms.txt` and `llms-full.txt`](/docs/discoverability/llms-txt#excluding-a-page) and out of the page map in your [site's skill](/docs/discoverability/agent-discovery#your-sites-skill). The page still renders, stays in search, the [MCP server](/docs/discoverability/mcp), and the [JSON API](/docs/discoverability/json-api), and keeps its place in the sitemap.
 
 ## Changelog
 

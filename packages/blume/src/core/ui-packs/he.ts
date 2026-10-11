@@ -33,6 +33,7 @@ export const he: UIStringsOverride = {
     error: "מצטערים, משהו השתבש.",
     explainCode: "הסבר את הקוד הזה.",
     label: "שאל שאלה",
+    open: "פתיחת העוזר",
     placeholder: "שאל שאלה…",
     rateLimited: "שאלתם הרבה שאלות. נסו שוב בעוד כמה דקות.",
     removeCode: "הסרת הקוד",
@@ -47,6 +48,7 @@ export const he: UIStringsOverride = {
   banner: { dismiss: "סגירת ההודעה" },
   changelog: {
     description: "עדכוני מוצר והערות גרסה.",
+    empty: "אין עדיין רשומות ביומן השינויים.",
     title: "יומן שינויים",
   },
   consent: {
@@ -67,6 +69,7 @@ export const he: UIStringsOverride = {
     preview: "תצוגה מקדימה",
     prop: "מאפיין",
     selectTab: "בחר כרטיסייה",
+    selectView: "בחר תצוגה",
     showLess: "הצג פחות",
     showMore: "הצג עוד",
     stars: "כוכבים",

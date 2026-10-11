@@ -1,0 +1,572 @@
+---
+// Self-host documentation search with Typesense: checked against the search
+// docs (configuration/search.mdx), the deployment docs' environment section,
+// the adapter, sync, and dialog client (search/adapters/typesense.ts,
+// search/sync/typesense.ts, search/sync/index.ts,
+// components/layout/search/typesense.ts, components/layout/Search.astro),
+// where the sync runs (deploy/artifacts.ts, astro/integration.ts), the
+// .env.local loader (cli/env.ts), and BLUME_DEPENDENCY_MISSING
+// (astro/runtime-deps.ts) on main; and against Typesense's install, API key,
+// synonym set, server configuration, and DocSearch docs.
+//
+// What ran: the Typesense 30.2 macOS binary locally, with Blume's own
+// syncSearchProvider and the dialog's createSearch from main called through
+// bun on a small fixture project (not `blume build`). That covered custom key
+// values, the build-time sync and record shape, the search function below,
+// the keyword hit, the deleted page, the 401 and unreachable-host skip
+// warnings, --cors-domains, the typesense 3.1.0 client, and the build
+// script's logic with the sync standing in for `blume build`. Synonyms on
+// Typesense 29.1 were checked the same way. Rerun 2026-09-30 against the
+// alias-swap sync and relevance-first sort (search/sync/typesense.ts,
+// components/layout/search/typesense.ts): the sync key scopes (without
+// aliases:* or docs_.* the sync gets a 401 before it changes anything), the
+// search key and the synonym relink through the alias, the synonym link
+// lost on the next sync, and a sync taking over a DocSearch-style alias.
+// Rerun 2026-09-30 after failed syncs started failing the build: `blume
+// build` with the key set and an unreachable host exits 1 with
+// BLUME_SEARCH_SYNC_FAILED, and without the key warns and succeeds. Not run:
+// a `blume build` sync against a live server, `blume dev`, Docker, Compose,
+// or Caddy. Not yet run end to end.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("typesense-documentation-search")}>
+  <p>
+    To self-host search for a documentation site, run a Typesense server, give
+    the site a search-only key that browsers can use, and let your build write
+    the index with a separate key. In Blume, the <code>typesense()</code> search
+    adapter handles both halves: every <code>blume build</code> fills a new
+    Typesense collection from your pages and points an alias at it, and the
+    search dialog queries that alias straight from the reader's browser.
+  </p>
+  <p>
+    By the end of this guide, you have a local Typesense server you've tested
+    with a search, a synonym, and a deleted page, then a production server
+    behind HTTPS, synced only from production builds by a script that fails
+    when the sync does.
+  </p>
+  <p>
+    You may not need a search service at all. Blume's default search runs in
+    the browser with no server or keys, and Pagefind covers very large sites the
+    same way; <a href="/guides/choose-documentation-search">choosing your docs
+    search</a> compares the options. Typesense fits when you want the index on
+    infrastructure you control, with synonyms and curation you manage. If you
+    want Typesense without running a server, Typesense Cloud hosts it, and
+    everything here except the server setup still applies.
+  </p>
+
+  <h2>How Blume syncs the collection</h2>
+  <p>
+    At the end of <code>blume build</code>, Blume turns each searchable page
+    into one record: its title, description, and body as plain text, plus its
+    URL, <code>search.keywords</code>, <code>search.boost</code>, locale, and
+    docs version. It reads your Markdown and MDX source, not the built HTML.
+    Then it creates a new collection with its own schema, named after your{" "}
+    <code>collection</code> setting plus a timestamp, like{" "}
+    <code>docs_1790792208477</code>, and imports the records. Once the import
+    is complete, it points an alias with the <code>collection</code> name at
+    the new collection and drops the one the alias pointed at before. A fresh
+    collection on every sync has three effects this guide plans around:
+  </p>
+  <ul>
+    <li>
+      A deleted or renamed page disappears from results on the next build,
+      because nothing from the old collection survives.
+    </li>
+    <li>
+      Anything you attached to the collection yourself, like a synonym set,
+      doesn't carry over to the new one. You reapply it after each sync.
+    </li>
+    <li>
+      Searches keep reading the previous collection until the new one is
+      complete, and a sync that fails leaves the previous one serving. The
+      sync key has to manage the alias and every collection named after it.
+    </li>
+  </ul>
+
+  <h3>How this differs from the DocSearch scraper</h3>
+  <p>
+    Typesense's docs describe another route, DocSearch: a scraper that crawls
+    your live site. It solves the same problem from the other end:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col"></th>
+        <th scope="col">Blume's sync</th>
+        <th scope="col">DocSearch scraper</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Reads</td>
+        <td>Your source files, during the build</td>
+        <td>Your deployed HTML, over HTTP</td>
+      </tr>
+      <tr>
+        <td>Runs</td>
+        <td>Inside <code>blume build</code></td>
+        <td>A Docker container you run after each deploy</td>
+      </tr>
+      <tr>
+        <td>Records</td>
+        <td>One per page</td>
+        <td>One per heading and paragraph, picked out by CSS selectors</td>
+      </tr>
+      <tr>
+        <td>Reindexing</td>
+        <td>Fills a new timestamped collection, then points an alias at it</td>
+        <td>The same</td>
+      </tr>
+      <tr>
+        <td>Search UI</td>
+        <td>Blume's search dialog</td>
+        <td>The typesense-docsearch.js library</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Both swap an alias, so a search never hits a missing collection. Blume
+    needs no crawler, no selectors to maintain, and no deployed site to index,
+    but its records are whole pages. The two don't mix: Blume's dialog
+    queries the fields its own sync writes, so it can't read a collection the
+    scraper filled.
+  </p>
+
+  <h2>Run Typesense locally</h2>
+  <p>
+    Start a Typesense 30.2 server with Docker, outside your docs project, with
+    a throwaway admin key:
+  </p>
+  <CodeBlock
+    code={`docker run -p 8108:8108 -v "$(pwd)"/typesense-data:/data \\
+  typesense/typesense:30.2 \\
+  --data-dir /data --api-key=local-admin-key --enable-cors`}
+    lang="bash"
+  />
+  <p>In another terminal, check that it's up:</p>
+  <CodeBlock code="curl http://localhost:8108/health" lang="bash" />
+  <p>It answers <code>{'{"ok":true}'}</code> once it's ready.</p>
+
+  <h2>Create a sync key and a search-only key</h2>
+  <p>
+    The key you started the server with can do anything, so keep it away from
+    your build and your readers. Create two narrower keys. The sync key can
+    manage the <code>docs</code> alias, the collections the sync names after it
+    (<code>docs_</code> and a timestamp, matched here by a regular expression),
+    and their documents, which is all Blume's sync needs:
+  </p>
+  <CodeBlock
+    code={`curl -s "http://localhost:8108/keys" -X POST \\
+  -H "X-TYPESENSE-API-KEY: local-admin-key" \\
+  -H "Content-Type: application/json" \\
+  -d '{"description": "Docs sync", "actions": ["collections:*", "documents:*", "aliases:*"], "collections": ["docs", "docs_.*"], "value": "local-sync-key"}'`}
+    lang="bash"
+  />
+  <p>
+    The search key can only search <code>docs</code>, and reaches whichever
+    collection the alias points at:
+  </p>
+  <CodeBlock
+    code={`curl -s "http://localhost:8108/keys" -X POST \\
+  -H "X-TYPESENSE-API-KEY: local-admin-key" \\
+  -H "Content-Type: application/json" \\
+  -d '{"description": "Docs search", "actions": ["documents:search"], "collections": ["docs"], "value": "docs-search-public"}'`}
+    lang="bash"
+  />
+  <p>
+    Typesense generates a random key when you leave out <code>value</code>.
+    Here you set both values so the local steps stay copyable. The search key
+    ships to every reader's browser, so it doesn't need to be secret; its scope
+    is what protects you. Try to delete the collection with it, and Typesense
+    answers <code>Forbidden</code>:
+  </p>
+  <CodeBlock
+    code={`curl -s -X DELETE "http://localhost:8108/collections/docs" \\
+  -H "X-TYPESENSE-API-KEY: docs-search-public"`}
+    lang="bash"
+  />
+
+  <h2>Point Blume at the collection</h2>
+  <p>
+    The Typesense client is an optional dependency of Blume, so install it in
+    your docs project:
+  </p>
+  <CodeBlock code="npm install typesense@3.1.0" lang="bash" />
+  <p>Then switch search to Typesense:</p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { typesense } from "blume/search";
+
+export default defineConfig({
+  // ...the rest of your config
+  search: typesense({
+    host: "localhost",
+    port: 8108,
+    protocol: "http",
+    collection: "docs",
+    apiKey: "docs-search-public",
+  }),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>port</code> and <code>protocol</code> default to 443 and{" "}
+    <code>https</code>, so the local server needs both. Blume reads the sync key
+    from <code>TYPESENSE_ADMIN_API_KEY</code>, which never enters the config or
+    the browser. Despite the name, it doesn't need Typesense's admin key: the
+    scoped sync key is enough. Blume loads <code>.env.local</code> for every
+    command, so put it there. <code>blume init</code> lists the file in{" "}
+    <code>.gitignore</code>; the second line adds it if your project doesn't:
+  </p>
+  <CodeBlock
+    code={`echo "TYPESENSE_ADMIN_API_KEY=local-sync-key" >> .env.local
+grep -qx ".env.local" .gitignore || echo ".env.local" >> .gitignore`}
+    lang="bash"
+  />
+  <p>
+    If your pages are in Chinese, Japanese, or Thai, also set{" "}
+    <code>locale</code> to their two-letter language code, like{" "}
+    <code>locale: "ja"</code>. Typesense's default tokenizer splits text on
+    spaces, so without it a word in those languages only matches at the start
+    of a run of text. One collection holds every language, so the setting
+    covers them all.
+  </p>
+  <p>
+    Last, add a throwaway page with a word no other page uses, and a keyword
+    that appears nowhere in its text:
+  </p>
+  <CodeBlock
+    code={`---
+title: Search test
+description: A throwaway page for checking the Typesense sync.
+search:
+  keywords: [canary]
+---
+
+The quasar client is a word no other page uses.`}
+    lang="mdx"
+    title="docs/search-test.mdx"
+  />
+
+  <h2>Build and sync</h2>
+  <CodeBlock code="npx blume build" lang="bash" />
+  <p>
+    Once the pages are built, the log reports the sync with a line like{" "}
+    <code>Synced 12 record(s) to typesense</code>, one record per searchable
+    page. If it says <code>Search sync skipped</code> instead, the build still
+    succeeded but the collection didn't change. If the key is set and the sync
+    fails, the build fails with <code>BLUME_SEARCH_SYNC_FAILED</code>. For
+    both, see <a href="#troubleshooting">Troubleshooting</a>.
+  </p>
+
+  <h2>Test searches</h2>
+  <p>
+    Define a shell function that searches the way Blume's dialog does, with the
+    same fields and ranking, and prints the matching URLs:
+  </p>
+  <CodeBlock
+    code={`search() {
+  curl -s -G "http://localhost:8108/collections/docs/documents/search" \\
+    -H "X-TYPESENSE-API-KEY: docs-search-public" \\
+    --data-urlencode "q=$1" \\
+    --data-urlencode "query_by=title,keywords,description,content" \\
+    --data-urlencode "sort_by=_text_match:desc,boost:desc" \\
+    | jq -c '{found, urls: [.hits[].document.url]}'
+}
+
+search "quasar"
+search "canary"`}
+    lang="bash"
+  />
+  <p>
+    Both print <code>{'{"found":1,"urls":["/search-test"]}'}</code>: the first
+    matches the body text, the second the page's keywords. Now try the dialog
+    itself. Run <code>npx blume dev</code>, open the site, press ⌘K (or Ctrl
+    K), and search for <code>quasar</code>.
+  </p>
+  <p>
+    The dialog queries your Typesense server directly, in dev as in
+    production. But <code>blume dev</code> never syncs, so it searches the
+    collection your last build wrote. Edits you make in dev reach search on the
+    next build.
+  </p>
+
+  <h2>Reapply custom settings after each sync</h2>
+  <p>
+    Typesense 30 keeps synonyms in synonym sets, which live outside any
+    collection and are linked to one by name. Create a set that makes{" "}
+    <code>pulsar</code> find the same pages as <code>quasar</code>, then link
+    it to <code>docs</code>:
+  </p>
+  <CodeBlock
+    code={`curl -s "http://localhost:8108/synonym_sets/docs-synonyms" -X PUT \\
+  -H "X-TYPESENSE-API-KEY: local-admin-key" \\
+  -H "Content-Type: application/json" \\
+  -d '{"items": [{"id": "client-names", "synonyms": ["quasar", "pulsar"]}]}'
+
+curl -s "http://localhost:8108/collections/docs" -X PATCH \\
+  -H "X-TYPESENSE-API-KEY: local-sync-key" \\
+  -H "Content-Type: application/json" \\
+  -d '{"synonym_sets": ["docs-synonyms"]}'`}
+    lang="bash"
+  />
+  <p>
+    Now <code>search "pulsar"</code> finds the test page. Synonyms match whole
+    words, so list every form you need, like both <code>webhook</code> and{" "}
+    <code>webhooks</code>.
+  </p>
+  <p>
+    Run <code>npx blume build</code> again and repeat the search: it finds
+    nothing. The set still exists, but the new collection behind the alias
+    isn't linked to it. Run the <code>PATCH</code> again, which goes through
+    the alias to that collection, and the synonym is back. Curation sets,
+    which pin or hide results for a query, fall off the same way and relink
+    through the <code>curation_sets</code> field. The build script in the
+    deploy step relinks after every production sync.
+  </p>
+  <Callout type="warning">
+    On Typesense 29 and earlier, synonyms are stored on the collection itself,
+    so each new collection starts without them. Recreate them after every
+    build instead of relinking.
+  </Callout>
+
+  <h2>Test a deleted page</h2>
+  <p>Delete the test page, build again, and search for it:</p>
+  <CodeBlock
+    code={`rm docs/search-test.mdx
+npx blume build
+search "quasar"
+search "canary"`}
+    lang="bash"
+  />
+  <p>
+    Both print <code>{'{"found":0,"urls":[]}'}</code>. A sync that only added
+    and updated records would keep the old one, and a reader who clicked it
+    would land on a 404.
+  </p>
+
+  <h2>Deploy</h2>
+  <h3>Run Typesense on a server</h3>
+  <p>
+    Your docs are served over HTTPS, so browsers block search requests to a
+    plain HTTP server. On a server with Docker, and a DNS record for{" "}
+    <code>search.acme.example</code> pointing at it, run Typesense behind
+    Caddy, which gets a certificate for the domain on its own:
+  </p>
+  <CodeBlock
+    code={`services:
+  typesense:
+    image: typesense/typesense:30.2
+    restart: unless-stopped
+    volumes:
+      - ./typesense-data:/data
+    command: "--data-dir /data --api-key=\${TYPESENSE_API_KEY} --enable-cors --cors-domains=https://docs.acme.example,http://localhost:4321"
+
+  caddy:
+    image: caddy:2.11.4
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:`}
+    lang="yaml"
+    title="compose.yaml"
+  />
+  <CodeBlock
+    code={`search.acme.example {
+	reverse_proxy typesense:8108
+}`}
+    lang="txt"
+    title="Caddyfile"
+  />
+  <p>
+    <code>--cors-domains</code> lists the sites whose pages may search from a
+    browser: your docs, and <code>blume dev</code> on your machine. It isn't
+    access control, since anything outside a browser can still use the search
+    key. Generate the admin key into <code>.env</code>, where Docker Compose
+    reads it, and start both containers:
+  </p>
+  <CodeBlock
+    code={`mkdir -p typesense-data
+echo "TYPESENSE_API_KEY=$(openssl rand -hex 32)" > .env
+docker compose up -d
+curl https://search.acme.example/health`}
+    lang="bash"
+  />
+
+  <h3>Create the production keys</h3>
+  <p>
+    On the server, in the same folder, create the same two keys. Leave out{" "}
+    <code>value</code> on the sync key so Typesense generates a random one:
+  </p>
+  <CodeBlock
+    code={`. ./.env
+
+curl -s "https://search.acme.example/keys" -X POST \\
+  -H "X-TYPESENSE-API-KEY: $TYPESENSE_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"description": "Docs sync", "actions": ["collections:*", "documents:*", "aliases:*"], "collections": ["docs", "docs_.*"]}'
+
+curl -s "https://search.acme.example/keys" -X POST \\
+  -H "X-TYPESENSE-API-KEY: $TYPESENSE_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"description": "Docs search", "actions": ["documents:search"], "collections": ["docs"], "value": "docs-search-public"}'`}
+    lang="bash"
+  />
+  <p>
+    Typesense shows a generated key only once, as <code>value</code> in the
+    response. Save the sync key's value in your host's environment as{" "}
+    <code>TYPESENSE_ADMIN_API_KEY</code>, set for production builds only. A
+    preview build that can see the key syncs too, and moves production's
+    alias onto that branch's pages. Create the synonym set on this server with
+    the same <code>PUT</code> as before, using this admin key.
+  </p>
+
+  <h3>Update the config</h3>
+  <p>
+    Point the adapter at the production server. With HTTPS on port 443,{" "}
+    <code>port</code> and <code>protocol</code> can go:
+  </p>
+  <CodeBlock
+    code={`search: typesense({
+  host: "search.acme.example",
+  collection: "docs",
+  apiKey: "docs-search-public",
+}),`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Remove the <code>TYPESENSE_ADMIN_API_KEY</code> line from{" "}
+    <code>.env.local</code> too. Local builds then skip the sync with a warning
+    instead of trying the local key against production.
+  </p>
+
+  <h3>Relink the synonym set after each sync</h3>
+  <p>
+    With <code>TYPESENSE_ADMIN_API_KEY</code> set, a failed sync fails{" "}
+    <code>blume build</code> with <code>BLUME_SEARCH_SYNC_FAILED</code>, and
+    the alias keeps serving the last complete sync, so a stale index can't
+    ship unnoticed. A sync that succeeds moves the alias to a new collection,
+    which doesn't carry the synonym link over. This script relinks it after
+    the build:
+  </p>
+  <CodeBlock
+    code={`#!/usr/bin/env bash
+# Builds the docs. On builds that sync search, links the synonym set to the
+# new collection. A failed sync fails the build, so the script stops there.
+set -euo pipefail
+
+npx blume build
+
+if [ -z "\${TYPESENSE_ADMIN_API_KEY:-}" ]; then
+  exit 0
+fi
+
+curl -fsS -X PATCH "https://search.acme.example/collections/docs" \\
+  -H "X-TYPESENSE-API-KEY: $TYPESENSE_ADMIN_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"synonym_sets": ["docs-synonyms"]}'`}
+    lang="bash"
+    title="scripts/build-docs.sh"
+  />
+  <p>Make it your build script, so your host runs it:</p>
+  <CodeBlock
+    code={`{
+  "scripts": {
+    "dev": "blume dev",
+    "build": "bash scripts/build-docs.sh"
+  }
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <p>
+    On builds without the key, like previews, the script only builds. The
+    relink fails the build if the synonym set doesn't exist on the server, so
+    create it first, or delete the <code>curl</code> step if you don't use
+    synonyms.
+  </p>
+  <p>
+    The sync runs at the end of the build, before your host publishes the new
+    pages. For the length of a deploy, search can list a page the live site
+    doesn't serve yet.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The log says TYPESENSE_ADMIN_API_KEY is not set</h3>
+  <p>
+    The build ran without the sync key, so the collection didn't change. On
+    your host, check the variable is set for the environment that built.
+    Locally, Blume reads <code>.env.local</code> from the folder you build in
+    and its parents, up to the repository root.
+  </p>
+  <h3>The build fails with BLUME_SEARCH_SYNC_FAILED and HTTP code 401</h3>
+  <p>
+    The sync ran with a key and failed, and the message after{" "}
+    <code>Search sync to typesense failed:</code> says why. With HTTP code
+    401, Typesense rejected the sync key. It's usually the search key in{" "}
+    <code>TYPESENSE_ADMIN_API_KEY</code>, or a sync key whose scope misses
+    part of what the sync touches: it needs the <code>aliases:*</code> action,
+    and both the config's <code>collection</code> and that name followed by{" "}
+    <code>_.*</code> in <code>collections</code>. The sync stops before it
+    changes anything, so the last complete sync keeps serving.
+  </p>
+  <h3>The build fails with BLUME_DEPENDENCY_MISSING</h3>
+  <p>
+    The <code>typesense</code> package isn't installed where your project can
+    resolve it. The error's suggestion has the install command for your package
+    manager.
+  </p>
+  <h3>The dialog says "Something went wrong. Please try again."</h3>
+  <p>
+    The browser's request to Typesense failed. Find it in the browser's network
+    panel:
+  </p>
+  <ul>
+    <li>
+      <strong>Blocked by CORS:</strong> add the site's origin to{" "}
+      <code>--cors-domains</code>, exactly as the address bar shows it, with no
+      trailing slash.
+    </li>
+    <li>
+      <strong>Blocked as mixed content:</strong> the site is on HTTPS and the
+      config points at an <code>http</code> server. Serve Typesense over HTTPS.
+    </li>
+    <li>
+      <strong>404, Collection not found:</strong> no sync has finished on this
+      server yet, so there's no alias, or the config's{" "}
+      <code>collection</code> names a different one. Build with the key set.
+    </li>
+    <li>
+      <strong>401:</strong> the config's <code>apiKey</code> isn't a search key
+      for this collection on this server.
+    </li>
+  </ul>
+  <h3>Synonyms stopped working after a deploy</h3>
+  <p>
+    A sync ran without the relink, usually a build that didn't go through{" "}
+    <code>scripts/build-docs.sh</code>. Run the <code>PATCH</code> by hand,
+    then check your host's build command.
+  </p>
+  <h3>You're moving from a DocSearch collection</h3>
+  <p>
+    Stop the scraper first, or its next run moves the alias back. The name the
+    scraper gave you is an alias, and Blume can take it over: pointed at it,
+    Blume's first sync fills a new collection, moves the alias onto it, and
+    drops the scraper's collection. Scope the sync key to that name and the
+    name followed by <code>_.*</code>, as above.
+  </p>
+</GuidePage>

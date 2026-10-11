@@ -63,13 +63,18 @@ const TOKEN_DEFAULTS = `:root {
   --blume-action: var(--blume-accent);
   --blume-action-foreground: var(--blume-accent-foreground);
   --blume-code-background: oklch(0.99 0 0);
-  /* Shiki notation transformers: line/word highlight, diff add/remove. */
+  /* Shiki notation transformers: line/word highlight, diff add/remove, and
+     error/warning lines. */
   --blume-code-highlight: oklch(0.55 0.16 255 / 0.1);
   --blume-code-highlight-border: oklch(0.55 0.16 255 / 0.55);
   --blume-code-add: oklch(0.72 0.16 150 / 0.16);
   --blume-code-add-border: oklch(0.52 0.15 150 / 0.7);
   --blume-code-remove: oklch(0.66 0.21 22 / 0.16);
   --blume-code-remove-border: oklch(0.55 0.2 22 / 0.7);
+  --blume-code-error: oklch(0.66 0.21 22 / 0.16);
+  --blume-code-error-border: oklch(0.55 0.2 22 / 0.7);
+  --blume-code-warning: oklch(0.8 0.16 80 / 0.2);
+  --blume-code-warning-border: oklch(0.66 0.15 70 / 0.75);
   --blume-code-word: oklch(0.55 0.16 255 / 0.16);
   --blume-code-word-border: oklch(0.55 0.16 255 / 0.5);
   --blume-radius: 0.75rem;
@@ -129,6 +134,10 @@ const TOKEN_DEFAULTS = `:root {
   --blume-code-add-border: oklch(0.72 0.16 150 / 0.7);
   --blume-code-remove: oklch(0.72 0.21 22 / 0.22);
   --blume-code-remove-border: oklch(0.7 0.2 22 / 0.7);
+  --blume-code-error: oklch(0.72 0.21 22 / 0.22);
+  --blume-code-error-border: oklch(0.7 0.2 22 / 0.7);
+  --blume-code-warning: oklch(0.82 0.16 80 / 0.18);
+  --blume-code-warning-border: oklch(0.82 0.16 80 / 0.7);
   --blume-code-word: oklch(0.7 0.14 255 / 0.22);
   --blume-code-word-border: oklch(0.7 0.14 255 / 0.55);
 }`;
@@ -263,13 +272,24 @@ ${THEME_MAPPING}
    so a large site's HTML is mostly this markup — one utility per row kind
    instead of the dozen classes each expands to keeps every page (and the
    build's HTML output) small. Kept in sync with NavTree.astro: a page row,
-   a page-mode group's drill-in button, a collapsible group's summary and
-   the link inside it, and a flat group's heading and the link inside it. */
+   a page-mode group's drill-in row (or, when the group has a page, the
+   link and chevron button it splits into), a collapsible group's summary
+   and the link inside it, and a flat group's heading and the link inside
+   it. */
 @utility blume-nav-link {
   @apply block rounded-[0.65rem] px-2.5 py-1.5 text-muted-foreground text-sm transition-colors hover:bg-muted hover:text-foreground aria-[current=page]:bg-muted aria-[current=page]:font-medium aria-[current=page]:text-foreground;
 }
 @utility blume-nav-drill {
-  @apply flex w-full items-center gap-2 rounded-[0.65rem] px-2.5 py-1.5 text-start font-medium text-foreground text-sm transition-colors hover:bg-muted;
+  @apply flex w-full items-center gap-2 rounded-[0.65rem] px-2.5 py-1.5 text-start font-medium text-foreground text-sm transition-colors hover:bg-muted aria-[current]:bg-muted;
+}
+/* A routed drill row's label and chevron are separate pills, like a panel's
+   back button and title, so each shows which one the pointer is on. The
+   chevron's padding matches the drill row's, so chevrons line up. */
+@utility blume-nav-drill-link {
+  @apply flex min-w-0 flex-1 items-center gap-2 rounded-[0.65rem] px-2.5 py-1.5 font-medium text-foreground text-sm transition-colors hover:bg-muted aria-[current]:bg-muted;
+}
+@utility blume-nav-drill-toggle {
+  @apply flex shrink-0 items-center justify-center self-stretch rounded-[0.65rem] px-2.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground;
 }
 @utility blume-nav-summary {
   @apply flex cursor-pointer list-none items-center gap-1.5 rounded-[0.65rem] px-2.5 py-1.5 text-muted-foreground text-sm transition-colors hover:bg-muted hover:text-foreground [&::-webkit-details-marker]:hidden;
@@ -855,6 +875,18 @@ pre[data-line-numbers] .line::before {
   box-shadow: inset 2px 0 0 0 var(--blume-code-remove-border);
 }
 
+/* Error and warning lines (\`// [!code error]\`, \`// [!code warning]\`) are
+   highlighted lines with a level class, tinted red and amber. */
+.line.highlighted.error {
+  background-color: var(--blume-code-error) !important;
+  box-shadow: inset 2px 0 0 0 var(--blume-code-error-border);
+}
+
+.line.highlighted.warning {
+  background-color: var(--blume-code-warning) !important;
+  box-shadow: inset 2px 0 0 0 var(--blume-code-warning-border);
+}
+
 /* Word highlight (\`// [!code word:x]\`) wraps matches in an inline span. The
    element selector keeps it ahead of the transparent token-span rule. */
 span.highlighted-word {
@@ -940,8 +972,11 @@ pre:has(.line.focused):hover .line:not(.focused) {
    Strip the surrounding chrome so the printout is just the article. Scoped to
    the chrome itself, never bare \`header\`/\`aside\`: content renders those too
    (every Callout and Panel is an <aside>, every changelog Update has a
-   <header>), and they belong in the printout. \`body > header\` keeps a
-   \`layout.Header\` override out as well. */
+   <header>), and they belong in the printout. \`body > header\` and
+   \`body > footer\` keep \`layout.Header\` and \`layout.Footer\` overrides out
+   as well. Everything after the article (directory and related-page cards,
+   last updated, feedback, prev/next) is page chrome too, and so are the
+   copy, ask, and expand buttons on code blocks. */
 @media print {
   [data-blume-banner],
   [data-blume-header],
@@ -951,7 +986,13 @@ pre:has(.line.focused):hover .line:not(.focused) {
   [data-blume-assistant-panel],
   [data-blume-page-actions],
   #blume-content > nav,
-  #blume-content > details {
+  #blume-content > details,
+  [data-blume-page-end],
+  [data-blume-footer],
+  body > footer,
+  [data-blume-copy],
+  [data-blume-ask],
+  [data-blume-code-expand] {
     display: none !important;
   }
 
@@ -960,6 +1001,23 @@ pre:has(.line.focused):hover .line:not(.focused) {
   .prose :where(pre:not(.twoslash, .twoslash pre, blume-panel-tabs *) > code) {
     max-height: none;
     overflow: visible;
+  }
+
+  /* A collapsed \`expandable\` block prints open: its toggle is hidden above,
+     so the collapse would cut the block off at its first lines. Same
+     selector as the collapse, so this later rule wins. */
+  .prose pre[data-expandable]:not([data-expanded]) > code {
+    mask-image: none;
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  /* The theme script switches a dark page to light for printing
+     (\`beforeprint\`); a color transition would print mid-fade. */
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
   }
 
   #blume-content {

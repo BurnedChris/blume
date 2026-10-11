@@ -219,6 +219,45 @@ describe("buildNavigation — filesystem sidebar", () => {
     ]);
   });
 
+  it("keeps authored interleaving inside a (group) folder of a tab section", () => {
+    // `docs/(data)` adds no route segment, so its group shares the `/docs`
+    // section's path — but it is a group inside the section, not the section
+    // itself. Only the section's own top level hoists; inside the (group), a
+    // `group` subgroup is self-delimiting and the meta `pages` order stands.
+    const folderMeta = new Map<string, FolderMeta>([
+      ["docs/(data)", { pages: ["accounts", "reports", "statements"] }],
+      ["docs/(data)/reports", { display: "group" }],
+    ]);
+    const nav = buildNavigation(
+      [
+        page("docs/index.mdx", "/docs", "Overview"),
+        page("docs/zebra.mdx", "/docs/zebra", "Zebra"),
+        page("docs/(data)/accounts.mdx", "/docs/accounts", "Accounts"),
+        page("docs/(data)/statements.mdx", "/docs/statements", "Statements"),
+        page("docs/(data)/reports/daily.mdx", "/docs/reports/daily", "Daily"),
+      ],
+      {
+        display: "group",
+        folderMeta,
+        tabs: [{ label: "Docs", path: "/docs" }],
+      }
+    );
+    const section = asGroup(nav.sidebar[0]);
+    // The section's own top level still hoists its loose pages.
+    expect(labels(section.children)).toStrictEqual([
+      "Overview",
+      "Zebra",
+      "Data",
+    ]);
+    const data = asGroup(section.children[2]);
+    expect(data.path).toBe("/docs");
+    expect(labels(data.children)).toStrictEqual([
+      "Accounts",
+      "Reports",
+      "Statements",
+    ]);
+  });
+
   it("excludes the root tab from tab-section scoping under a basePath", () => {
     // A `path: "/"` tab spans the whole tree. Tab paths are rebased before
     // tab-section matching, so under `basePath: "/docs"` the root tab becomes
@@ -300,6 +339,39 @@ describe("buildNavigation — filesystem sidebar", () => {
       }
     );
     expect(nav.tabs[0]?.href).toBe("/changelog");
+  });
+
+  it("resolves a root tab with no root index to the first page", () => {
+    // Every route sits under `/`, but none starts with `//`: the root tab's
+    // section must still find its first page instead of linking to a 404.
+    const nav = buildNavigation(
+      [
+        page("welcome.mdx", "/welcome", "Welcome", { order: 0 }),
+        page("guides/setup.mdx", "/guides/setup", "Setup"),
+      ],
+      { folderMeta: empty, tabs: [{ label: "Docs", path: "/" }] }
+    );
+    expect(nav.tabs[0]?.href).toBe("/welcome");
+  });
+
+  it("links an archived tree's root tab back to the current docs under a basePath", () => {
+    // The archived pages all sit under the based root tab path (`/docs`), but
+    // none of them is in the current docs the root tab stands for.
+    const nav = buildNavigation(
+      [
+        page("v1.0/index.md", "/docs/v1.0", "Home v1"),
+        page("v1.0/guides/a.md", "/docs/v1.0/guides/a", "A"),
+      ],
+      {
+        basePath: "/docs",
+        folderMeta: empty,
+        localizedRoot: "/v1.0",
+        tabRoot: "/",
+        tabs: [{ label: "Docs", path: "/" }],
+      }
+    );
+    expect(nav.tabs[0]?.path).toBe("/docs");
+    expect(nav.tabs[0]?.href).toBeUndefined();
   });
 
   it("links a based tab to an outside route served without the basePath", () => {
@@ -874,16 +946,16 @@ describe("buildNavigation — explicit config sidebar", () => {
   });
 });
 
-describe("buildNavigation — page icons", () => {
-  const withIcons = (
-    id: string,
-    route: string,
-    meta: PageMetaInput
-  ): PageRecord => ({
-    ...page(id, route, id),
-    meta: pageMetaSchema.parse(meta),
-  });
+const withIcons = (
+  id: string,
+  route: string,
+  meta: PageMetaInput
+): PageRecord => ({
+  ...page(id, route, id),
+  meta: pageMetaSchema.parse(meta),
+});
 
+describe("buildNavigation — page icons", () => {
   it("falls back to the top-level icon shorthand when sidebar.icon is unset", () => {
     const nav = buildNavigation(
       [withIcons("install.md", "/install", { icon: "download" })],
@@ -917,7 +989,7 @@ describe("buildNavigation — page icons", () => {
 describe("buildNavigation — index title / folder meta title diagnostics", () => {
   it("warns when a hidden index page's title diverges from its folder's meta.title", () => {
     // With its own row hidden, the linked group header is the page's only
-    // sidebar label, so the header and the page's own <title> disagree.
+    // sidebar label, so the header and the page's own title disagree.
     const folderMeta = new Map<string, FolderMeta>([
       ["guide", { title: "Guides" }],
     ]);
@@ -930,6 +1002,89 @@ describe("buildNavigation — index title / folder meta title diagnostics", () =
     expect(diagnostics[0]?.code).toBe("BLUME_NAV_INDEX_TITLE_MISMATCH");
     expect(diagnostics[0]?.message).toContain('"Guide Home"');
     expect(diagnostics[0]?.message).toContain('"Guides"');
+  });
+
+  it("names only ways out that clear the warning under --strict", () => {
+    // `validate --strict` fails on any warning, so "leave it if intentional"
+    // is no way out. Each one the suggestion names must clear it.
+    const folderMeta = new Map<string, FolderMeta>([
+      ["guide", { title: "Guides" }],
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    buildNavigation(
+      [page("guide/index.md", "/guide", "Guide Home", { hidden: true })],
+      { diagnostics, folderMeta }
+    );
+    const suggestion = diagnostics[0]?.suggestion ?? "";
+    expect(suggestion).not.toContain("leave it");
+    expect(suggestion).toContain("so they match");
+    expect(suggestion).toContain('sidebar.label to "Guides"');
+    expect(suggestion).toContain("remove sidebar.hidden");
+  });
+
+  it("does not claim the <title> shows the page title when seo.title replaces it", () => {
+    // The built <title> reads seo.title ("Guides"), while the heading still
+    // reads the page's own title, so the warning stands, but its message must
+    // not say the <title> does.
+    const folderMeta = new Map<string, FolderMeta>([
+      ["guide", { title: "Guides" }],
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    buildNavigation(
+      [
+        {
+          ...page("guide/index.md", "/guide", "Guide Home"),
+          meta: pageMetaSchema.parse({
+            seo: { title: "Guides" },
+            sidebar: { hidden: true },
+            title: "Guide Home",
+          }),
+        },
+      ],
+      { diagnostics, folderMeta }
+    );
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).not.toContain("<title>");
+    expect(diagnostics[0]?.message).toContain(
+      '"Guides" is the only sidebar label it has'
+    );
+  });
+
+  it("does not warn when the index page's sidebar.label names the folder title", () => {
+    // sidebar.label is how any page keeps a title apart from its sidebar
+    // label; on a hidden index it says the header is the label it means.
+    const folderMeta = new Map<string, FolderMeta>([
+      ["guide", { title: "Guides" }],
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    buildNavigation(
+      [
+        page("guide/index.md", "/guide", "Guide Home", {
+          hidden: true,
+          label: "Guides",
+        }),
+      ],
+      { diagnostics, folderMeta }
+    );
+    expect(diagnostics).toHaveLength(0);
+  });
+
+  it("warns when the index page's sidebar.label names neither title", () => {
+    const folderMeta = new Map<string, FolderMeta>([
+      ["guide", { title: "Guides" }],
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    buildNavigation(
+      [
+        page("guide/index.md", "/guide", "Guide Home", {
+          hidden: true,
+          label: "Guide",
+        }),
+      ],
+      { diagnostics, folderMeta }
+    );
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.code).toBe("BLUME_NAV_INDEX_TITLE_MISMATCH");
   });
 
   it("does not warn when the index page's own row is visible", () => {
@@ -1026,7 +1181,7 @@ describe("buildNavigation — index title / folder meta title diagnostics", () =
     expect(diagnostics).toHaveLength(0);
   });
 
-  it("warns for a sidebar-hidden index page, which still renders its own <title>", () => {
+  it("warns for a sidebar-hidden index page without leaking it into the tree", () => {
     const folderMeta = new Map<string, FolderMeta>([
       ["guide", { title: "Guides" }],
     ]);
@@ -1057,6 +1212,11 @@ describe("buildNavigation — index title / folder meta title diagnostics", () =
     );
     expect(diagnostics).toHaveLength(0);
   });
+});
+
+const undated = (ref: string, title: string): PageRecord => ({
+  ...changelogPage(ref, title, "2024-01-01"),
+  meta: pageMetaSchema.parse({ type: "changelog" }),
 });
 
 describe("buildNavigation — duplicate sidebar order diagnostics", () => {
@@ -1153,10 +1313,6 @@ describe("buildNavigation — duplicate sidebar order diagnostics", () => {
   it("does not warn for undated changelog entries with date-prefixed filenames", () => {
     // With no date, the order falls back to the numeric filename prefix — a
     // date stamp (`2024-...`), not an authored rank, so the tie isn't flagged.
-    const undated = (ref: string, title: string): PageRecord => ({
-      ...changelogPage(ref, title, "2024-01-01"),
-      meta: pageMetaSchema.parse({ type: "changelog" }),
-    });
     const diagnostics: Diagnostic[] = [];
     buildNavigation(
       [

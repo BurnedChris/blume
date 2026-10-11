@@ -1,7 +1,7 @@
 ---
 title: Assistente
 description: >-
-  Um assistente na própria página fundamentado na sua documentação — perguntas sugeridas, instruções personalizadas, dimensionamento da recuperação, adaptadores de provedor do Vercel AI Gateway a qualquer endpoint compatível com OpenAI, e a saída de servidor que ele exige.
+  Um assistente na própria página fundamentado na sua documentação — perguntas sugeridas, instruções personalizadas, dimensionamento da recuperação, adaptadores de provedor para OpenAI, Anthropic, Gemini, Grok, o Vercel AI Gateway e qualquer endpoint compatível com OpenAI, e a saída de servidor que ele exige.
 ---
 
 Adicione um assistente que responde às perguntas dos leitores num painel de chat na própria página, apoiado por um endpoint de servidor com streaming e pelo [AI SDK](https://ai-sdk.dev). É opcional, e a documentação estática continua totalmente estática até você ativá-lo:
@@ -35,6 +35,27 @@ ai: {
 
 `label` é a pergunta que será feita; `icon` é opcional. Deixe `suggestions` sem definir (ou vazio) e o painel abre com um campo de entrada simples.
 
+## Perguntando sobre código [#asking-about-code]
+
+Com o assistente ativado, todo bloco de código ganha um botão **Ask** ao lado do botão de copiar. Ele abre o assistente com o bloco anexado, exibido como um chip acima do campo de entrada, para que o leitor possa perguntar o que o código faz, por que ele falha ou como adaptá-lo. Se for enviado sem uma pergunta, ele pede ao assistente que explique o código. O código vai para o modelo como um bloco de código delimitado depois da pergunta, com até 6.000 caracteres.
+
+Uma interface de chat personalizada construída sobre o `useAssistant` pode fazer o mesmo: escute `blume:open-assistant` em `window`, cujo `detail.code` contém `language`, `source` e `title` do bloco.
+
+## Contatar o suporte [#contact-support]
+
+Quando a documentação não tiver a resposta, encaminhe o leitor para uma pessoa. Defina `support` e, assim que houver uma conversa, o painel mostra um link **Contact support** abaixo dela:
+
+```ts blume.config.ts lineNumbers
+ai: {
+  assistant: {
+    enabled: true,
+    support: "mailto:help@example.com", // or "https://example.com/support", or "/support"
+  },
+},
+```
+
+Um endereço `mailto:` inicia um e-mail com a conversa como corpo, para que o leitor não precise explicar tudo de novo (uma conversa longa mantém as trocas mais recentes). Uma URL ou uma página do seu site recebe o id da conversa como um parâmetro de query `thread`. Os [eventos de analytics](#analytics) `ask`, `ask_answer` e `ask_error` do assistente carregam o mesmo `thread`, para que a sua equipe de suporte consiga encontrar a conversa no seu analytics.
+
 ## Instruções personalizadas [#custom-instructions]
 
 Adicione o seu próprio texto de system prompt com `instructions` — identidade, idioma, tom ou qualquer outra coisa que o assistente deva ter em mente:
@@ -55,9 +76,27 @@ Seu texto é **acrescentado às** instruções internas em vez de substituí-las
 
 O assistente é **fundamentado na sua documentação**. Para cada pergunta ele recupera as páginas mais relevantes — usando o mesmo índice léxico do [Orama](/docs/configuration/search) que alimenta a busca na página — e as injeta no system prompt do modelo, de forma que as respostas venham do seu conteúdo e não do conhecimento próprio do modelo. O assistente é instruído a responder apenas a partir das páginas recuperadas, a dizer quando algo não está coberto e a citar as páginas de onde tirou a informação.
 
-A página em que o leitor está no momento é adicionada primeiro ao contexto e usada para limitar a recuperação ao idioma daquela página — e, num site [versionado](/docs/content/versioning), à versão da documentação dela — para que as respostas continuem relevantes ao ponto em que ele está na documentação. A recuperação roda no momento da requisição a partir de um snapshot embutido no build, então funciona independentemente do seu provedor de [busca](/docs/configuration/search) — até mesmo com `search: false` — e não precisa de configuração.
+A página em que o leitor está no momento é adicionada primeiro ao contexto e usada para limitar a recuperação ao idioma daquela página — e, num site [versionado](/docs/content/versioning), à versão da documentação dela — para que as respostas continuem relevantes ao ponto em que ele está na documentação. Uma pergunta feita fora da documentação, como numa landing page, fica restrita ao idioma indicado pelo prefixo de locale da URL (`/ja`), ou ao idioma padrão. A recuperação roda no momento da requisição a partir de um snapshot embutido no build, então funciona independentemente do seu provedor de [busca](/docs/configuration/search) — até mesmo com `search: false` — e não precisa de configuração.
 
 A fundamentação está ativa para todos os adaptadores, exceto o **[Inkeep](#inkeep)**, que roda a própria recuperação sobre o conteúdo que você indexou no painel dele.
+
+## Buscando e lendo páginas [#searching-and-reading-pages]
+
+As páginas recuperadas são um ponto de partida. O assistente também pode pesquisar por conta própria: ele tem uma ferramenta `search_docs` que busca na sua documentação e uma ferramenta `read_page` que lê uma página inteira, para quando um trecho termina antes da resposta. Ele pode buscar, ler uma ou duas páginas, buscar de novo e então responder, tudo dentro de uma única pergunta. As chamadas de ferramenta rodam no seu servidor sobre o mesmo snapshot da fundamentação, respeitam o idioma e a versão da documentação do leitor e nunca chegam até ele; o leitor vê apenas a resposta.
+
+As ferramentas vêm ativadas por padrão para todo adaptador cujos modelos suportam chamada de ferramentas. Elas ficam desativadas para [endpoints compatíveis com OpenAI](#openai-compatible-endpoints), já que um modelo auto-hospedado pode não suportar. Defina `tools` para mudar qualquer um dos padrões:
+
+```ts blume.config.ts lineNumbers
+ai: {
+  assistant: {
+    enabled: true,
+    provider: openai({ baseUrl, model, apiKeyEnv }),
+    tools: true, // this model supports tool calling
+  },
+}
+```
+
+Cada pergunta leva no máximo cinco etapas do modelo: até quatro rodadas de chamadas de ferramenta e depois a resposta. Com `tools: false`, o assistente responde apenas a partir das páginas recuperadas, como fazia antes de as ferramentas existirem.
 
 ## Tamanho da recuperação [#retrieval-size]
 
@@ -86,6 +125,8 @@ Os três não são intercambiáveis. `contextBudget` limita toda a injeção, `e
 
 Os padrões servem bem para um modelo hospedado. Reduza-os quando você estiver servindo a partir do seu próprio hardware e o tempo até o primeiro token importar mais que a abrangência; as respostas continuam fundamentadas de qualquer forma, e o assistente é instruído a dizer quando algo não está coberto em vez de preencher a lacuna.
 
+No seu próprio hardware, dimensione também a janela de contexto do modelo para o prompt inteiro, e não só para os trechos: a conversa até ali acrescenta até 24.000 caracteres e, com `tools` ativado, um único resultado de `read_page` acrescenta até 20.000, cerca de 5.000 tokens sozinho. O Ollama, por exemplo, usa por padrão uma janela de 4k tokens em GPUs menores, e um prompt que a ultrapassa não falha: o Ollama descarta o início do prompt, onde ficam as instruções e os trechos, e o modelo responde sem a sua documentação.
+
 ## Endpoint externo [#external-endpoint]
 
 Já tem um backend de API para IA? Aponte o painel para ele e mantenha o build da documentação estático:
@@ -108,6 +149,8 @@ O Blume envia o mesmo corpo `POST` que a rota interna:
 }
 ```
 
+`messages` é a conversa até aqui, terminando com a nova pergunta. A rota interna aceita no máximo 40 mensagens e 24.000 caracteres delas em JSON, então, quando uma conversa ultrapassa qualquer um desses limites, o painel envia as trocas mais recentes que cabem e descarta as mais antigas.
+
 Retorne uma resposta bem-sucedida cujo corpo seja um fluxo de texto UTF-8 puro. Se o endpoint estiver em outra origem, permita a origem da documentação com CORS: aceite `OPTIONS` e `POST`, permita o cabeçalho de requisição `content-type` e retorne os cabeçalhos CORS tanto no preflight quanto na resposta com streaming. Com `endpoint` definido, o Blume gera a interface de chat mas nenhuma rota de servidor, snapshot de fundamentação, dependência de provedor ou aviso de segredo de provedor; seu backend fica responsável pela recuperação, autenticação, limitação de taxa, acesso ao modelo e citações. Um adaptador definido junto com ele é ignorado.
 
 ## Chamadas de outras origens [#cross-origin-callers]
@@ -123,7 +166,7 @@ ai: {
 }
 ```
 
-A rota então responde ao preflight `OPTIONS` do navegador e nomeia uma origem listada em toda resposta — tanto na resposta com streaming quanto nos status de erro, para que quem chama consiga distinguir um corpo rejeitado de uma falha do provedor. Origens que não estão listadas não recebem cabeçalho nenhum e continuam sujeitas à regra de mesma origem do navegador. Cada entrada é reduzida à sua origem, então `https://www.example.com/docs/` e `https://www.example.com` significam a mesma coisa. Para permitir que qualquer página chame a rota, liste `"*"` em vez de origens.
+A rota então responde ao preflight `OPTIONS` do navegador e nomeia uma origem listada em toda resposta — tanto na resposta com streaming quanto nos status de erro, para que quem chama consiga distinguir um corpo rejeitado de uma falha do provedor. Essas respostas também expõem `Retry-After`, então, depois do `429` de uma [limitação de taxa](/docs/configuration/rate-limiting), quem chama consegue ler quantos segundos esperar. Origens que não estão listadas não recebem cabeçalho nenhum e continuam sujeitas à regra de mesma origem do navegador. Cada entrada é reduzida à sua origem, então `https://www.example.com/docs/` e `https://www.example.com` significam a mesma coisa. Para permitir que qualquer página chame a rota, liste `"*"` em vez de origens.
 
 Quem chama envia o mesmo corpo `POST` que o contrato do [endpoint externo](#external-endpoint) descreve e lê de volta o mesmo fluxo de texto. Envie-o como JSON com um cabeçalho `content-type: application/json`:
 
@@ -161,13 +204,13 @@ Um build estático com o assistente ativado e sem um `endpoint` externo falha im
 
 ```ts blume.config.ts lineNumbers
 import { defineConfig } from "blume";
-import { openrouter } from "blume/ai";
+import { anthropic } from "blume/ai";
 
 export default defineConfig({
   ai: {
     assistant: {
       enabled: true,
-      provider: openrouter({ model: "anthropic/claude-sonnet-4-5" }),
+      provider: anthropic({ model: "claude-sonnet-5" }),
     },
   },
 });
@@ -175,15 +218,119 @@ export default defineConfig({
 
 | Adaptador | Responde com | Variável de ambiente da chave de API | SDK a instalar |
 | --- | --- | --- | --- |
+| [`openai()`](#openai) | um modelo da [OpenAI](https://platform.openai.com), ou qualquer [endpoint compatível com OpenAI](#openai-compatible-endpoints) | `OPENAI_API_KEY` | `@ai-sdk/openai` (`@ai-sdk/openai-compatible` com uma `baseUrl`) |
+| [`anthropic()`](#anthropic) | um modelo [Claude](https://platform.claude.com) | `ANTHROPIC_API_KEY` | `@ai-sdk/anthropic` |
+| [`gemini()`](#gemini) | um modelo [Gemini](https://ai.google.dev) | `GEMINI_API_KEY` | `@ai-sdk/google` |
+| [`grok()`](#grok) | um modelo Grok da [xAI](https://x.ai/api) | `XAI_API_KEY` | `@ai-sdk/xai` |
 | [`gateway()`](#vercel-ai-gateway) (padrão) | uma string `provider/model` via o Vercel AI Gateway | `AI_GATEWAY_API_KEY` | nenhum — já vem com o Blume |
 | [`openrouter()`](#openrouter) | qualquer modelo do [OpenRouter](https://openrouter.ai) | `OPENROUTER_API_KEY` | `@openrouter/ai-sdk-provider` |
 | [`llmgateway()`](#llmgateway) | qualquer modelo do [LLMGateway](https://llmgateway.io) | `LLMGATEWAY_API_KEY` | `@ai-sdk/openai-compatible` |
 | [`inkeep()`](#inkeep) | um modelo de QA do [Inkeep](https://inkeep.com) | `INKEEP_API_KEY` | `@ai-sdk/openai-compatible` |
-| [`openaiCompatible()`](#openai-compatible-endpoints) | o que o seu endpoint servir | a `apiKeyEnv` que você indicar | `@ai-sdk/openai-compatible` |
 
-Os SDKs são dependências de par opcionais, então adicione ao seu projeto aquele de que o seu adaptador precisa (por exemplo, `npm install @openrouter/ai-sdk-provider`). Se estiver faltando, o `blume build` para antes de o Vite rodar, indicando o pacote e o comando que o instala, e o [`blume doctor`](/docs/cli/doctor) também reporta isso.
+`openai()`, `anthropic()`, `gemini()` e `grok()` chamam a API do próprio provedor com a sua chave — não há nada no meio. Os SDKs são dependências de par opcionais, então adicione ao seu projeto aquele de que o seu adaptador precisa (por exemplo, `npm install @ai-sdk/anthropic`). Se estiver faltando, o `blume build` para antes de o Vite rodar, indicando o pacote e o comando que o instala, e o [`blume doctor`](/docs/cli/doctor) também reporta isso.
 
 O descritor que um adaptador retorna é só dados — o tipo dele, as opções, as variáveis de ambiente que ele lê e o SDK de que ele precisa — então a rota gerada (e a [ejetada](/docs/configuration/customization#eject)) o embute como literais e importa o SDK do provedor pelo nome. Nada lê o `blume.config.ts` no momento da requisição, e nenhum segredo jamais é escrito numa rota: os adaptadores recebem o **nome** da variável de ambiente que contém a chave, e a rota lê o valor através do [`getSecret()`](https://docs.astro.build/en/guides/environment-variables/#retrieving-secrets-programmatically) do Astro, então cada adaptador de deploy o fornece do seu próprio jeito: variáveis de ambiente no Node, na Vercel e no Netlify, e os [bindings](https://docs.astro.build/en/guides/integrations-guide/cloudflare/#environment-variables-and-secrets) do Worker no Cloudflare.
+
+### OpenAI
+
+Qualquer modelo da [OpenAI](https://platform.openai.com), chamado diretamente através do próprio provedor da OpenAI para o AI SDK:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { openai } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: openai({ model: "gpt-5.5" }),
+    },
+  },
+});
+```
+
+#### Endpoints compatíveis com OpenAI [#openai-compatible-endpoints]
+
+Qualquer endpoint que fale a API da OpenAI — um modelo auto-hospedado, um gateway interno — também funciona através de `openai()`: adicione a `baseUrl` dele e, geralmente, `apiKeyEnv` com a variável de ambiente que contém a chave dele (o padrão é `OPENAI_API_KEY`). `name` é o nome de provedor que o AI SDK reporta e a chave sob a qual o endpoint lê [`providerOptions`](#options-every-adapter-takes); o padrão é `openai-compatible`:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { openai } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: openai({
+        baseUrl: "https://my-gateway.example.com/v1",
+        apiKeyEnv: "MY_GATEWAY_API_KEY",
+        model: "gpt-4o",
+        name: "my-gateway",
+      }),
+    },
+  },
+});
+```
+
+Com uma `baseUrl`, a rota chama a API Chat Completions do endpoint através de `@ai-sdk/openai-compatible`, então instale esse pacote em vez de `@ai-sdk/openai`: a maioria dos endpoints compatíveis não serve a Responses API da OpenAI. As [ferramentas de documentação](#searching-and-reading-pages) ficam desativadas por padrão, já que um modelo auto-hospedado pode não suportar chamada de ferramentas.
+
+:::note
+`openaiCompatible()` de versões anteriores do Blume continua funcionando: é o mesmo adaptador que `openai()` com uma `baseUrl`.
+:::
+
+### Anthropic
+
+Qualquer modelo [Claude](https://platform.claude.com), chamado diretamente através do provedor da Anthropic para o AI SDK:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { anthropic } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: anthropic({ model: "claude-sonnet-5" }),
+    },
+  },
+});
+```
+
+### Gemini
+
+Qualquer modelo [Gemini](https://ai.google.dev), chamado diretamente através do provedor do Google para o AI SDK. A chave é uma chave de API do Google AI Studio:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { gemini } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: gemini({ model: "gemini-3.5-flash" }),
+    },
+  },
+});
+```
+
+### Grok
+
+Qualquer modelo Grok da [xAI](https://x.ai/api), chamado diretamente através do provedor da xAI para o AI SDK:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { grok } from "blume/ai";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: grok({ model: "grok-4.7" }),
+    },
+  },
+});
+```
 
 ### Vercel AI Gateway
 
@@ -266,29 +413,6 @@ export default defineConfig({
 
 `baseUrl` substitui o endpoint predefinido (`https://api.inkeep.com/v1`).
 
-### Endpoints compatíveis com OpenAI [#openai-compatible-endpoints]
-
-Qualquer endpoint que fale a API da OpenAI funciona através de `openaiCompatible()` — informe a `baseUrl` dele, o `model` que ele serve e a variável de ambiente que contém a chave dele. Um endpoint genérico não tem valor predefinido para nenhum desses, então os três são obrigatórios; `name` é o nome de provedor que o AI SDK reporta e tem `openai-compatible` como padrão:
-
-```ts blume.config.ts lineNumbers
-import { defineConfig } from "blume";
-import { openaiCompatible } from "blume/ai";
-
-export default defineConfig({
-  ai: {
-    assistant: {
-      enabled: true,
-      provider: openaiCompatible({
-        baseUrl: "https://my-gateway.example.com/v1",
-        apiKeyEnv: "MY_GATEWAY_API_KEY",
-        model: "gpt-4o",
-        name: "my-gateway",
-      }),
-    },
-  },
-});
-```
-
 ### Opções que todo adaptador aceita [#options-every-adapter-takes]
 
 **`apiKeyEnv`** aponta um adaptador para uma variável de ambiente diferente da padrão dele — `gateway({ apiKeyEnv: "DOCS_GATEWAY_KEY" })` lê essa variável em vez de `AI_GATEWAY_API_KEY`, e o aviso de segredo ausente no `blume dev`/`build` também a verifica. Enquanto a chave não estiver definida, a rota implantada responde `503` com uma mensagem indicando o nome da variável. A rota lê um corpo de requisição de até 64 KB e responde a qualquer coisa maior com `413`.
@@ -296,7 +420,7 @@ export default defineConfig({
 **`headers`** envia cabeçalhos de requisição estáticos em toda chamada — um cabeçalho que identifica quem chama num backend compartilhado, por exemplo, para que a observabilidade ou a limitação de taxa dele consiga distinguir a sua documentação do restante do tráfego:
 
 ```ts blume.config.ts lineNumbers
-provider: openaiCompatible({
+provider: openai({
   baseUrl: "https://llm.internal.example.com/v1",
   apiKeyEnv: "INTERNAL_LLM_API_KEY",
   model: "gpt-4o",
@@ -315,7 +439,7 @@ provider: gateway({
 }),
 ```
 
-O Blume mapeia apenas as opções que ele nomeia (`model`, `reasoning`, `apiKeyEnv`, `headers`) e repassa `providerOptions` literalmente, então ele precisa ser JSON — ele é embutido na rota — e precisa usar a chave que o provedor subjacente espera (`openai` para um modelo da OpenAI atrás do gateway, `openrouter` no OpenRouter). Ativar o assistente também liga o React para a ilha na página — veja [Personalização](/docs/configuration/customization#interactive-islands).
+O Blume mapeia apenas as opções que ele nomeia (`model`, `reasoning`, `apiKeyEnv`, `headers`) e repassa `providerOptions` literalmente, então ele precisa ser JSON — ele é embutido na rota — e precisa usar a chave que o provedor subjacente espera (`openai` para `openai()` ou para um modelo da OpenAI atrás do gateway, `anthropic` para `anthropic()`, `google` para `gemini()`, `xai` para `grok()`, `openrouter` no OpenRouter e o `name` do adaptador num endpoint compatível com OpenAI). Ativar o assistente também liga o React para a ilha na página — veja [Personalização](/docs/configuration/customization#interactive-islands).
 
 ## Raciocínio [#reasoning]
 
@@ -329,10 +453,13 @@ Cada adaptador envia o nível como o controle de esforço de raciocínio do pró
 
 | Adaptador | O que o nível vira |
 | --- | --- |
+| `openai()` | O `reasoning_effort` da OpenAI. Com uma `baseUrl`, ele é enviado como `reasoning_effort` na requisição, então o endpoint precisa aceitar esse parâmetro. |
+| `anthropic()` | O pensamento do Claude: um nível de esforço nos modelos com pensamento adaptativo, um orçamento de pensamento nos mais antigos e o pensamento desligado para `"none"`. |
+| `gemini()` | O nível de pensamento do Gemini, ou um orçamento de pensamento nos modelos que aceitam um. |
+| `grok()` | O esforço de raciocínio da xAI, nos modelos que oferecem um. |
 | `gateway()` | A opção de chamada [`reasoning`](https://ai-sdk.dev/docs/ai-sdk-core/reasoning) do AI SDK, que o gateway mapeia para a configuração do próprio modelo — o `reasoning_effort` da OpenAI, por exemplo. |
 | `openrouter()` | O `reasoning.effort` do OpenRouter, definido no modelo. O provedor dele ignora a opção de chamada do AI SDK, então o nível é colocado onde o OpenRouter o lê. |
 | `llmgateway()` | `reasoning_effort` na requisição, através da opção de chamada do AI SDK. |
-| `openaiCompatible()` | `reasoning_effort` na requisição, então o endpoint precisa aceitar esse parâmetro. |
 | `inkeep()` | Não disponível. O Inkeep roda o próprio pipeline de QA sem controle de raciocínio, então o adaptador não tem a opção `reasoning`, e definir uma é um erro de configuração. |
 
 O modelo precisa suportar o nível que você escolher: a OpenAI rejeita um nível que o modelo não oferece (`"none"` e `"xhigh"` existem apenas em alguns), então confira a documentação do modelo antes de definir um. Deixe sem definir para manter o padrão do modelo. Assim como o [tamanho da recuperação](#retrieval-size), isso troca abrangência por tempo até o primeiro token, e as respostas continuam fundamentadas de qualquer forma.
@@ -343,16 +470,45 @@ Com um [provedor de analytics](/docs/configuration/analytics) configurado, o ass
 
 | Evento | Quando | Propriedades |
 | --- | --- | --- |
-| `ask` | Uma pergunta é enviada | `path`, `questionChars` |
-| `ask_answer` | A resposta termina de ser transmitida | `path`, `questionChars`, `ms`, `chars` |
-| `ask_error` | A requisição falha, quebra ou volta vazia | `path`, `questionChars`, `ms`, `status` |
+| `ask` | Uma pergunta é enviada | `path`, `questionChars`, `thread` |
+| `ask_answer` | A resposta termina de ser transmitida | `path`, `questionChars`, `thread`, `ms`, `chars` |
+| `ask_error` | A requisição falha, quebra ou volta vazia | `path`, `questionChars`, `thread`, `ms`, `status` |
 
-`path` é a página de onde o leitor perguntou (o pathname servido, então ele corresponde ao widget de feedback e às suas visualizações de página sob um `base`), `questionChars` o comprimento da pergunta, `ms` o tempo entre o envio da pergunta e o último chunk, e `chars` o comprimento da resposta. `status` é o status HTTP: `0` quando nenhuma resposta chegou (offline, DNS, CORS), e `200` quando a resposta estava certa mas o fluxo dela quebrou no meio da resposta — como um erro de provedor ou de credencial se manifesta, já que o backend já enviou os cabeçalhos — ou não entregou nada. Limpar a conversa no meio de uma resposta não reporta nenhum dos dois resultados.
+`path` é a página de onde o leitor perguntou (o pathname servido, então ele corresponde ao widget de feedback e às suas visualizações de página sob um `base`), `questionChars` o comprimento da pergunta, `thread` o id da conversa (um novo quando o leitor a limpa), `ms` o tempo entre o envio da pergunta e o último chunk, e `chars` o comprimento da resposta. `status` é o status HTTP: `0` quando nenhuma resposta chegou (offline, DNS, CORS), e `200` quando a resposta estava certa mas o fluxo dela quebrou no meio da resposta — como um erro de provedor ou de credencial se manifesta, já que o backend já enviou os cabeçalhos — ou não entregou nada. Limpar a conversa no meio de uma resposta não reporta nenhum dos dois resultados.
 
 O texto da pergunta nunca chega a um provedor: é entrada livre do leitor (chaves coladas, logs de erro, nomes) que violaria os termos e os limites de tamanho por valor da maioria dos provedores. Ele viaja apenas no evento de DOM `blume:track`, como `question` em `detail.props`, então um listener que você escreva pode encaminhá-lo para onde você decidir que ele pertence. Uma interface de chat personalizada construída sobre o `useAssistant` de `blume/hooks` reporta os mesmos eventos. Sem nenhum provedor configurado, as chamadas ao provedor interno não fazem nada, mas o evento `blume:track` ainda é disparado, então uma integração personalizada que o escute recebe esses eventos.
 
 ## Limitação de taxa [#rate-limiting]
 
-O endpoint `POST /api/ask` é **não autenticado** — ele precisa ser, para que o assistente na página possa chamá-lo. O Blume valida cada requisição — rejeitando corpos malformados, limitando a 1–40 mensagens e aceitando apenas os papéis `user`/`assistant` para que quem chama não possa injetar o próprio system prompt e reaproveitar a rota como um proxy genérico de LLM — para limitar quanto uma única chamada pode gastar com o seu modelo, mas isso não impede alguém de chamar o endpoint repetidamente. Se o abuso de custos for uma preocupação, coloque a rota atrás de um limitador de taxa — a limitação de taxa na borda do seu host (a da Vercel, por exemplo), um middleware, ou os limites de gasto por chave do seu provedor de modelos.
+O endpoint `POST /api/ask` é **não autenticado** — ele precisa ser, para que o assistente na página possa chamá-lo. O Blume valida cada requisição — rejeitando corpos malformados, limitando a 1–40 mensagens e aceitando apenas os papéis `user`/`assistant` para que quem chama não possa injetar o próprio system prompt e reaproveitar a rota como um proxy genérico de LLM — para limitar quanto uma única chamada pode gastar com o seu modelo. Em seguida, a [limitação de taxa](/docs/configuration/rate-limiting), ativada por padrão, limita quantas perguntas um mesmo leitor pode fazer: passado o limite, o painel pede que ele tente de novo em alguns minutos.
+
+## Proteção contra bots [#bot-protection]
+
+A limitação de taxa conta por endereço IP, então um script que distribui as perguntas por vários endereços passa por ela. Para barrar scripts, adicione uma verificação de bots de `blume/captcha`: antes de cada pergunta, o painel obtém um token da verificação, e a rota o valida com o provedor antes de o modelo rodar. A maioria dos leitores nunca vê um desafio; a verificação só pede um clique quando não tem certeza.
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { turnstile } from "blume/captcha";
+
+export default defineConfig({
+  ai: {
+    assistant: {
+      enabled: true,
+      captcha: turnstile({ siteKey: "0x4AAAAAAA…" }),
+    },
+  },
+});
+```
+
+| Adaptador | Provedor | Variável de ambiente da chave secreta |
+| --- | --- | --- |
+| `turnstile()` | [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/) | `TURNSTILE_SECRET_KEY` |
+| `hcaptcha()` | [hCaptcha](https://www.hcaptcha.com), executado de forma invisível | `HCAPTCHA_SECRET_KEY` |
+
+A chave do site vai para o navegador e pode ser commitada com segurança; a chave secreta fica no servidor. No Turnstile, crie um widget no painel da Cloudflare e escolha o modo **Managed** ou **Invisible**. Enquanto o segredo não estiver definido, o assistente responde que não está configurado, e o `blume build` emite um aviso. O script do provedor é carregado junto com a primeira pergunta do leitor, e não com a página.
+
+Uma verificação que falha mostra ao leitor um aviso traduzido de "não foi possível verificar que você é humano", e a rota responde `403`. Os dois provedores publicam chaves de teste que sempre passam, para você testar a verificação localmente: a `1x00000000000000000000BB` do Turnstile com o segredo `1x0000000000000000000000000000000AA`, e a `10000000-ffff-ffff-ffff-000000000001` do hCaptcha com `0x0000000000000000000000000000000000000000`.
+
+Com um [endpoint externo](#external-endpoint), o painel continua enviando o token, como `captcha` no corpo da requisição, para que o seu backend o verifique.
 
 O endpoint é anunciado no [manifesto de legibilidade para agentes](/docs/discoverability/agent-discovery#agent-readability) junto com o restante da superfície legível por máquina do site.

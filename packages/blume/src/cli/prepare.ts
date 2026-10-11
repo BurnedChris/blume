@@ -59,6 +59,12 @@ export const prepareProject = async (
   let project: BlumeProject;
   try {
     project = await scanProject(options.root, {
+      // Fail-fast on missing secrets: warn now, not at the first request, and
+      // before the sources fetch, so a source that can't authenticate on a
+      // fresh build still gets its variable named.
+      beforeSources: (config) => {
+        reportDiagnostics(checkRequiredSecrets(config), options.root);
+      },
       devServerUrl: options.devServerUrl,
       mode: options.mode,
       overrides: options.overrides,
@@ -106,7 +112,7 @@ export const prepareProject = async (
   const hadErrors = reportDiagnostics(project.diagnostics, options.root);
   const dropped =
     project.droppedPages > 0
-      ? `${project.droppedPages} page(s) failed frontmatter validation and were dropped from the site. `
+      ? `${project.droppedPages} page(s) failed validation and were dropped from the site. `
       : "";
   const optIn = options.strictOptIn ?? options.mode === "dev";
   if (hadErrors && options.strict) {
@@ -137,9 +143,6 @@ export const prepareProject = async (
   for (const warning of warnings) {
     logger.warn(warning);
   }
-
-  // Fail-fast on missing runtime secrets: warn now, not at the first request.
-  reportDiagnostics(checkRequiredSecrets(project.config), options.root);
 
   return project;
 };

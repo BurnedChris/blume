@@ -34,6 +34,7 @@ export const ru: UIStringsOverride = {
     error: "Извините, что-то пошло не так.",
     explainCode: "Объясни этот код.",
     label: "Задать вопрос",
+    open: "Открыть ассистента",
     placeholder: "Задайте вопрос…",
     rateLimited:
       "Вы задали много вопросов. Попробуйте снова через несколько минут.",
@@ -49,6 +50,7 @@ export const ru: UIStringsOverride = {
   banner: { dismiss: "Закрыть объявление" },
   changelog: {
     description: "Обновления продукта и примечания к выпускам.",
+    empty: "В журнале изменений пока нет записей.",
     title: "Журнал изменений",
   },
   consent: {
@@ -70,6 +72,7 @@ export const ru: UIStringsOverride = {
     preview: "Предпросмотр",
     prop: "Свойство",
     selectTab: "Выбрать вкладку",
+    selectView: "Выбрать представление",
     showLess: "Показать меньше",
     showMore: "Показать ещё",
     stars: "Звёзды",

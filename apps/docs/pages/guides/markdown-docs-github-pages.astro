@@ -1,0 +1,401 @@
+---
+// Deploy Markdown docs to GitHub Pages: checked against the quickstart, the
+// deployment docs (static output, subpath deploys, basePath), the syntax,
+// includes, and validate docs, `blume init` (cli/init/scaffold.ts), and the
+// build's dist layout on main; the workflow's action versions against their
+// latest releases on 2026-09-27, and the Pages settings, custom-domain, and
+// Jekyll behavior against GitHub's docs. Not yet run end to end on a clean
+// public repository.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("markdown-docs-github-pages")}>
+  <p>
+    By the end of this guide, the Markdown in your repository is a docs site at
+    your GitHub Pages project URL, with sidebar navigation built from your
+    folders, local search, and a sitemap. A GitHub Actions workflow rebuilds and
+    publishes it every time you push, and your library's own scripts keep
+    working as they did.
+  </p>
+  <p>
+    GitHub can also publish Markdown straight from a branch, by running Jekyll
+    over your files. This guide takes the other route GitHub offers: Blume
+    builds the site in a workflow, and GitHub serves the files it produces.
+    Nothing is committed to a separate branch.
+  </p>
+  <p>
+    The examples use a fictional repository, <code>acme/widget-sdk</code>,
+    whose site ends up at <code>https://acme.github.io/widget-sdk/</code>.
+    Replace <code>acme</code> and <code>widget-sdk</code> with your own account
+    and repository names throughout.
+  </p>
+
+  <h2>Add Blume to your repository</h2>
+  <p>
+    From the root of your repository, on a new branch, scaffold the Blume
+    files:
+  </p>
+  <CodeBlock code="npx blume init" lang="bash" />
+  <p>
+    Keep the default, <code>.</code>, when it asks where to create the project,
+    so Blume sits beside your code, and give the folder that holds your
+    Markdown as the content directory (<code>docs</code> by default).{" "}
+    <code>init</code> never overwrites a file
+    that already exists, so in a repository with its own{" "}
+    <code>package.json</code> it:
+  </p>
+  <ul>
+    <li>
+      Writes <code>blume.config.ts</code>, with a <code>content.root</code> when
+      your Markdown lives somewhere other than <code>docs</code>.
+    </li>
+    <li>
+      Adds a home page at <code>docs/index.mdx</code> when that file doesn't
+      exist yet. If the folder already has an <code>index.md</code>, delete the
+      new file so the two don't compete for the same URL.
+    </li>
+    <li>
+      Adds <code>node_modules/</code>, <code>.blume/</code>,{" "}
+      <code>dist/</code>, and <code>.env.local</code> to{" "}
+      <code>.gitignore</code>, skipping any already there.
+    </li>
+    <li>
+      Leaves your <code>package.json</code> alone and skips the install, then
+      prints what's left to add.
+    </li>
+  </ul>
+  <p>
+    Install Blume as a dev dependency, so it stays out of the dependencies your
+    published package ships with:
+  </p>
+  <CodeBlock code="npm install --save-dev blume" lang="bash" />
+  <p>
+    Then add scripts for the docs. If your <code>dev</code> and{" "}
+    <code>build</code> scripts already run your library, give the docs their own
+    names rather than replacing them:
+  </p>
+  <CodeBlock
+    code={`{
+  "scripts": {
+    "build": "tsup",
+    "docs:dev": "blume dev",
+    "docs:build": "blume build"
+  }
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <Callout type="warning">
+    <code>blume build</code> writes the site to <code>dist/</code> in the folder
+    it runs from, and empties that folder first. If your library also builds
+    into <code>dist/</code> at the root, see{" "}
+    <a href="#troubleshooting">Troubleshooting</a> before you build.
+  </Callout>
+
+  <h2>Run it locally</h2>
+  <CodeBlock code="npm run docs:dev" lang="bash" />
+  <p>
+    Open <code>http://localhost:4321</code> and click through the site. Check
+    three things before you deploy anything:
+  </p>
+  <ul>
+    <li>
+      <strong>Navigation.</strong> Folders become sidebar groups and files
+      become pages. A page with no frontmatter still works: it takes its title
+      from its first heading, or failing that, its file name. Add a{" "}
+      <code>title</code> and <code>description</code> in frontmatter where you
+      want better sidebar labels and search results, and remove the page's own{" "}
+      <code># Heading</code> line when you do, since Blume renders the title as
+      the page heading.
+    </li>
+    <li>
+      <strong>Links and images.</strong> Links written for GitHub, like{" "}
+      <code>[Setup](./setup.md)</code>, land on the page that file publishes.
+      Relative images like <code>![Diagram](./images/diagram.png)</code> are
+      optimized at build time, so keep images beside the pages that use them.
+    </li>
+    <li>
+      <strong>Search.</strong> Open search from the header and look for a word
+      you know is on a page. The index is built locally, so there's no service
+      or key to set up.
+    </li>
+  </ul>
+  <p>
+    Your repository's own <code>README.md</code> sits outside the content
+    folder, and Blume can't include a file from outside it. Move the long-form
+    parts, like installation and usage, into <code>docs/index.mdx</code>, and
+    keep the README short, with a link to the docs site.
+  </p>
+  <p>
+    Before you move on, run the link checker. It reads your content the way a
+    build does and fails on any link that doesn't resolve:
+  </p>
+  <CodeBlock code="npx blume validate" lang="bash" />
+
+  <h2>Set the site URL and base</h2>
+  <p>
+    A project site is served from a subfolder named after the repository, not
+    from the root of a domain. Blume needs to know both halves: the origin, for
+    canonical URLs and the sitemap, and the subfolder, so every link and asset
+    points inside it. Add them to your config:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Widget SDK",
+  deployment: {
+    site: "https://acme.github.io",
+    base: "/widget-sdk",
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Keep <code>site</code> to the origin alone and put the repository path in{" "}
+    <code>base</code>. Blume adds the base to every internal link and asset for
+    you, so keep writing links as if the site were at the root. Unlike Vercel or Netlify, GitHub Pages
+    doesn't expose its URL to the build, so without <code>site</code> the build
+    has no origin and leaves out the sitemap and absolute canonical URLs.
+  </p>
+  <p>
+    Blume also has a top-level <code>basePath</code>, which is a different
+    thing. <code>basePath</code> moves your pages under a path like{" "}
+    <code>/docs</code> inside a site whose root is yours.{" "}
+    <code>deployment.base</code> is the folder the whole site is served from.
+    For a project site you want <code>base</code>. If the repository is named{" "}
+    <code>acme.github.io</code>, GitHub serves it at the root of that domain,
+    so leave <code>base</code> out.
+  </p>
+  <p>
+    With the base set, the dev server serves the site under it too, at{" "}
+    <code>http://localhost:4321/widget-sdk</code>. To see the production build
+    exactly as a static host serves it, build and preview it:
+  </p>
+  <CodeBlock
+    code={`npm run docs:build
+npx blume preview`}
+    lang="bash"
+  />
+
+  <h2>Turn on GitHub Actions for Pages</h2>
+  <p>
+    In your repository on GitHub, open <strong>Settings</strong>, then{" "}
+    <strong>Pages</strong>. Under <strong>Build and deployment</strong>, set{" "}
+    <strong>Source</strong> to <strong>GitHub Actions</strong>. You don't need
+    one of the suggested workflow templates: you'll add your own next.
+  </p>
+  <p>
+    Publishing from a workflow matters for Blume in one more way. When GitHub
+    runs Jekyll on a branch, Jekyll skips folders whose names start with an
+    underscore, and Blume's build keeps its styles and scripts in{" "}
+    <code>_astro/</code>. A workflow deploys the files exactly as Blume wrote
+    them.
+  </p>
+
+  <h2>Add the workflow</h2>
+  <p>
+    Create the workflow file. It builds the site on every push to{" "}
+    <code>main</code>, then deploys the result:
+  </p>
+  <CodeBlock
+    code={`name: Deploy docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npx blume validate
+      - run: npm run docs:build
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+          include-hidden-files: true
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: \${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5`}
+    lang="yaml"
+    title=".github/workflows/docs.yml"
+  />
+  <p>What each part does:</p>
+  <ul>
+    <li>
+      <strong>permissions</strong> gives the run what deploying needs:{" "}
+      <code>pages: write</code> to publish, and <code>id-token: write</code>,
+      which GitHub requires for a Pages deployment.
+    </li>
+    <li>
+      <strong>concurrency</strong> runs one deploy at a time. A push that lands
+      mid-deploy waits for the current one to finish instead of cancelling it.
+    </li>
+    <li>
+      <strong>build</strong> installs your dependencies, runs the link checker
+      so a broken link stops the deploy, builds the site, and uploads{" "}
+      <code>dist/</code>. That's the folder to upload: not <code>docs/</code>,
+      which holds your source, and not <code>.blume/</code>, which is Blume's
+      working folder.
+    </li>
+    <li>
+      <strong>include-hidden-files</strong> keeps folders whose names start
+      with a dot. The upload action leaves them out by default, and Blume's
+      build writes its agent discovery files to <code>.well-known/</code>.
+    </li>
+    <li>
+      <strong>deploy</strong> waits for the build (<code>needs: build</code>),
+      then publishes the artifact to the <code>github-pages</code> environment
+      and reports the site's URL.
+    </li>
+  </ul>
+  <p>
+    Any Node.js version from 22.19 on works. With pnpm, Yarn, or Bun, set up
+    that package manager and swap in its install and run commands. If you turn
+    on <code>lastModified: "git"</code> for "Last updated" dates, add{" "}
+    <code>fetch-depth: 0</code> under the checkout step, since a shallow clone
+    drops most of the history those dates come from.
+  </p>
+  <p>
+    GitHub Pages serves static files only, so leave out the Blume features that
+    need a server: the built-in assistant, the MCP server, the API
+    playground's built-in proxy, and Mixedbread search.{" "}
+    <a href="/guides/static-vs-server-documentation">Static or server-rendered documentation</a>{" "}
+    maps each one and the static alternatives.
+  </p>
+
+  <h2>Push and follow the deploy</h2>
+  <p>
+    Commit everything, merge it into <code>main</code>, and push. Open the{" "}
+    <strong>Actions</strong> tab to watch the <strong>Deploy docs</strong> run.
+    When the deploy job finishes, its summary shows the site's URL. From then
+    on, every push to <code>main</code> updates the site, and you can rerun the
+    workflow by hand from the Actions tab.
+  </p>
+
+  <h2>Check the live site</h2>
+  <p>Open the site and check the four things that break first on a subfolder:</p>
+  <ul>
+    <li>
+      <strong>A deep link.</strong> Paste the URL of a page a few levels down,
+      like <code>https://acme.github.io/widget-sdk/guides/setup</code>,
+      straight into a new tab. It should load with its styles.
+    </li>
+    <li>
+      <strong>An asset.</strong> Images show, and the page's styles load from{" "}
+      <code>/widget-sdk/_astro/</code>.
+    </li>
+    <li>
+      <strong>Search.</strong> A search from the header returns results and
+      opens pages under <code>/widget-sdk/</code>.
+    </li>
+    <li>
+      <strong>The sitemap.</strong>{" "}
+      <code>https://acme.github.io/widget-sdk/sitemap.xml</code> lists every
+      page with the full URL.
+    </li>
+  </ul>
+
+  <h2>Use a custom domain</h2>
+  <p>
+    To serve the docs from a domain like <code>docs.acme.example</code>, add it
+    under <strong>Custom domain</strong> in the repository's Pages settings,
+    then create a <code>CNAME</code> DNS record that points it at{" "}
+    <code>acme.github.io</code>, and turn on <strong>Enforce HTTPS</strong>. A
+    site published from a workflow doesn't need a{" "}
+    <code>CNAME</code> file in the repository: GitHub ignores it.
+  </p>
+  <p>
+    The site then lives at the root of its own domain, so update the config:
+    set <code>site</code> to the new domain and remove <code>base</code>.
+  </p>
+  <CodeBlock
+    code={`deployment: {
+  site: "https://docs.acme.example",
+},`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Push the change, and the next deploy rebuilds every link for the new
+    address.
+  </p>
+
+  <h2>Plan for your next major version</h2>
+  <p>
+    When a breaking release is coming, you'll want the old instructions to
+    stay online beside the new ones.{" "}
+    <a href="/guides/version-markdown-documentation">
+      Version your docs for a breaking release
+    </a>{" "}
+    walks through snapshotting them, and it deploys through this same workflow.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The site loads without styles, or images 404</h3>
+  <p>
+    The files are being requested from the root of the domain instead of the
+    repository's folder, so <code>base</code> is missing or doesn't match the
+    repository name exactly, including its case. Check the URL of a broken
+    file in your browser's network panel. A path written in raw HTML, like{" "}
+    <code>&lt;img src="/logo.png"&gt;</code>, doesn't get the base added, so
+    use Markdown image syntax or a relative path instead.
+  </p>
+  <h3>The deploy job fails on permissions</h3>
+  <p>
+    Check that the workflow has the <code>permissions</code> block above, with{" "}
+    <code>pages: write</code> and <code>id-token: write</code>, and that the
+    Pages source is set to <strong>GitHub Actions</strong> rather than a
+    branch.
+  </p>
+  <h3>The deploy is rejected for your branch</h3>
+  <p>
+    The <code>github-pages</code> environment can limit which branches may
+    deploy. Deploy from <code>main</code>, or review the environment's branch
+    rules under <strong>Settings</strong>, then <strong>Environments</strong>.
+  </p>
+  <h3>My library's build output disappeared</h3>
+  <p>
+    <code>blume build</code> empties <code>dist/</code> before writing the
+    site, so it can't share that folder with another build. Give the docs a
+    folder of their own instead: run <code>npx blume init website</code>, move
+    your Markdown into <code>website/docs/</code>, set the workflow's install
+    and build steps to run in <code>website</code> (with{" "}
+    <code>working-directory: website</code>), and upload{" "}
+    <code>website/dist</code>.
+  </p>
+  <h3>A link to the README or a source file breaks</h3>
+  <p>
+    Only files in the content folder become pages, so{" "}
+    <code>blume validate</code> reports a link like{" "}
+    <code>../README.md</code> or <code>../src/index.ts</code>. Link to the
+    file's page on GitHub with its full URL instead.
+  </p>
+</GuidePage>

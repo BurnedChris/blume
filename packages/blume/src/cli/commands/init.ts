@@ -75,9 +75,9 @@ const installScaffold = async (
 /**
  * Eject the freshly scaffolded project, or print the install-then-eject path.
  * Eject jiti-loads the scaffolded blume.config.ts, whose `import { defineConfig }
- * from "blume"` only resolves once dependencies are installed (or blume is
- * hoisted from an ancestor node_modules, as in a monorepo) — so the fallback
- * below is the common path when the install step was skipped.
+ * from "blume"` resolves to the running Blume package even before an install
+ * (see `blumeModuleAliases`). When eject still fails after a skipped install,
+ * the fallback below names the install as the likely fix.
  */
 const ejectScaffold = async (
   root: string,
@@ -272,14 +272,16 @@ export const initCommand = defineCommand({
     // which `init` leaves alone; say what it still needs before installing.
     const note = workspaceNote(root, answers, env);
 
-    // Keep installed dependencies, Blume's generated runtime (`.blume/`), and
-    // build output (`dist/`) out of version control. Idempotent: creates
-    // `.gitignore` when absent and skips entries already present
-    // (trailing-slash agnostic).
+    // Keep installed dependencies, Blume's generated runtime (`.blume/`),
+    // build output (`dist/`), and local secrets (`.env.local`, where every
+    // missing-secret warning says to put them) out of version control.
+    // Idempotent: creates `.gitignore` when absent and skips entries already
+    // present (trailing-slash agnostic).
     const ignored = await ensureGitignore(root, [
       "node_modules/",
       ".blume/",
       "dist/",
+      ".env.local",
     ]);
     if (ignored.length > 0) {
       sink.success(`Added ${ignored.join(", ")} to .gitignore`);

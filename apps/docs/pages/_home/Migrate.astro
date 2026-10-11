@@ -2,11 +2,13 @@
 // "Migrate with an agent." — one interactive demo: the headline reads
 // "Migrate from [Fumadocs]" where the bracketed brand is a dropdown trigger
 // (logo + name + chevron). Picking another source swaps the trigger, the body
-// copy, and the `blume migrate <source>` command in step one. With no JS the
+// copy, the link to that source's migration guide, and the
+// `blume migrate <source>` command in step one. With no JS the
 // initial source's panels (Fumadocs unless `initial` says otherwise) stay
 // visible. The copy buttons reuse the page-level delegated
 // `data-blume-copy-install` handler.
 import Icon from "blume/components/Icon.astro";
+import { guideById } from "../_guides/guides.ts";
 import CommandText from "./CommandText.astro";
 import {
   migrateCommand,
@@ -14,6 +16,7 @@ import {
   sources,
   withUniqueIds,
 } from "./migrate-sources.ts";
+import TextLink from "./TextLink.astro";
 import Tray from "./Tray.astro";
 
 interface Props {
@@ -23,6 +26,11 @@ interface Props {
 
 const { initial = "fumadocs" } = Astro.props;
 const active = sourceById(initial);
+// Each source's walkthrough under /guides (`migrate-from-<id>` unless the
+// source names its guide); guideById throws at build time if a source ever
+// lacks one.
+const guideHref = (source: { guide?: string; id: string }): string =>
+  `/guides/${guideById(source.guide ?? `migrate-from-${source.id}`).id}`;
 
 // The brand menu is a disclosure: the trigger's `aria-expanded` shows or hides
 // a group of plain buttons, and the current source's button carries
@@ -91,7 +99,7 @@ const migrateScript = `(()=>{if(window.__blumeMigrate){return;}window.__blumeMig
             <!-- Brand menu (this keeps its own dropdown chrome) -->
             <div
               aria-label="Choose a docs tool to migrate from"
-              class="font-sans pointer-events-none absolute left-0 z-20 mt-3 w-56 translate-y-1 rounded-blume border border-border bg-background p-1.5 text-left font-normal text-base tracking-normal opacity-0 shadow-black/5 shadow-lg transition data-[open=true]:pointer-events-auto data-[open=true]:translate-y-0 data-[open=true]:opacity-100"
+              class="font-sans pointer-events-none absolute left-0 z-20 mt-3 max-h-[min(24rem,60vh)] w-56 translate-y-1 overflow-y-auto overscroll-contain rounded-blume border border-border bg-background p-1.5 text-left font-normal text-base tracking-normal opacity-0 shadow-black/5 shadow-lg transition data-[open=true]:pointer-events-auto data-[open=true]:translate-y-0 data-[open=true]:opacity-100"
               data-migrate-menu
               data-open="false"
               id="migrate-menu"
@@ -145,6 +153,19 @@ const migrateScript = `(()=>{if(window.__blumeMigrate){return;}window.__blumeMig
           >
             {source.body}
           </p>
+        ))
+      }
+      {
+        sources.map((source) => (
+          <div
+            class="mt-4 hidden data-[active=true]:block"
+            data-active={source.id === active.id ? "true" : "false"}
+            data-migrate-panel={source.id}
+          >
+            <TextLink href={guideHref(source)}>
+              Read the {source.name} migration guide
+            </TextLink>
+          </div>
         ))
       }
     </div>

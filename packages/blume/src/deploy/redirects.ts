@@ -1,16 +1,24 @@
 import {
   normalizeBasePath,
+  normalizePath,
+  stripBasePath,
   withAuthoredBasePath,
   withBasePath,
   withComposedBasePath,
 } from "../core/base-path.ts";
 import { routeSetFor, servesRoute } from "../core/locale-links.ts";
 import type { RouteSet } from "../core/locale-links.ts";
+import {
+  MIRROR_EXTENSIONS,
+  mirrorName,
+  mirrorOwner,
+} from "../core/markdown-mirrors.ts";
 import type { BlumeProject } from "../core/project-graph.ts";
 import {
   compileRedirects,
   exactFirst,
   expandRedirect,
+  isPatternPath,
   underscoreRedirect,
   vercelRedirect,
 } from "../core/redirect-patterns.ts";
@@ -110,8 +118,81 @@ export const applyBaseToPlatformRedirects = (
 };
 
 /**
+ * A path naming an `.html` file (`/guide.html`), the URL another generator
+ * served a page at. No Blume page was ever served there, so it had no
+ * Markdown copy (`/guide.html.md`) for a redirect to move.
+ */
+const HTML_FILE_PATH = /\.html$/u;
+
+/** A path naming a folder's `index.html` (`/guide/index.html`, `/index.html`). */
+const INDEX_FILE_PATH = /^(?<folder>.*)\/index\.html$/u;
+
+/**
+ * Whether `from` names a page's own `index.html` (`/guide/index.html` for the
+ * page `/guide`, `/index.html` for the root), a URL a migrated site may have
+ * linked. A static build writes the page there, and Astro writes a redirect
+ * page to `<from>/index.html`, which would need that file to be a folder:
+ * the build fails with `EISDIR`. Hosts serve the page at that URL anyway,
+ * unless a redirect rule answers it first. `pages` are the served page
+ * routes, which carry `basePath`, as `from` does.
+ */
+export const isPageIndexFile = (from: string, pages: RouteSet): boolean => {
+  const folder = INDEX_FILE_PATH.exec(normalizePath(from))?.groups?.folder;
+  return folder !== undefined && servesRoute(pages, folder || "/");
+};
+
+/**
+ * Where a page's Markdown copy is served, from the page's served path and the
+ * deployment base that path carries.
+ */
+const mirrorPath = (path: string, base: string, extension: string): string =>
+  `${base}${mirrorName(stripBasePath(base, path))}${extension}`;
+
+/**
+ * Based `redirects`, each exact one that moves a page followed by the same
+ * redirect for the page's Markdown copies: from a path whose copies no page
+ * serves to one a page is served at, `/old.md` goes to `/new.md` (and `.mdx`
+ * alike), where it would otherwise 404 for an agent still reading the old
+ * URL. A served copy never gives way: `/index` names the root's copies, so
+ * `/index` → `/` moving them would turn the home page's `/index.md` into a
+ * redirect to itself. A pattern gets none; one that carries its capture over
+ * (`/beta/:slug*` → `/v2/:slug*`) already moves `/beta/guide.md` along. Nor
+ * does a redirect from an `.html` file (`/guide.html`, from a migrated site),
+ * which had no copy to move. `pages` are the served page routes (carrying
+ * `basePath`, not `deployment.base`), and `bases` the deployment base each
+ * end carries: Astro's config leaves it off `from` (see
+ * {@link applyBaseToAstroRedirects}).
+ */
+export const withMirrorRedirects = (
+  redirects: Redirect[],
+  pages: RouteSet,
+  bases: { from: string; to: string }
+): Redirect[] =>
+  redirects.flatMap((redirect) => {
+    const from = normalizePath(redirect.from);
+    const to = normalizePath(redirect.to);
+    const movesPage =
+      !isPatternPath(redirect.from) &&
+      !HTML_FILE_PATH.test(from) &&
+      servesRoute(pages, stripBasePath(bases.to, to)) &&
+      mirrorOwner(pages, mirrorName(stripBasePath(bases.from, from))) ===
+        undefined;
+    return movesPage
+      ? [
+          redirect,
+          ...MIRROR_EXTENSIONS.map((extension) => ({
+            from: mirrorPath(from, bases.from, extension),
+            status: redirect.status,
+            to: mirrorPath(to, bases.to, extension),
+          })),
+        ]
+      : [redirect];
+  });
+
+/**
  * The configured redirects as the host platform matches them, via
- * {@link applyBaseToPlatformRedirects}, exact paths ahead of patterns: hosts
+ * {@link applyBaseToPlatformRedirects} plus the Markdown copies of each moved
+ * page ({@link withMirrorRedirects}), exact paths ahead of patterns: hosts
  * try rules in order, and an exact redirect wins over a pattern that also
  * covers its path. The one basing every consumer must share: the emitted
  * redirect files and the server wrappers all compare these paths against
@@ -122,12 +203,18 @@ export const platformRedirects = (project: {
   manifest: Pick<BlumeProject["manifest"], "routes">;
 }): Redirect[] => {
   const { config } = project;
+  const base = normalizeBasePath(config.deployment.options.base);
+  const pages = routeSetFor(project.manifest.routes);
   return exactFirst(
-    applyBaseToPlatformRedirects(
-      config.redirects,
-      config.basePath,
-      config.deployment.options.base ?? "",
-      routeSetFor(project.manifest.routes)
+    withMirrorRedirects(
+      applyBaseToPlatformRedirects(
+        config.redirects,
+        config.basePath,
+        base,
+        pages
+      ),
+      pages,
+      { from: base, to: base }
     )
   );
 };

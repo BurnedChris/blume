@@ -1,0 +1,110 @@
+---
+title: रेट लिमिटिंग
+description: >-
+  यह सीमित करें कि एक पाठक असिस्टेंट, API प्लेग्राउंड प्रॉक्सी और सर्वर-साइड सर्च को कितनी बार कॉल कर सकता है। यह सुविधा डिफ़ॉल्ट रूप से चालू रहती है, और गिनती मेमोरी, Upstash, Cloudflare या Unkey में रखी जाती है।
+---
+
+पाठक जिन सर्वर रूट्स को कॉल कर सकते हैं, उनकी हर कॉल पर आपका कुछ खर्च होता है। [असिस्टेंट](/docs/configuration/assistant) मॉडल टोकन खर्च करता है, [API प्लेग्राउंड](/docs/references/openapi#cors-and-the-proxy) प्रॉक्सी अनुरोधों को आपके API तक पहुँचाता है और [Mixedbread सर्च](/docs/configuration/search#mixedbread) एक सशुल्क क्वेरी चलाता है। Blume पाठक को उसके IP पते से पहचानता है और यह सीमित करता है कि वह इनमें से हर रूट को कितनी बार कॉल कर सकता है। सीमा पार करने वाले पाठक को `Retry-After` हेडर के साथ `429 Too Many Requests` मिलता है, और असिस्टेंट उनसे कुछ मिनट बाद फिर से प्रयास करने के लिए कहता है।
+
+रेट लिमिटिंग डिफ़ॉल्ट रूप से चालू रहती है। इसकी सीमा हर 10 मिनट में प्रति पाठक, प्रति रूट 30 अनुरोध है। यह उससे काफ़ी अधिक है जितने अनुरोध कोई व्यक्ति असिस्टेंट या प्लेग्राउंड को भेजता है, और इतनी कम भी है कि किसी स्क्रिप्ट को रोका जा सके। सर्च की गिनती अलग तरह से होती है। पाठक टाइप करते समय जब भी रुकता है, सर्च डायलॉग एक क्वेरी भेजता है। इसलिए एक ही सर्च में कई अनुरोध लग सकते हैं, और कुछ मिनट तक लगातार सर्च करने वाला पाठक सीमा तक पहुँच सकता है। अगर आपकी साइट Mixedbread सर्च का उपयोग करती है, तो `requests` बढ़ाएँ। यह मान हर रूट पर लागू होता है। रेट लिमिटिंग केवल सर्वर बिल्ड में लागू होती है, क्योंकि स्टैटिक साइट में सीमित करने के लिए कोई सर्वर रूट नहीं होता।
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { upstash } from "blume/ratelimit";
+
+export default defineConfig({
+  rateLimit: upstash({ requests: 30, window: 600 }), // window in seconds
+});
+```
+
+हर रूट अपनी अलग गिनती रखता है। इसलिए प्लेग्राउंड का लंबा उपयोग पाठक के असिस्टेंट प्रश्नों की सीमा को ख़त्म नहीं करता।
+
+## गिनती कहाँ रखी जाती है [#where-the-count-lives]
+
+| एडैप्टर | गिनती का स्थान | सीमा कैसे लागू होती है |
+| --- | --- | --- |
+| `memory()` | सर्वर की मेमोरी (डिफ़ॉल्ट) | एक सर्वर पर सटीक रूप से; सर्वरलेस होस्ट पर प्रति इंस्टेंस |
+| `upstash()` | [Upstash Redis](https://upstash.com) | हर होस्ट पर सटीक रूप से |
+| `cloudflare()` | Cloudflare की Workers रेट लिमिटिंग | प्रति Cloudflare लोकेशन |
+| `unkey()` | [Unkey](https://unkey.com) | हर होस्ट पर; रीजन कुछ ही क्षणों में सिंक हो जाते हैं |
+
+### मेमोरी [#memory]
+
+`memory()` के लिए किसी सेटअप की आवश्यकता नहीं है। `deployment: node()` जैसे एक ही प्रोसेस में चलने वाले सर्वर पर गिनती सटीक होती है। Vercel, Netlify और Cloudflare कई अल्पकालिक इंस्टेंस चलाते हैं और हर इंस्टेंस अपनी अलग गिनती रखता है। इसलिए इन होस्ट पर यह सीमा को सटीक रूप से लागू नहीं करता, बल्कि किसी एक पाठक के अचानक आए बहुत सारे अनुरोधों को रोकता है। इन होस्ट पर सटीक सीमा के लिए नीचे दिए गए साझा स्टोर में से किसी एक का उपयोग करें।
+
+```ts blume.config.ts lineNumbers
+import { memory } from "blume/ratelimit";
+
+rateLimit: memory({ requests: 60, window: 600 }),
+```
+
+### Upstash
+
+`upstash()` गिनती को Upstash Redis में रखता है, जिसे सभी इंस्टेंस साझा करते हैं। पहले एक डेटाबेस बनाएँ, फिर उसके REST एंडपॉइंट और टोकन को `UPSTASH_REDIS_REST_URL` और `UPSTASH_REDIS_REST_TOKEN` के रूप में सेट करें। Blume सीधे Upstash के REST API का उपयोग करता है, इसलिए आपको कुछ भी इंस्टॉल करने की आवश्यकता नहीं है। जब तक ये दोनों सेट नहीं होते, तब तक रूट्स मेमोरी में गिनती करते हैं और `blume build` चेतावनी देता है।
+
+```ts blume.config.ts lineNumbers
+import { upstash } from "blume/ratelimit";
+
+rateLimit: upstash(),
+```
+
+Vercel के Marketplace से जोड़ा गया डेटाबेस अपने एंडपॉइंट और टोकन को इनके बजाय `KV_REST_API_URL` और `KV_REST_API_TOKEN` के रूप में सेट करता है। इन नामों के आगे वह प्रीफ़िक्स भी जुड़ा होता है जो आपने डेटाबेस को कनेक्ट करते समय चुना था। ऐसे में `urlEnv` और `tokenEnv` से इन वेरिएबल्स के नाम बताएँ:
+
+```ts blume.config.ts lineNumbers
+rateLimit: upstash({ urlEnv: "KV_REST_API_URL", tokenEnv: "KV_REST_API_TOKEN" }),
+```
+
+### Cloudflare
+
+`cloudflare()` एडैप्टर `deployment: cloudflare()` से डिप्लॉय की गई साइट के लिए है और [Workers रेट लिमिटिंग](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) से गिनती करता है। Blume बिल्ड के समय Worker के कॉन्फ़िग में बाइंडिंग घोषित कर देता है, इसलिए आपको कुछ भी सेट अप करने की आवश्यकता नहीं है। Cloudflare प्रति लोकेशन गिनती करता है और केवल 10 या 60 सेकंड की विंडो स्वीकार करता है। इसलिए इसकी डिफ़ॉल्ट सीमा 60 सेकंड में 10 अनुरोध है।
+
+```ts blume.config.ts lineNumbers
+import { cloudflare } from "blume/deploy";
+import { cloudflare as cloudflareRateLimit } from "blume/ratelimit";
+
+export default defineConfig({
+  deployment: cloudflare(),
+  rateLimit: cloudflareRateLimit({ requests: 10, window: 60 }),
+});
+```
+
+बाइंडिंग का नेमस्पेस Worker के नाम से लिया जाता है, इसलिए एक ही खाते की दो साइटें अपनी गिनती साझा नहीं करतीं। नेमस्पेस स्वयं चुनने के लिए `namespaceId` सेट करें।
+
+### Unkey
+
+`unkey()` गिनती को [Unkey की रेट लिमिटिंग](https://www.unkey.com/docs/api-management/ratelimiting/overview) में रखता है, जिसे सभी इंस्टेंस साझा करते हैं। `ratelimit.*.limit` अनुमति वाली एक रूट कुंजी बनाएँ। इसके साथ `ratelimit.*.create_namespace` अनुमति भी दें, ताकि Unkey पहले अनुरोध पर नेमस्पेस बना सके। फिर इस कुंजी को `UNKEY_ROOT_KEY` के रूप में सेट करें। Blume सीधे Unkey के REST API का उपयोग करता है, इसलिए आपको कुछ भी इंस्टॉल करने की आवश्यकता नहीं है। जब तक कुंजी सेट नहीं होती, तब तक रूट्स मेमोरी में गिनती करते हैं और `blume build` चेतावनी देता है।
+
+```ts blume.config.ts lineNumbers
+import { unkey } from "blume/ratelimit";
+
+rateLimit: unkey(),
+```
+
+नेमस्पेस `docs` होता है, जब तक कि आप `namespace` से कोई दूसरा नाम न दें। कुंजी रखने वाले वेरिएबल का नाम `rootKeyEnv` से बताएँ:
+
+```ts blume.config.ts lineNumbers
+rateLimit: unkey({ namespace: "acme-docs", rootKeyEnv: "DOCS_UNKEY_ROOT_KEY" }),
+```
+
+Unkey हर रीजन में अलग से गिनती करता है और कुछ ही क्षणों में यह गिनती सभी रीजन के बीच साझा कर देता है। इसलिए अगर अचानक आए अनुरोध कई रीजन में बँट जाते हैं, तो सीमा से कुछ अधिक अनुरोध आगे जा सकते हैं। अगर Unkey किसी कुंजी को अस्वीकार कर देता है, जैसे ऐसी कुंजी जिसमें ऊपर बताई गई अनुमतियाँ नहीं हैं, तो हर गिनती विफल हो जाती है। जिस अनुरोध को कोई साझा स्टोर गिन नहीं पाता, उसे आने दिया जाता है। इसलिए अगर सर्वर `Rate limiting failed` लॉग करता है, तो अपनी कुंजी जाँचें।
+
+## रिवर्स प्रॉक्सी के पीछे [#behind-a-reverse-proxy]
+
+Vercel, Netlify और Cloudflare हर पाठक का पता Blume को बताते हैं। nginx या Caddy जैसे रिवर्स प्रॉक्सी के पीछे चलने वाले `node()` सर्वर को हर अनुरोध प्रॉक्सी से आता हुआ दिखाई देता है। इसलिए सभी पाठक एक ही गिनती साझा करते हैं, और व्यस्त साइट पर सीमा सभी के लिए एक साथ पूरी हो जाती है। प्रॉक्सी जिस होस्ट के अनुरोधों का उत्तर देता है, उसे `allowedDomains` में जोड़ें:
+
+```ts blume.config.ts lineNumbers
+import { node } from "blume/deploy";
+
+deployment: node({
+  site: "https://docs.example.com",
+  allowedDomains: [{ hostname: "docs.example.com" }],
+}),
+```
+
+यह Astro की [`security.allowedDomains`](https://docs.astro.build/en/reference/configuration-reference/#securityalloweddomains) सेटिंग है। जिस अनुरोध का `Host` या `X-Forwarded-Host` हेडर किसी एंट्री से मेल खाता है, उसके लिए Astro पाठक का पता `X-Forwarded-For` की पहली एंट्री से लेता है। प्रॉक्सी को इस तरह कॉन्फ़िगर करें कि वह साइट का होस्ट आगे भेजे, और पाठक के भेजे गए किसी भी `X-Forwarded-For` को उस पते से बदल दे जो प्रॉक्सी को दिखाई देता है, जैसे nginx में `proxy_set_header X-Forwarded-For $remote_addr;`। अगर प्रॉक्सी हेडर को बदलने के बजाय उसमें पता जोड़ता है, तो पाठक अपना पता स्वयं चुन सकता है और हर अनुरोध पर नई गिनती पा सकता है। अगर पाठक सीधे सर्वर तक पहुँचते हैं, तो `allowedDomains` सेट न करें।
+
+## इसे बंद करना [#turning-it-off]
+
+हर अनुरोध को बिना सीमा के आने देने के लिए `rateLimit: false` सेट करें। यह तब उपयोगी है जब, उदाहरण के लिए, आपके होस्ट का फ़ायरवॉल पहले से इन रूट्स को सीमित करता हो। अगर होस्ट किसी अनुरोध का पता नहीं पहचान पाता, तो उस अनुरोध को हमेशा आने दिया जाता है। यही उस अनुरोध के साथ भी होता है जिसे कोई साझा स्टोर गिन नहीं पाता। ऐसी विफलता लॉग की जाती है, इसलिए स्टोर के आउटेज के कारण पाठक कभी ब्लॉक नहीं होते।
+
+असिस्टेंट के लिए रेट लिमिटिंग के साथ [बॉट जाँच](/docs/configuration/assistant#bot-protection) भी इस्तेमाल करें। इससे वे स्क्रिप्ट भी रुकती हैं जो अपने अनुरोध कई अलग-अलग पतों से भेजती हैं।

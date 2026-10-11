@@ -1,0 +1,377 @@
+---
+// Add an MCP server: checked against the MCP, JSON API, llms.txt, Markdown,
+// and deployment docs, the server and tool schemas in src/ai/mcp, the static
+// build gate in cli/prepare.ts, the route check in astro/generate.ts, and the
+// Connect to MCP menu in PageActions.astro on main; the Claude Code and Cursor
+// setup against their own docs. Not yet run end to end on a deployed site.
+// Review: reran the tools/list request and a GET (405) against this site's
+// local dev server; cloudflare() is Workers only (@astrojs/cloudflare 14
+// dropped Pages); Markdown negotiation per host from deploy/platforms/*.ts.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("mcp-server-for-documentation")}>
+  <p>
+    By the end of this guide, your docs serve a Model Context Protocol (MCP)
+    server at <code>/mcp</code>, deployed with the rest of the site, and a
+    coding agent like Claude Code or Cursor can search and read them from
+    inside the editor. The examples use the Acme Messages API docs from{" "}
+    <a href="/guides/openapi-documentation-website">Generate API docs from an OpenAPI spec</a
+    >, but every step works on any Blume site.
+  </p>
+  <p>
+    The server gives agents your docs, and only your docs. Its tools read
+    pages; they never call your API's operations or change anything.
+  </p>
+
+  <h2>What an agent gets</h2>
+  <p>
+    Blume's MCP server exposes four read-only tools, plus every page as an MCP
+    resource for clients that attach context by URI:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Tool</th>
+        <th scope="col">What it returns</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>search_docs</code></td>
+        <td>
+          Pages matching a <code>query</code>, each with its title, route, URL,
+          content type, and an excerpt. Up to 8 by default, 20 at most.
+        </td>
+      </tr>
+      <tr>
+        <td><code>get_page</code></td>
+        <td>
+          One page as Markdown, with components turned into plain Markdown.
+        </td>
+      </tr>
+      <tr>
+        <td><code>list_pages</code></td>
+        <td>Every page with its route, title, and description.</td>
+      </tr>
+      <tr>
+        <td><code>get_navigation</code></td>
+        <td>The header tabs and sidebar, as your readers see them.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    A typical retrieval is two calls. Asked how to authenticate with the Acme
+    API, an agent first searches:
+  </p>
+  <CodeBlock
+    code={`{ "name": "search_docs", "arguments": { "query": "authenticate requests" } }`}
+    lang="json"
+  />
+  <p>
+    The result is a JSON list of hits. Trimmed to the first one, it looks like
+    this:
+  </p>
+  <CodeBlock
+    code={`[
+  {
+    "contentType": "doc",
+    "excerpt": "Send an API key as a bearer token with every request to the Acme Messages API.",
+    "route": "/api/authentication",
+    "title": "Authentication",
+    "url": "https://docs.acme.example/api/authentication"
+  }
+]`}
+    lang="json"
+  />
+  <p>
+    The excerpt is the page's <code>description</code> when it has one, which is
+    a good reason to write descriptions. The agent then passes the route to{" "}
+    <code>get_page</code> and gets the whole page as Markdown, the same text a
+    reader gets by adding <code>.md</code> to the page's URL.
+  </p>
+  <p>
+    Those results are the same every time for the same docs. What the model
+    writes from them isn't: the answer in your editor is the model's own
+    summary, so it can still get details wrong. The tool results are what you
+    can check.
+  </p>
+
+  <h2>Do you need MCP?</h2>
+  <p>
+    Maybe not. Every Blume site already serves two things agents can read, on
+    by default and on any host, including static ones like GitHub Pages:
+  </p>
+  <ul>
+    <li>
+      <code>/llms.txt</code>, an index of every page with a summary, and{" "}
+      <code>/llms-full.txt</code>, every page in one file.
+    </li>
+    <li>
+      A Markdown copy of every page: add <code>.md</code> to any page URL. On
+      Vercel and Cloudflare, the page URL itself answers in Markdown when an
+      agent sends <code>Accept: text/markdown</code>: see{" "}
+      <a href="/guides/html-markdown-content-negotiation">Serve HTML and Markdown from the same documentation URL</a
+      >.
+    </li>
+  </ul>
+  <p>
+    An agent that can fetch URLs can use those today, as long as it knows your
+    docs' address. MCP is worth adding when you want more than that:
+  </p>
+  <ul>
+    <li>
+      <strong>Search the agent can call.</strong> <code>search_docs</code> runs
+      its own full-text index, so the agent finds the right page without
+      guessing URLs. It works whatever search provider your site uses, even
+      with site search turned off.
+    </li>
+    <li>
+      <strong>Installed once.</strong> Add the server to Claude Code or Cursor,
+      and every session can reach your docs without being told where they are.
+    </li>
+    <li>
+      <strong>Scoped results.</strong> Both search and page listing can filter
+      by content type, locale, and docs version.
+    </li>
+  </ul>
+  <p>
+    The cost is that MCP needs a host that runs server code. If your docs must
+    stay on a static host, stick with <code>llms.txt</code> and the Markdown
+    copies.
+  </p>
+
+  <h2>Turn on the MCP server</h2>
+  <p>
+    The server is off by default. Turning it on is one line in{" "}
+    <code>blume.config.ts</code>:
+  </p>
+  <CodeBlock
+    code={`agents: {
+  mcp: {
+    enabled: true,
+  },
+},`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    That mounts the server at <code>/mcp</code>. Three other settings are there
+    if you need them: <code>route</code> moves it, <code>name</code> sets the name
+    clients show (your site's <code>title</code> by default), and{" "}
+    <code>instructions</code> passes a short hint to every agent that connects,
+    such as when to reach for your docs.
+  </p>
+
+  <h2>Switch to server output</h2>
+  <p>
+    The MCP server answers requests live, so it can't ship in a static build.
+    If you build with it enabled and no host adapter, the build stops with{" "}
+    <code>BLUME_SERVER_FEATURE_REQUIRED</code>: "MCP server requires server
+    output, but this is a static build."
+  </p>
+  <p>
+    Name your host with an adapter from <code>blume/deploy</code> to build for
+    the server instead:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Adapter</th>
+        <th scope="col">Host</th>
+        <th scope="col">Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>vercel()</code></td>
+        <td>Vercel</td>
+        <td>Ships with Blume. Detects your site URL.</td>
+      </tr>
+      <tr>
+        <td><code>netlify()</code></td>
+        <td>Netlify</td>
+        <td>
+          Install <code>@astrojs/netlify</code>. Detects your site URL.
+        </td>
+      </tr>
+      <tr>
+        <td><code>cloudflare()</code></td>
+        <td>Cloudflare Workers</td>
+        <td>
+          Install <code>@astrojs/cloudflare</code>. Set <code>site</code>.
+        </td>
+      </tr>
+      <tr>
+        <td><code>node()</code></td>
+        <td>Your own Node server or container</td>
+        <td>Ships with Blume. Set <code>site</code>.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    This guide uses Vercel. For Cloudflare, see{" "}
+    <a href="/guides/cloudflare-workers-documentation">Deploy documentation and an MCP endpoint to Cloudflare Workers</a
+    >. With Vercel, your config now looks like this:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { vercel } from "blume/deploy";
+
+export default defineConfig({
+  agents: {
+    mcp: {
+      enabled: true,
+    },
+  },
+  deployment: vercel(),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    On a host Blume can't detect the URL for, pass it to the adapter, as in{" "}
+    <code>node({"{ site: \"https://docs.acme.example\" }"})</code>. The site URL
+    matters here: without it, search hits carry bare paths instead of full URLs,
+    and the Connect to MCP menu on your pages stays hidden.
+  </p>
+
+  <h2>Try it locally</h2>
+  <p>
+    Run <code>npx blume dev</code>, and the server is live at{" "}
+    <code>http://localhost:4321/mcp</code>. Opening that in a browser shows
+    "Method Not Allowed", which is expected: the endpoint only answers MCP
+    requests, sent as <code>POST</code>. To check it, ask it for its tools:
+  </p>
+  <CodeBlock
+    code={`curl -s http://localhost:4321/mcp \\
+  -H "Content-Type: application/json" \\
+  -H "Accept: application/json, text/event-stream" \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`}
+    lang="bash"
+  />
+  <p>
+    The response lists <code>search_docs</code>, <code>get_page</code>,{" "}
+    <code>list_pages</code>, and <code>get_navigation</code>. To run a search
+    the same way, swap the body for a <code>tools/call</code>:
+  </p>
+  <CodeBlock
+    code={`curl -s http://localhost:4321/mcp \\
+  -H "Content-Type: application/json" \\
+  -H "Accept: application/json, text/event-stream" \\
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_docs","arguments":{"query":"authenticate requests"}}}'`}
+    lang="bash"
+  />
+
+  <h2>Deploy</h2>
+  <p>
+    Commit, push, and import the repository in Vercel, with the project's
+    Node.js version set to 22 or later. Once it's live on your domain, the
+    server is at <code>https://docs.acme.example/mcp</code>. Blume also
+    publishes a discovery document for it at{" "}
+    <code>/.well-known/mcp.json</code>, and lists it in your{" "}
+    <code>llms.txt</code>, so agents that read either can find it.
+  </p>
+  <Callout type="info">
+    Connect clients to your production domain. If your Vercel previews are
+    protected, a client pointed at a preview URL gets a login page instead of
+    the server.
+  </Callout>
+
+  <h2>Connect a client</h2>
+  <p>In Claude Code, add the server by name and URL:</p>
+  <CodeBlock
+    code="claude mcp add --transport http acme-docs https://docs.acme.example/mcp"
+    lang="bash"
+  />
+  <p>
+    That adds it for you, in the current project. Pass{" "}
+    <code>--scope project</code> to write it to a <code>.mcp.json</code> you
+    commit so your whole team gets it, or <code>--scope user</code> to use it
+    in every project. Then check the connection:
+  </p>
+  <CodeBlock code="claude mcp list" lang="bash" />
+  <p>
+    <code>acme-docs</code> should show as connected. Start a session and ask
+    something your docs answer, like "How do I authenticate a request to the
+    Acme Messages API?" The transcript shows the agent calling{" "}
+    <code>search_docs</code>, then <code>get_page</code>, before it answers.
+    Inside a session, <code>/mcp</code> shows the server and its tools.
+  </p>
+  <p>
+    In Cursor, add the server to <code>.cursor/mcp.json</code> in your project,
+    or to <code>~/.cursor/mcp.json</code> for every project:
+  </p>
+  <CodeBlock
+    code={`{
+  "mcpServers": {
+    "acme-docs": {
+      "url": "https://docs.acme.example/mcp"
+    }
+  }
+}`}
+    lang="json"
+    title=".cursor/mcp.json"
+  />
+  <p>
+    Your readers don't need these steps. Once the site URL is known, every page
+    gets a Connect to MCP menu that copies the command for Claude Code or Codex
+    and opens an install link for Cursor or VS Code.
+  </p>
+
+  <h2>What you run now</h2>
+  <p>
+    The server runs on your host alongside your pages, from a snapshot of your
+    docs taken at build time, so it updates when you deploy. There's no
+    separate service or index to keep in sync. For{" "}
+    <a href="/customers/specific">Specific</a>, that's why it's on: it was one
+    line of config. The <a href="/agents">agents page</a> covers everything
+    else Blume serves to agents, and{" "}
+    <a href="/docs/discoverability/mcp">MCP server</a> in the docs has the
+    content type and facet filters for larger sites.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The build fails with BLUME_SERVER_FEATURE_REQUIRED</h3>
+  <p>
+    The build is static. Set <code>deployment</code> to a host adapter from{" "}
+    <code>blume/deploy</code>. If you already have one, remove{" "}
+    <code>output: "static"</code> from it.
+  </p>
+  <h3>The build warns that the MCP server was not generated</h3>
+  <p>
+    A content page or custom page already uses <code>/mcp</code>, so Blume
+    leaves the route to that page. Move the server with{" "}
+    <code>agents.mcp.route</code>, and use the new path when you connect
+    clients.
+  </p>
+  <h3>The endpoint shows "Method Not Allowed"</h3>
+  <p>
+    That's a browser, or anything else sending <code>GET</code>. The server only
+    answers MCP requests. Test it with a client or the <code>curl</code>{" "}
+    commands above.
+  </p>
+  <h3>The client fails to connect</h3>
+  <p>
+    Run the <code>tools/list</code> request against the exact URL the client
+    uses. If it fails too, check the URL ends in your MCP route, that the
+    deployment is a server build on your production domain, and that no
+    password or login protection sits in front of it. If <code>curl</code>{" "}
+    works and the client doesn't, remove the server from the client and add it
+    again.
+  </p>
+  <h3>Search returns pages in other languages</h3>
+  <p>
+    On a translated site, <code>search_docs</code> searches every language
+    unless the agent passes <code>locale</code>. Ask for results in your
+    language, or add that to <code>agents.mcp.instructions</code>.
+  </p>
+  <h3>Search hits have paths instead of URLs</h3>
+  <p>
+    Blume doesn't know the site URL. Set <code>site</code> on your adapter, or
+    deploy to a host Blume detects it on.
+  </p>
+</GuidePage>

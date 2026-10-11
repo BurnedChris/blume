@@ -414,6 +414,9 @@ describe("githubReleasesSource", () => {
     expect(entries).toHaveLength(3);
     const rc = entries.find((e) => e.ref === "v1-1-0-rc-1.md");
     expect(metaOf(rc).changelog?.category).toBe("Prerelease");
+    // Nothing else marks a draft as unreleased, so its tag says so.
+    const draft = entries.find((e) => e.ref === "v0-9-0.md");
+    expect(metaOf(draft).changelog?.category).toBe("Draft");
   });
 
   it("paginates until a short page and honors the limit", async () => {
@@ -614,6 +617,8 @@ describe("resolveSources (github-releases)", () => {
         sources: [
           filesystem({ root: "docs" }),
           githubReleases({
+            // GitHub Enterprise Server's API, which the adapter accepts.
+            baseUrl: "https://ghe.example/api/v3",
             owner: "haydenbleasel",
             prefix: "changelog",
             repo: "blume",
@@ -687,7 +692,14 @@ describe("generateRuntime with a staged changelog source", () => {
     const changelog = join(project.context.outDir, "src/pages/changelog.astro");
     expect(existsSync(changelog)).toBe(true);
     const source = await readFile(changelog, "utf-8");
-    expect(source).toContain('...(await getCollection("staged")),');
+    // The page renders `<Changelog />`, which folds the staged collection in
+    // off the route manifest rather than a generation-time flag — so an
+    // authored `/changelog` page, which no such flag reaches, lists these
+    // releases too instead of silently dropping them.
+    expect(source).toContain("<Changelog />");
+    expect(source).not.toContain("getCollection");
+    const data = buildRuntimeData(project);
+    expect(data).toContain('"collection": "staged"');
   });
 
   it("still generates the /changelog page when the releases source yields nothing", async () => {

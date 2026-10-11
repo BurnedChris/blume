@@ -1,0 +1,522 @@
+---
+// Find missing documentation from searches with no results: checked against
+// the search, analytics, and consent docs, the dialog's tracker
+// (components/layout/search/analytics.ts and Search.astro), the analytics
+// client (components/layout/analytics-client.ts), the result cap
+// (components/layout/search/types.ts), and the Orama index
+// (search/orama-index.ts) on main. Ran Blume's buildOramaIndex and
+// queryOramaIndex under Bun over a synthetic four-page Acme corpus to get the
+// before/after results in the keyword fix. PostHog SQL checked against
+// PostHog's SQL docs, not run. The report numbers are synthetic, and say so.
+// Rechecked 2026-09-30, from reading code: the language scoping and the
+// failed-search path in Search.astro and components/layout/search/{pagefind,
+// endpoint}.ts, the adapters that take properties (analytics-client.ts), and
+// the per-locale tokenizers in search/orama-index.ts. Rechecked 2026-09-30
+// against search.analytics.queries (core/schema.ts and the tracker). Not yet
+// run end to end.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("documentation-search-analytics")}>
+  <p>
+    Blume's search dialog already reports what readers look for. With an
+    analytics adapter configured, each query that settles arrives as a{" "}
+    <code>search</code> event with the <code>query</code>, the number of{" "}
+    <code>results</code>, and the <code>path</code> it was typed on. Each result
+    a reader opens arrives as a <code>search_select</code> event with its{" "}
+    <code>position</code> and <code>url</code>. Filter the searches to{" "}
+    <code>results = 0</code>, group them by query, and each term becomes a
+    backlog item: a page to write, or a word to teach a page you already have.
+  </p>
+  <p>
+    By the end of this guide you have a saved query for searches that found
+    nothing, one for searches whose results nobody opened, a way to sort each
+    term into a gap, a mismatch, or noise, a keyword fix checked before and
+    after, and a loop to run again. The queries are PostHog SQL, since PostHog
+    keeps every event property and answers SQL. Any adapter that forwards
+    properties works the same way.
+  </p>
+  <p>
+    Two limits up front. This only counts readers who allow analytics, so if you
+    can't collect reader input at all, write{" "}
+    <a href="/guides/documentation-evals-ci">eval questions</a> from your support
+    tickets instead. And the zero-result count is a lead, not a score: it tells
+    you what readers typed, not whether the pages they found answered them.
+  </p>
+
+  <h2>What the dialog sends</h2>
+  <p>Blume records two events, whichever search adapter you use:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Event</th>
+        <th scope="col">Sent when</th>
+        <th scope="col">Properties</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>search</code></td>
+        <td>
+          A query settles: a second without typing, or the reader opens a result
+          or closes the dialog
+        </td>
+        <td>
+          <code>query</code>, <code>results</code>, <code>path</code>
+        </td>
+      </tr>
+      <tr>
+        <td><code>search_select</code></td>
+        <td>The reader opens a search result</td>
+        <td>
+          <code>query</code>, <code>position</code> (from 1), <code>url</code>,{" "}
+          <code>path</code>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>A few details decide how you read them:</p>
+  <ul>
+    <li>
+      The query is what the reader typed, trimmed and cut at 100 characters,
+      with its case kept. Group on a lowercased copy.
+    </li>
+    <li>
+      <code>results</code> is how many results the dialog showed, up to 12, not
+      how many pages matched. It's counted after the dialog's scoping: the docs
+      version being viewed, the reader's language, and any section filter they
+      picked.
+    </li>
+    <li>
+      A reader who pauses mid-word sends the partial query too, so{" "}
+      <code>webh</code> can sit beside <code>webhooks</code>. The same query
+      settling twice in a row counts once.
+    </li>
+    <li>
+      Opening a Popular link or handing the query to the assistant sends no{" "}
+      <code>search_select</code>. A search that fails, like a hosted engine that
+      doesn't answer or a Mixedbread <code>/api/search</code> route that
+      errors, shows an error and sends nothing, so an outage doesn't pass for
+      a content gap.
+    </li>
+  </ul>
+
+  <h2>Send the events somewhere that keeps the query</h2>
+  <p>
+    Blume forwards both events through every analytics adapter with an event
+    API, but not every provider takes properties. PostHog, Mixpanel, Amplitude,
+    Heap, Segment, Hightouch, LogRocket, Adobe, Google Analytics, Google Tag
+    Manager, Plausible, Databuddy, Pirsch, OneDollarStats, and Vercel receive
+    the query. Fathom, Clarity, and Hotjar receive only the event name, and
+    Cloudflare, Clearbit, and Clics receive nothing, so none of those can build
+    this report.
+  </p>
+  <p>Add PostHog, and ask readers before it runs:</p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { posthog } from "blume/analytics";
+import { native } from "blume/consent";
+
+export default defineConfig({
+  analytics: [
+    posthog({ key: "phc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }),
+  ],
+  consent: native({ policy: "https://acme.example/privacy" }),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    With <code>consent</code> set, PostHog waits until a reader allows
+    analytics, and a reader who declines sends no search events at all. Other
+    providers need a setup step before the query shows up. In Google
+    Analytics, register <code>query</code> and <code>results</code> as
+    event-scoped custom dimensions. In Plausible, add <code>search</code> as a
+    custom event goal; events sent before the goal existed aren't backfilled.
+    In Google Tag Manager, fire your tags from a Custom Event trigger named{" "}
+    <code>search</code>.
+  </p>
+
+  <h2>Check the events locally</h2>
+  <p>
+    Analytics only loads in production builds, but the dialog also fires every
+    event as a <code>blume:track</code> event on <code>window</code>, and that
+    happens in <code>blume dev</code> too. Start the dev server:
+  </p>
+  <CodeBlock code="npx blume dev" lang="bash" />
+  <p>Open your browser's console on the site and listen:</p>
+  <CodeBlock
+    code={`window.addEventListener("blume:track", (event) => console.log(event.detail));`}
+    lang="js"
+  />
+  <p>
+    Search for a word your docs don't use, wait a second, and the console logs
+    the event:
+  </p>
+  <CodeBlock
+    code={`{ event: "search", props: { path: "/messages/send", query: "unsubscribe", results: 0 } }`}
+    lang="js"
+  />
+  <p>
+    Open a result and a <code>search_select</code> follows with its position.
+    After you deploy, accept the consent banner, search once on the live site,
+    and check that the same event reaches PostHog.
+  </p>
+
+  <h2>Treat search terms as reader input</h2>
+  <p>
+    Readers paste things into search boxes: email addresses, API keys, order
+    numbers. By default Blume sends the query as typed, and your analytics
+    stores it.
+    Google Analytics{" "}
+    <a href="https://support.google.com/analytics/answer/6366371"
+      >forbids personally identifiable information</a
+    > and names search boxes as a common way it slips in, and Plausible says the
+    same about{" "}
+    <a href="https://plausible.io/docs/custom-props/introduction"
+      >custom properties</a
+    >. So:
+  </p>
+  <ul>
+    <li>
+      Turn on your provider's redaction where it has one. GA4's data redaction
+      removes likely email addresses from event parameters.
+    </li>
+    <li>
+      If query text can't go to your provider at all, set{" "}
+      <code>{"search: { analytics: { queries: false } }"}</code> in{" "}
+      <code>blume.config.ts</code>. Both events then carry{" "}
+      <code>queryChars</code>, the query's length, in place of{" "}
+      <code>query</code>, and the text reaches only the{" "}
+      <code>blume:track</code> event. The zero-result counts still arrive, but
+      the queries below group by the text, so this report needs you to forward
+      it yourself, to a store you control.
+    </li>
+    <li>
+      If you forward <code>blume:track</code> with your own code, put that code
+      in a <code>script()</code> analytics adapter. The event fires for every
+      reader, and <code>script()</code> adapters wait for consent like the rest.
+    </li>
+    <li>
+      Never publish the raw export. The queries below drop anything shaped like
+      an email address, a long number, or a token, and keep only terms that at
+      least three different readers searched. Share that output, not the event
+      list.
+    </li>
+  </ul>
+
+  <h2>List the searches that found nothing</h2>
+  <p>Open PostHog's SQL editor and run:</p>
+  <CodeBlock
+    code={`SELECT
+  lower(properties.query) AS search_term,
+  count() AS searches,
+  uniq(distinct_id) AS readers
+FROM events
+WHERE event = 'search'
+  AND toFloat(properties.results) = 0
+  AND timestamp > now() - INTERVAL 30 DAY
+  AND NOT match(properties.query, '@|[0-9]{6,}|[A-Za-z0-9_-]{24,}')
+GROUP BY search_term
+HAVING readers >= 3
+ORDER BY readers DESC, searches DESC
+LIMIT 100`}
+    lang="sql"
+  />
+  <p>
+    PostHog can read an event property as a string, so <code>toFloat</code>{" "}
+    makes the comparison numeric. The <code>match</code> pattern also drops long
+    identifiers, so loosen it if readers search for long method names. Save the
+    query as an insight so every run uses the same filters. Here's the output
+    for a synthetic month on the Acme docs, a fictional email and SMS API:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">search_term</th>
+        <th scope="col">searches</th>
+        <th scope="col">readers</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>attachments</td><td>34</td><td>21</td></tr>
+      <tr><td>unsubscribe</td><td>29</td><td>22</td></tr>
+      <tr><td>invoice</td><td>15</td><td>12</td></tr>
+      <tr><td>retries</td><td>14</td><td>11</td></tr>
+      <tr><td>webhok</td><td>6</td><td>5</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Find the searches that found the wrong pages</h2>
+  <p>
+    A zero-result list misses two kinds of failure. On Blume's default Orama
+    index, a query of several words matches pages that contain any of them, so
+    a long question rarely comes back empty. And one word can match the wrong
+    page: on the Acme docs, <code>retry</code> finds the Rate limits page, which
+    mentions the <code>Retry-After</code> header, while the webhook retries
+    readers want sit on a page that says "retried". Opens and positions catch
+    both:
+  </p>
+  <CodeBlock
+    code={`SELECT
+  lower(properties.query) AS search_term,
+  countIf(event = 'search') AS searches,
+  countIf(event = 'search_select') AS opened,
+  countIf(event = 'search_select') / countIf(event = 'search') AS open_rate,
+  avgIf(toFloat(properties.position), event = 'search_select') AS avg_position
+FROM events
+WHERE event IN ('search', 'search_select')
+  AND timestamp > now() - INTERVAL 30 DAY
+  AND NOT match(properties.query, '@|[0-9]{6,}|[A-Za-z0-9_-]{24,}')
+GROUP BY search_term
+HAVING searches >= 10 AND uniq(distinct_id) >= 3
+ORDER BY open_rate ASC, searches DESC
+LIMIT 50`}
+    lang="sql"
+  />
+  <p>
+    A low <code>open_rate</code> means readers saw results and left without
+    opening one; in the synthetic month, <code>retry</code> has 18 searches and
+    3 opens. A high <code>avg_position</code> means readers found the page, but
+    further down than it should be. Neither number tells you why, so search the
+    term yourself and read what comes back.
+  </p>
+
+  <h2>Sort each term into a gap, a mismatch, or noise</h2>
+  <p>
+    Type every term from both reports into the dialog. Each one lands in one of
+    three piles:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Term</th>
+        <th scope="col">What the docs have</th>
+        <th scope="col">Verdict</th>
+        <th scope="col">Fix</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>attachments</code></td>
+        <td>Nothing on sending attachments</td>
+        <td>Content gap</td>
+        <td>Write a page</td>
+      </tr>
+      <tr>
+        <td><code>unsubscribe</code></td>
+        <td>A Suppression list page that never says "unsubscribe"</td>
+        <td>Terminology mismatch</td>
+        <td>Add keywords</td>
+      </tr>
+      <tr>
+        <td><code>retries</code>, <code>retry</code></td>
+        <td>A Webhooks page that says "retried"</td>
+        <td>Terminology mismatch</td>
+        <td>Add keywords</td>
+      </tr>
+      <tr>
+        <td><code>webhok</code></td>
+        <td>The Webhooks page, under the right spelling</td>
+        <td>Noise: a typo</td>
+        <td>None, unless it keeps coming back</td>
+      </tr>
+      <tr>
+        <td><code>invoice</code></td>
+        <td>Nothing: billing lives in the Acme dashboard</td>
+        <td>Noise: out of scope</td>
+        <td>A short page that links out, or none</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    A mismatch is the cheaper fix, so rule one out before calling a term a gap.
+    Blume's default Orama index ignores case and matches the start of a word,
+    but it doesn't correct typos or match other forms of a word:{" "}
+    <code>unsub</code> finds a page that says "unsubscribe", but{" "}
+    <code>unsubscribed</code> doesn't, and <code>retries</code> doesn't find
+    "retried". Other adapters match differently, so test with the one you run.
+    For a real gap, the <code>path</code> property shows which pages readers
+    searched from, and those are where the new page needs a link.
+  </p>
+
+  <h2>Fix a terminology mismatch</h2>
+  <p>Add the readers' words to the page's <code>search.keywords</code>:</p>
+  <CodeBlock
+    code={`---
+title: Suppression list
+description: Stop sending to recipients who asked not to be contacted.
+search:
+  keywords: [unsubscribe, unsubscribed, opt out]
+---
+
+Acme adds a recipient to the suppression list when they opt out or when their
+address bounces. Messages to a suppressed recipient are skipped.`}
+    lang="mdx"
+    title="docs/messages/suppression-list.mdx"
+  />
+  <p>
+    On the Orama index, keywords count as much as the title, and every adapter
+    except Mixedbread searches them. List each form readers type, since{" "}
+    <code>unsubscribe</code> won't match <code>unsubscribed</code>. The Webhooks
+    page gets <code>keywords: [retry, retries]</code> the same way. Where the
+    reader's word reads naturally, use it in the page text too, so a reader who
+    lands there sees their term answered.
+  </p>
+  <p>
+    When the right page shows up but low, a{" "}
+    <a href="/docs/configuration/search#ranking">boost</a> of 2 to 5 moves it
+    up. Keep boosts to the few pages readers need most.
+  </p>
+  <p>Here's the fix on the Acme pages, before and after, on the Orama index:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Search</th>
+        <th scope="col">Before</th>
+        <th scope="col">After</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>unsubscribe</code></td>
+        <td>No results</td>
+        <td>Suppression list</td>
+      </tr>
+      <tr>
+        <td><code>unsubscribed</code></td>
+        <td>No results</td>
+        <td>Suppression list</td>
+      </tr>
+      <tr>
+        <td><code>retries</code></td>
+        <td>No results</td>
+        <td>Webhooks</td>
+      </tr>
+      <tr>
+        <td><code>retry</code></td>
+        <td>Rate limits</td>
+        <td>Webhooks, then Rate limits</td>
+      </tr>
+      <tr>
+        <td><code>attachments</code></td>
+        <td>No results</td>
+        <td>No results</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    <code>attachments</code> stays empty on purpose: no keyword fixes a page
+    that doesn't exist.
+  </p>
+
+  <h2>Fix a content gap</h2>
+  <p>
+    Write the page, and put the readers' word in its title or description,
+    which rank above body text. For <code>attachments</code>, that's a new{" "}
+    <code>docs/messages/attachments.mdx</code> titled "Send attachments",
+    linked from the Send a message page that readers searched from. Then add
+    the question they were asking to your <code>evals.yaml</code>, so{" "}
+    <a href="/docs/cli/evals">blume eval</a> fails if a later edit loses the
+    answer.
+  </p>
+  <p>
+    For an out-of-scope term like <code>invoice</code>, a short page that says
+    where billing lives and links there is often worth it, since readers keep
+    looking for it in the docs. Give it the term as a keyword.
+  </p>
+
+  <h2>Repeat the same searches</h2>
+  <p>
+    Start with the terms from your report, locally. Run{" "}
+    <code>npx blume dev</code>, open search, and type each one: the results
+    should match your after column. Orama and FlexSearch update as you edit.
+    Pagefind only indexes a build, so run <code>npx blume build</code> and then{" "}
+    <code>npx blume preview</code>. Algolia, Typesense, and Orama Cloud only
+    change when <code>blume build</code> syncs the hosted index, which needs the
+    adapter's secret key in the build environment (and, for Orama Cloud, an{" "}
+    <code>indexId</code>).
+  </p>
+  <p>Once the fix has been live for a while, rerun the report for the terms you fixed:</p>
+  <CodeBlock
+    code={`SELECT
+  lower(properties.query) AS search_term,
+  countIf(event = 'search') AS searches,
+  countIf(event = 'search' AND toFloat(properties.results) = 0) AS no_results,
+  countIf(event = 'search_select') AS opened
+FROM events
+WHERE event IN ('search', 'search_select')
+  AND lower(properties.query) IN ('unsubscribe', 'unsubscribed', 'retry', 'retries', 'attachments')
+  AND timestamp > now() - INTERVAL 14 DAY
+GROUP BY search_term
+ORDER BY searches DESC`}
+    lang="sql"
+  />
+  <p>
+    A fixed term should stop showing <code>no_results</code> and start getting
+    opens. If it leaves the zero-result list but nobody opens what it finds, the
+    keyword sent readers to a page that doesn't answer them, and the term goes
+    back in the backlog. Keep each run's filtered report wherever you track docs
+    work, so the next run has something to compare against. Page ratings are
+    the other half of this loop: see{" "}
+    <a href="/guides/documentation-feedback-analytics">documentation feedback</a
+    >.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>No search events reach your analytics</h3>
+  <p>
+    Analytics loads only from <code>blume build</code>, never{" "}
+    <code>blume dev</code>. On the live site, a reader who declined the consent
+    banner sends nothing, so accept it while you test. With Plausible, events
+    only appear once <code>search</code> is a goal. With Google Tag Manager,
+    check that a Custom Event trigger listens for <code>search</code>.
+  </p>
+  <h3>Events arrive without the query</h3>
+  <p>
+    Fathom, Clarity, and Hotjar receive only the event name, so add an adapter
+    from the list above. In Google Analytics, parameters stay out of reports
+    until they're registered as custom dimensions. OneDollarStats receives every
+    property as a string.
+  </p>
+  <h3>A page that exists shows zero results</h3>
+  <p>
+    Check the dialog's scope first. On a{" "}
+    <a href="/docs/content/versioning">versioned</a> site, results default to
+    the version being viewed, so a page that only exists in another version
+    needs the All versions toggle. Languages work the same way, with an All
+    languages toggle; Mixedbread has none, since it always searches every
+    language. Then check the index. Orama, FlexSearch, Algolia, Orama Cloud,
+    and Typesense skip code blocks by default, so an option name that
+    only appears in code needs{" "}
+    <a href="/docs/configuration/search#whats-indexed"
+      ><code>search.indexing.includeCodeBlocks</code></a
+    >. Pages with <code>search.exclude</code> and hidden pages aren't indexed
+    either. If the zero-result terms are in Japanese, Chinese, Korean, or
+    another non-Latin script, check that the locale's code names the
+    language, like <code>ja</code> rather than <code>jp</code>, since Orama
+    picks each locale's tokenizer from it: see{" "}
+    <a href="/guides/cjk-documentation-search"
+      >Make docs search work in Chinese, Japanese and Korean</a
+    >.
+  </p>
+  <h3>A keyword changes nothing</h3>
+  <p>
+    Mixedbread searches your own store and never sees keywords. A hosted index
+    keeps its old records until a build syncs it: Algolia reads{" "}
+    <code>ALGOLIA_ADMIN_API_KEY</code>, Typesense{" "}
+    <code>TYPESENSE_ADMIN_API_KEY</code>, and Orama Cloud{" "}
+    <code>ORAMA_PRIVATE_API_KEY</code>. On Orama, also check the word form: a
+    keyword of <code>retry</code> doesn't match a search for{" "}
+    <code>retries</code>.
+  </p>
+  <h3>The report is full of half-typed words</h3>
+  <p>
+    Those are readers pausing mid-word, since every second-long pause sends the
+    query so far. Raise the <code>HAVING</code> threshold, and when a fragment is
+    the start of a longer term in the same list, count it with that term rather
+    than as a gap of its own.
+  </p>
+</GuidePage>

@@ -1,0 +1,543 @@
+---
+// Move documentation URLs without breaking old links: checked against the
+// deployment docs (redirects, pattern redirects, site URL), the content docs
+// (numeric prefixes, group folders, frontmatter slug), the audit docs, and on
+// main: core/schema.ts (redirect shape and statuses), deploy/redirects.ts and
+// deploy/artifacts.ts (host files, and a public/_redirects suppressing the
+// generated one), audit/checks/redirects.ts and links.ts, audit/checks/
+// network.ts (--url probes built pages and each exact redirect's old URL),
+// audit/crawl.ts (Astro's redirect pages have no <head>, so the audit skips
+// them), core/redirect-patterns.ts (dev answers exact redirects with their
+// configured status), deploy/redirects.ts (Markdown copies follow an exact
+// redirect), and Astro's redirect page template. Third-party facts
+// from Google's site-move, redirect, and Change of Address docs, Vercel's
+// redirect, domain, and system env var docs, Cloudflare's _redirects and
+// domain redirect docs, and Netlify's redirect docs.
+// Ran: the sitemap export against useblume.dev; check-redirects.sh against
+// useblume.dev's own redirects, against blume dev, and against a local Node
+// server faking a redirect page, a chain, a 307, and a dead destination.
+// Not yet run end to end.
+// Review pass: re-checked Google's redirect and site-move docs, Astro's
+// redirect template (core/routing/3xx.js), and BLUME_REDIRECT_MATCHES_PAGE
+// in core/project-graph.ts (an error for a pattern, a warning for an exact
+// redirect from a page's own URL).
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("documentation-url-migration-redirects")}>
+  <p>
+    To move documentation URLs without breaking old links, answer every old
+    URL with a permanent HTTP redirect (301 or 308) to the one new page that
+    replaces it, then check each one on the live site. In Blume, redirects are
+    a list in <code>blume.config.ts</code>, and your host decides whether they
+    go out as real HTTP redirects. A move to a new domain also needs a rule on
+    the old domain, which lives in your host's settings, not in Blume.
+  </p>
+  <p>
+    You end up with a list of every URL your site serves, a map from each
+    moved URL to its new home, redirects in your config, a script that checks
+    the map against the public host, and a way back. Redirects keep links and
+    bookmarks working, but they don't guarantee your search visibility stays
+    the same: search engines recrawl on their own schedule, and rankings can
+    shift while they do.
+  </p>
+  <p>
+    If all you want is a tidier sidebar, you may not need new URLs. Numeric
+    prefixes reorder pages, a folder name in parentheses groups pages without
+    a URL segment, and a <code>slug</code> in frontmatter pins a page's route
+    wherever its file lives. See{" "}
+    <a href="/docs/content#group-folders">Group folders</a>. Coming from
+    another framework? Start from its migration guide, like{" "}
+    <a href="/guides/migrate-from-docusaurus">Migrate from Docusaurus</a>.
+  </p>
+
+  <h2>Redirects, redirect pages, and host rules</h2>
+  <p>Three different things can answer an old URL:</p>
+  <ul>
+    <li>
+      <strong>An HTTP redirect</strong> is a 3xx status code with a{" "}
+      <code>Location</code> header. Browsers, crawlers, <code>curl</code>, and
+      link checkers all follow it.
+    </li>
+    <li>
+      <strong>A redirect page</strong> is what a static build writes at each
+      old path: an HTML page that answers 200, with a{" "}
+      <code>&lt;meta http-equiv="refresh"&gt;</code> tag, a{" "}
+      <code>noindex</code>, and a canonical link to the new URL. Browsers move
+      on, and Google treats an instant meta refresh as permanent, but anything
+      that reads status codes sees a working page.
+    </li>
+    <li>
+      <strong>A host rule</strong> is a redirect set in your host's settings.
+      Blume's redirects match paths, never domains, so a domain move needs one.
+    </li>
+  </ul>
+  <p>Which of the first two an old URL gets depends on how you deploy:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Your setup</th>
+        <th scope="col">What an old URL gets</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>
+          A server build: <code>vercel()</code>, <code>netlify()</code>,{" "}
+          <code>cloudflare()</code>, or <code>node()</code>
+        </td>
+        <td>An HTTP redirect with your status, answered at request time</td>
+      </tr>
+      <tr>
+        <td>
+          A static build that names Netlify or Cloudflare, like{" "}
+          <code>{'netlify({ output: "static" })'}</code>
+        </td>
+        <td>
+          An HTTP redirect, from the <code>_redirects</code> file the build
+          writes
+        </td>
+      </tr>
+      <tr>
+        <td>A static build in a Git-connected Vercel project</td>
+        <td>
+          The redirect page, until you copy the <code>redirects</code> from{" "}
+          <code>dist/vercel.json</code> into the <code>vercel.json</code> at
+          your project root
+        </td>
+      </tr>
+      <tr>
+        <td>A static build on GitHub Pages, or any host that reads none of these files</td>
+        <td>
+          The redirect page for an exact redirect, and a 404 for every path a
+          pattern covers
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    A static build that names no host writes <code>_redirects</code>,{" "}
+    <code>vercel.json</code>, and <code>blume-redirects.json</code>, a plain
+    list to turn into nginx or Apache rules. On Netlify, name the host anyway:
+    otherwise the rules aren't forced and Netlify serves the redirect page
+    first. The{" "}
+    <a href="/docs/deployment#redirects">redirects docs</a> cover each host.
+  </p>
+
+  <h2>List the URLs you have today</h2>
+  <p>
+    Before you change anything, save every URL the live site serves. Blume
+    writes a <code>sitemap.xml</code> whenever it knows the site URL, so pull
+    the paths out of it:
+  </p>
+  <CodeBlock
+    code={`curl -s https://docs.acme.example/sitemap.xml \\
+  | grep -o '<loc>[^<]*' \\
+  | sed 's#<loc>https://docs.acme.example##' \\
+  | sort -u > old-urls.txt`}
+    lang="bash"
+  />
+  <p>
+    Replace <code>docs.acme.example</code> with your domain in both places. The
+    sitemap leaves out draft, hidden, and <code>noindex</code> pages, and pages
+    whose canonical names another URL, so add any of those people still reach,
+    plus paths your analytics show traffic on. Commit the file.
+  </p>
+
+  <h2>Map each old URL to its new home</h2>
+  <p>
+    Make the moves on a branch: rename folders, <code>git mv</code> files,
+    merge pages. Then run <code>npx blume dev</code> and print every old URL
+    that no longer answers 200:
+  </p>
+  <CodeBlock
+    code={`while read -r route; do
+  code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:4321$route")
+  [ "$code" = "200" ] || echo "$route"
+done < old-urls.txt`}
+    lang="bash"
+  />
+  <p>
+    Each path it prints needs a row in <code>url-map.csv</code>, with the old
+    path and the path of the page that replaces it:
+  </p>
+  <CodeBlock
+    code={`old,new
+/quickstart,/getting-started/quickstart
+/api-keys,/getting-started/authentication
+/guides,/tutorials
+/guides/send-email,/tutorials/send-email
+/guides/sms-templates,/tutorials/sms-templates`}
+    lang="csv"
+    title="url-map.csv"
+  />
+  <ul>
+    <li>
+      <strong>Map one to one.</strong> Send each old URL to the page that
+      covers the same thing. Google's site-move guidance warns against
+      redirecting many old URLs to one irrelevant page, like the homepage.
+    </li>
+    <li>
+      <strong>Merged pages point at the merge.</strong> A page that's gone with
+      no replacement can 404 rather than land somewhere unrelated.
+    </li>
+    <li>
+      <strong>Every locale counts.</strong> On a translated site, each copy of
+      a page (<code>/de/quickstart</code>) needs its own row.
+    </li>
+    <li>
+      <strong>List real paths.</strong> Write out every URL, even ones a
+      pattern will cover. The map is what you test.
+    </li>
+  </ul>
+
+  <h2>Add the redirects</h2>
+  <p>
+    Turn the map into rules in <code>blume.config.ts</code>: an exact redirect
+    for a single page, and a pattern for a folder that moved as a whole.
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  deployment: { site: "https://docs.acme.example" },
+  redirects: [
+    { from: "/quickstart", to: "/getting-started/quickstart" },
+    { from: "/api-keys", to: "/getting-started/authentication" },
+    { from: "/guides/:slug*", to: "/tutorials/:slug*" },
+  ],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>status</code> defaults to 301 and also takes 302, 307, and 308.
+    Google treats both 301 and 308 as permanent. <code>/guides/:slug*</code>{" "}
+    covers{" "}
+    <code>/guides</code> itself and every path under it, so three entries
+    cover all five rows. Write both sides as if the site were mounted at the
+    root: Blume adds <code>deployment.base</code> and <code>basePath</code>.
+    Patterns also keep a large move under host limits: Cloudflare's{" "}
+    <code>_redirects</code> takes 2,000 exact and 100 pattern rules, and a
+    Vercel <code>vercel.json</code> takes 2,048 redirects.
+  </p>
+  <p>
+    An exact redirect from one page to another also moves the page's{" "}
+    <a href="/docs/discoverability/markdown#raw-markdown">raw Markdown</a>:{" "}
+    <code>/quickstart.md</code> and <code>/quickstart.mdx</code> redirect to
+    the new page's copies with the same status, so agents following an old
+    link still find the text.
+  </p>
+
+  <h2>Check the redirects before you deploy</h2>
+  <p>
+    This script reads <code>url-map.csv</code> and requests every old URL
+    twice: once to read the first response, and once following redirects to
+    see where it lands. Save it next to the map:
+  </p>
+  <CodeBlock
+    code={`#!/usr/bin/env bash
+# Check every row of url-map.csv against a running site.
+# Usage: ./check-redirects.sh <old origin> [new origin]
+set -u
+old_origin="\${1%/}"
+new_origin="\${2:-$1}"
+new_origin="\${new_origin%/}"
+failed=0
+
+while IFS=, read -r old new || [ -n "$old" ]; do
+  new="\${new%$'\\r'}"
+  if [ "$old" = "old" ] || [ -z "$old" ]; then
+    continue
+  fi
+  url="$old_origin$old"
+  expected="$new_origin$new"
+
+  first=$(curl -s -o /dev/null --max-time 20 -w '%{http_code}' "$url")
+  read -r code hops final < <(curl -sL -o /dev/null --max-time 20 \\
+    -w '%{http_code} %{num_redirects} %{url_effective}' "$url")
+
+  case "$first" in
+    301 | 308) ;;
+    302 | 307) ;;
+    200)
+      if curl -s --max-time 20 "$url" | grep -qi 'http-equiv="refresh"'; then
+        echo "META  $old is a redirect page (200), not an HTTP redirect"
+      else
+        echo "FAIL  $old answered 200 without redirecting"
+      fi
+      failed=1
+      continue
+      ;;
+    *)
+      echo "FAIL  $old answered $first"
+      failed=1
+      continue
+      ;;
+  esac
+
+  if [ "$final" != "$expected" ]; then
+    echo "WRONG $old lands on $final, expected $expected"
+    failed=1
+  elif [ "$code" != "200" ]; then
+    echo "DEAD  $old lands on $final, which answers $code"
+    failed=1
+  elif [ "$first" = "302" ] || [ "$first" = "307" ]; then
+    echo "TEMP  $old -> $final ($first is a temporary redirect)"
+    failed=1
+  elif [ "$hops" -gt 1 ]; then
+    echo "CHAIN $old -> $final in $hops hops"
+  else
+    echo "OK    $old -> $final ($first)"
+  fi
+done < url-map.csv
+
+exit "$failed"`}
+    lang="bash"
+    title="check-redirects.sh"
+  />
+  <p>With <code>npx blume dev</code> still running, point it at your machine:</p>
+  <CodeBlock
+    code={`chmod +x check-redirects.sh
+./check-redirects.sh http://localhost:4321`}
+    lang="bash"
+  />
+  <p>
+    Every row should print <code>OK</code>. <code>WRONG</code> and{" "}
+    <code>DEAD</code> mean a rule points somewhere else or at nothing.{" "}
+    <code>CHAIN</code> passes, but point the first rule straight at the last
+    page. A status of <code>000</code> means no answer at all.
+  </p>
+  <p>
+    The dev server answers each redirect with the <code>status</code> you
+    configured, as a server build does. In production your host decides what
+    goes out, so check the public site too.
+  </p>
+  <p>Next, stop the dev server, build, and run the audit's redirect and link checks:</p>
+  <CodeBlock
+    code={`npx blume build
+npx blume audit --only redirects,links,indexability,sitemap`}
+    lang="bash"
+  />
+  <p>
+    The audit walks every configured redirect, old ones included. It reports a
+    redirect that lands on no page (<code>BLUME_AUDIT_REDIRECT_BROKEN</code>),
+    a loop, and a chain where an older redirect points at a page you've moved
+    since. A pattern covers too many paths to walk, so the audit walks the
+    one bare path it also matches: <code>/old/*</code> to{" "}
+    <code>/new/:splat</code> sends <code>/old</code> to <code>/new</code>,
+    which has to be a page. A redirect from a page you kept is caught before that:{" "}
+    <code>blume validate</code>, <code>doctor</code>, <code>dev</code>, and{" "}
+    <code>build</code> warn with <code>BLUME_REDIRECT_MATCHES_PAGE</code>,
+    because an exact redirect takes the URL over and the page never publishes.
+  </p>
+
+  <h2>Update links, canonicals, and the sitemap</h2>
+  <p>
+    Redirects are for links you don't control. Point the links you do control
+    straight at the new URLs, as Google's site-move guidance asks.
+  </p>
+  <ul>
+    <li>
+      <strong>Links.</strong> The audit lists every link through a redirect,
+      in page bodies and navigation, as{" "}
+      <code>BLUME_AUDIT_LINK_TO_REDIRECT</code>. <code>blume validate</code>{" "}
+      won't, because it counts a link to a redirect's <code>from</code> as
+      valid.
+    </li>
+    <li>
+      <strong>Canonicals.</strong> Each page's canonical URL comes from its
+      route and <code>deployment.site</code>, so moved pages update on their
+      own. Only a hand-written <code>seo.canonical</code> can still name an old
+      URL, and the audit reports it as{" "}
+      <code>BLUME_AUDIT_CANONICAL_BAD_TARGET</code>.
+    </li>
+    <li>
+      <strong>Sitemap.</strong> Blume rebuilds <code>sitemap.xml</code> from
+      the pages that exist, so it never lists a redirect, unless a{" "}
+      <code>public/sitemap.xml</code> of your own replaces it. Submit it in
+      Google Search Console once the move is live.
+    </li>
+  </ul>
+  <p>
+    To keep these checks on every pull request, see{" "}
+    <a href="/guides/documentation-seo-audit-ci">
+      Add a technical SEO check to your documentation build
+    </a>
+    .
+  </p>
+
+  <h2>Move to a new domain</h2>
+  <p>A domain move needs three more changes. First, set the new origin:</p>
+  <CodeBlock
+    code={`deployment: { site: "https://developers.acme.example" },`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    With a host adapter, pass it as an option instead:{" "}
+    <code>{'vercel({ site: "https://developers.acme.example" })'}</code>. Don't
+    leave this to detection during a move: on Vercel, Blume reads{" "}
+    <code>VERCEL_PROJECT_PRODUCTION_URL</code>, the shortest production custom
+    domain, so with both domains on the project a shorter old one can win and
+    take every canonical with it. The build summary prints the resolved site
+    URL.
+  </p>
+  <p>
+    Second, send every path on the old domain to the same path on the new one
+    with a permanent redirect:
+  </p>
+  <ul>
+    <li>
+      <strong>Vercel:</strong> add both domains to the project. In{" "}
+      <strong>Project Settings</strong>, open <strong>Domains</strong>, select{" "}
+      <strong>Edit</strong> on the old domain, choose the new one under{" "}
+      <strong>Redirect to</strong>, and pick a permanent status, 301 or 308.
+    </li>
+    <li>
+      <strong>Cloudflare:</strong> add a redirect rule to the old domain's zone,
+      as in Cloudflare's{" "}
+      <a href="https://developers.cloudflare.com/fundamentals/manage-domains/redirect-domain/">
+        Redirect one domain to another
+      </a>
+      . Cloudflare's <code>_redirects</code> doesn't support domain-level
+      rules.
+    </li>
+    <li>
+      <strong>Netlify:</strong> give the old domain its own small site whose
+      publish folder holds a single <code>_redirects</code> file with the line{" "}
+      <code>/* https://developers.acme.example/:splat 301!</code>. Don't put
+      that file in the docs site's <code>public/</code> folder: there it would
+      replace the <code>_redirects</code> a static build writes.
+    </li>
+  </ul>
+  <p>
+    Third, verify the new domain in Google Search Console and, once the
+    redirects are live, use the{" "}
+    <a href="https://support.google.com/webmasters/answer/9370220">
+      Change of Address tool
+    </a>{" "}
+    from the old domain's property. It applies to domain and subdomain moves
+    only, and you must own both properties.
+  </p>
+  <p>
+    The map now needs every old URL. Start from a row per URL that keeps its
+    path, then edit the rows whose path changed too:
+  </p>
+  <CodeBlock
+    code={`(echo "old,new"; sed 's/.*/&,&/' old-urls.txt) > url-map.csv`}
+    lang="bash"
+  />
+  <p>
+    Those rows redirect only on the old domain, so test them on the public
+    host, not in dev. Changing paths and domain in one release gives moved
+    URLs two hops, reported as <code>CHAIN</code>; moving paths first keeps
+    each URL to one.
+  </p>
+
+  <h2>Verify on the public host</h2>
+  <p>
+    Merge, let the production deploy finish, and run the script against the
+    real domain. Pass the new origin as a second argument for a domain move:
+  </p>
+  <CodeBlock
+    code={`./check-redirects.sh https://docs.acme.example
+./check-redirects.sh https://docs.acme.example https://developers.acme.example`}
+    lang="bash"
+  />
+  <p>
+    Test the public domain, not a preview URL: domain rules apply only on the
+    domain itself, and a protected preview answers with a login page. A{" "}
+    <code>META</code> line means your host serves redirect pages instead of
+    HTTP redirects; find your setup in the table at the top.
+  </p>
+  <p>
+    <code>blume audit --url https://docs.acme.example</code> is worth running
+    too. It requests every page in your build from the live host and reports
+    4xx, 5xx, and header problems. It also requests the old URL of every exact
+    redirect and reports <code>BLUME_AUDIT_REDIRECT_NOT_SERVED</code> when one
+    fails, answers 200 with the redirect page, or lands somewhere else. It
+    doesn't check the status code, it requests no URL a pattern redirect
+    covers (for a pattern, the audit only checks against your build that its
+    bare path, <code>/old</code> for <code>/old/*</code>, leads to a page),
+    and it knows nothing about a domain rule, so keep the script for those.
+  </p>
+
+  <h2>Keep a way back</h2>
+  <ul>
+    <li>
+      Merge the move as one pull request with <code>old-urls.txt</code> and{" "}
+      <code>url-map.csv</code> in it, so it reverts as one commit and the test
+      stays with the repository.
+    </li>
+    <li>
+      For a domain move, keep the old setup intact until the script passes on
+      production. Removing the domain redirect undoes the switch.
+    </li>
+    <li>
+      Leave the redirects in place for at least a year, as Google's site-move
+      guidance advises. Old links keep arriving long after that.
+    </li>
+  </ul>
+  <p>
+    Rolling back a URL move has a catch: browsers cache 301 and 308 redirects.
+    Readers who followed one keep going to the new URL, which 404s once you
+    move the page back. Prefer rolling forward: fix the destination, or the
+    page at its new URL.
+  </p>
+  <Callout type="info">
+    For a move you might undo, ship it with <code>status: 307</code> first.
+    Browsers don't cache a 307, and Google keeps showing the old URL in search
+    results while a redirect is temporary. The script prints <code>TEMP</code> for those rows
+    and still checks where they land. Once you're sure, switch to 301 or 308.
+  </Callout>
+
+  <h2>Troubleshooting</h2>
+  <h3>Old URLs answer 200 with a redirect page</h3>
+  <p>
+    Your host isn't reading a redirect file. On Netlify or Cloudflare, name the
+    host (<code>{'netlify({ output: "static" })'}</code>) or switch to a server
+    build. On a Git-connected Vercel project with a static build, copy the{" "}
+    <code>redirects</code> from <code>dist/vercel.json</code> into the{" "}
+    <code>vercel.json</code> at your project root. GitHub Pages can't send HTTP
+    redirects at all, and pattern redirects do nothing there.
+  </p>
+  <h3>Your config redirects are missing from _redirects</h3>
+  <p>
+    A <code>_redirects</code> file in <code>public/</code> replaces the one
+    Blume would write, so none of your config's redirects reach it. Move its
+    rules into <code>blume.config.ts</code> and delete the file.
+  </p>
+  <h3>The build reports BLUME_REDIRECT_MATCHES_PAGE</h3>
+  <p>
+    As an error, a pattern also covers a page that still exists, and hosts
+    disagree on which one answers. Narrow the pattern to the paths that moved.
+    As a warning, an exact redirect starts at a page's own URL, so the redirect
+    wins and the page never publishes. Delete the page if it moved, or remove
+    the redirect.
+  </p>
+  <h3>Canonical URLs still name the old domain</h3>
+  <p>
+    Blume built with the old domain as its site URL, usually because Vercel's
+    detection picked the shorter domain. Set <code>site</code> as in{" "}
+    <a href="#move-to-a-new-domain">Move to a new domain</a> and redeploy.
+  </p>
+  <h3>A redirect you changed still goes to the old place</h3>
+  <p>
+    Your browser cached the earlier permanent redirect. Test with the script or{" "}
+    <code>curl</code>, which don't cache, or in a private window.
+  </p>
+  <h3>Old pages drop out of search results</h3>
+  <p>
+    That's expected as search engines follow the redirects and swap in the new
+    URLs, and positions can move meanwhile. If the new URLs aren't indexed,
+    see{" "}
+    <a href="/guides/documentation-not-indexed">
+      Troubleshoot documentation pages that are not indexed
+    </a>
+    .
+  </p>
+</GuidePage>

@@ -51,13 +51,29 @@ const fakeStorage = (stored: string | null, blocked = false) => ({
   },
 });
 
+/** `window`-level listeners (`beforeprint`/`afterprint`) the script registers. */
+const windowListeners = new Map<string, (() => void)[]>();
+
+const dispatchWindow = (type: string): void => {
+  for (const listener of windowListeners.get(type) ?? []) {
+    listener();
+  }
+};
+
 const runThemeScript = async (input: {
   document: FakeDocument;
   stored: string | null;
   prefersDark: boolean;
   blocked?: boolean;
 }) => {
+  windowListeners.clear();
   Object.assign(globalThis, {
+    addEventListener: (type: string, listener: () => void) => {
+      windowListeners.set(type, [
+        ...(windowListeners.get(type) ?? []),
+        listener,
+      ]);
+    },
     document: input.document,
     localStorage: fakeStorage(input.stored, input.blocked),
     matchMedia: () => ({ matches: input.prefersDark }),
@@ -69,10 +85,14 @@ const runThemeScript = async (input: {
   await import(file);
 };
 
+// Bun has a global `addEventListener` of its own; put it back after a stub.
+const nativeAddEventListener = globalThis.addEventListener;
+
 afterEach(() => {
   for (const name of ["document", "localStorage", "matchMedia"]) {
     Reflect.deleteProperty(globalThis, name);
   }
+  globalThis.addEventListener = nativeAddEventListener;
 });
 
 describe("THEME_INIT_SCRIPT", () => {
@@ -134,6 +154,25 @@ describe("THEME_INIT_SCRIPT", () => {
     expect(incoming.documentElement.dataset.theme).toBe("dark");
     document.dispatch("astro:after-swap", { newDocument: incoming });
     expect(document.documentElement.dataset.theme).toBe("dark");
+  });
+
+  test("prints a dark page in the light theme, then restores it", async () => {
+    const document = fakeDocument("system");
+    await runThemeScript({ document, prefersDark: false, stored: "dark" });
+    dispatchWindow("beforeprint");
+    expect(document.documentElement.dataset.theme).toBe("light");
+    dispatchWindow("afterprint");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+  });
+
+  test("leaves a light page alone around printing", async () => {
+    const document = fakeDocument("system");
+    await runThemeScript({ document, prefersDark: false, stored: "light" });
+    dispatchWindow("beforeprint");
+    expect(document.documentElement.dataset.theme).toBe("light");
+    // A stray afterprint (no beforeprint switch) doesn't force a theme.
+    dispatchWindow("afterprint");
+    expect(document.documentElement.dataset.theme).toBe("light");
   });
 
   test("leaves the incoming document alone when no theme is set yet", async () => {
@@ -395,63 +434,71 @@ describe("BANNER_INIT_SCRIPT", () => {
   });
 });
 
-describe("CONSENT_FIT_SCRIPT", () => {
-  const setup = (input: {
-    dir?: string;
-    article?: { left: number; right: number };
-  }) => {
-    const style = new Map<string, string>();
-    const documentListeners = new Map<string, (() => void)[]>();
-    const windowListeners = new Map<string, (() => void)[]>();
-    const frames: (() => void)[] = [];
-    const page = {
-      article: input.article,
-    };
-    const document = {
-      addEventListener: (type: string, listener: () => void) => {
-        documentListeners.set(type, [
-          ...(documentListeners.get(type) ?? []),
-          listener,
-        ]);
-      },
-      documentElement: {
-        dir: input.dir ?? "",
-        style: {
-          removeProperty: (name: string) => style.delete(name),
-          setProperty: (name: string, value: string) => style.set(name, value),
-        },
-      },
-      querySelector: (selector: string) =>
-        selector === "#blume-content article" && page.article
-          ? { getBoundingClientRect: () => page.article }
-          : null,
-    };
-    const window = {};
-    Object.assign(globalThis, {
-      addEventListener: (type: string, listener: () => void) => {
-        windowListeners.set(type, [
-          ...(windowListeners.get(type) ?? []),
-          listener,
-        ]);
-      },
-      document,
-      innerWidth: 1440,
-      requestAnimationFrame: (frame: () => void) => {
-        frames.push(frame);
-        return frames.length;
-      },
-      window,
-    });
-    const run = async () => {
-      const dir = await mkdtemp(path.join(tmpdir(), "blume-head-scripts-"));
-      runs += 1;
-      const file = path.join(dir, `consent-fit-${runs}.js`);
-      await writeFile(file, CONSENT_FIT_SCRIPT);
-      await import(file);
-    };
-    return { documentListeners, frames, page, run, style, windowListeners };
-  };
+const runConsentFit = async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "blume-head-scripts-"));
+  runs += 1;
+  const file = path.join(dir, `consent-fit-${runs}.js`);
+  await writeFile(file, CONSENT_FIT_SCRIPT);
+  await import(file);
+};
 
+const consentFitPage = (input: {
+  dir?: string;
+  article?: { left: number; right: number };
+}) => {
+  const style = new Map<string, string>();
+  const documentListeners = new Map<string, (() => void)[]>();
+  const fitWindowListeners = new Map<string, (() => void)[]>();
+  const frames: (() => void)[] = [];
+  const page = {
+    article: input.article,
+  };
+  const document = {
+    addEventListener: (type: string, listener: () => void) => {
+      documentListeners.set(type, [
+        ...(documentListeners.get(type) ?? []),
+        listener,
+      ]);
+    },
+    documentElement: {
+      dir: input.dir ?? "",
+      style: {
+        removeProperty: (name: string) => style.delete(name),
+        setProperty: (name: string, value: string) => style.set(name, value),
+      },
+    },
+    querySelector: (selector: string) =>
+      selector === "#blume-content article" && page.article
+        ? { getBoundingClientRect: () => page.article }
+        : null,
+  };
+  const window = {};
+  Object.assign(globalThis, {
+    addEventListener: (type: string, listener: () => void) => {
+      fitWindowListeners.set(type, [
+        ...(fitWindowListeners.get(type) ?? []),
+        listener,
+      ]);
+    },
+    document,
+    innerWidth: 1440,
+    requestAnimationFrame: (frame: () => void) => {
+      frames.push(frame);
+      return frames.length;
+    },
+    window,
+  });
+  return {
+    documentListeners,
+    frames,
+    page,
+    run: runConsentFit,
+    style,
+    windowListeners: fitWindowListeners,
+  };
+};
+
+describe("CONSENT_FIT_SCRIPT", () => {
   afterEach(() => {
     for (const name of [
       "addEventListener",
@@ -464,11 +511,14 @@ describe("CONSENT_FIT_SCRIPT", () => {
   });
 
   test("measures the room before the article's leading edge", async () => {
-    const ltr = setup({ article: { left: 384, right: 1056 } });
+    const ltr = consentFitPage({ article: { left: 384, right: 1056 } });
     await ltr.run();
     expect(ltr.style.get("--blume-consent-free")).toBe("384px");
 
-    const rtl = setup({ article: { left: 384, right: 1056 }, dir: "rtl" });
+    const rtl = consentFitPage({
+      article: { left: 384, right: 1056 },
+      dir: "rtl",
+    });
     await rtl.run();
     expect(rtl.style.get("--blume-consent-free")).toBe("384px");
     rtl.page.article = { left: 400, right: 1100 };
@@ -477,14 +527,14 @@ describe("CONSENT_FIT_SCRIPT", () => {
   });
 
   test("leaves the stylesheet default on pages without an article", async () => {
-    const page = setup({});
+    const page = consentFitPage({});
     page.style.set("--blume-consent-free", "384px");
     await page.run();
     expect(page.style.has("--blume-consent-free")).toBe(false);
   });
 
   test("measures again on resize and navigation, listening once", async () => {
-    const page = setup({ article: { left: 384, right: 1056 } });
+    const page = consentFitPage({ article: { left: 384, right: 1056 } });
     await page.run();
     // A swapped body runs the script again; it must not stack listeners.
     await page.run();

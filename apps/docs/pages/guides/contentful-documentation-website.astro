@@ -1,0 +1,598 @@
+---
+// Contentful as a docs CMS: checked against the Contentful source, custom
+// source, content sources overview (preview, sync, caching), and deployment
+// docs, and on main against contentful() and contentfulSource
+// (core/sources/contentful.ts), the rich text lowering
+// (contentful-rich-text.ts, lower.ts), documentEntry (remote.ts), snapshot
+// keys (resolve.ts), `blume sync`, and the missing-secret check; Contentful's
+// Preview API, authentication, links, rich text, editor interface, and
+// webhook docs, and the contentful-cli and contentful-migration docs
+// (September 2026). Ran: the migration below through contentful-migration
+// 5.1.0's parser against a mocked empty space (no validation errors);
+// contentfulSource from the repo against mocked Delivery and Preview API
+// responses (drafts, changed entries, an unpublished code block, entry
+// links, assets, the serializer); both configs through tsc; route mapping
+// for `index` and nested slugs. Review: aligned the preview, deploy, and
+// rebuild steps with the other CMS guides (Vercel deploy hooks, VERCEL_ENV,
+// and Deployment Protection checked against Vercel's docs), and corrected the
+// missing-token claims against cli/prepare.ts and core/sources/cache.ts.
+// Rechecked the engine's own token check, unresolved-embed warnings, EU
+// hosts, fields.order, and init's .gitignore against core/sources/contentful.ts,
+// remote.ts, and cli/commands/init.ts. Rechecked entry links (a doc page's
+// route, text for other types, a warning for an unpublished page) against
+// contentful.ts and contentful-rich-text.ts, and the entry-hyperlink
+// linkContentType validation against contentful-migration's schema; reran
+// the migration through its parser (no errors) and the custom() config
+// against mocked published and preview responses. Not yet run end to end
+// against a real Contentful space.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const blumeConfigTsCode = `import { defineConfig } from "blume";
+import { custom, filesystem } from "blume/sources";
+import { contentfulSource } from "blume/sources/contentful.ts";
+
+export default defineConfig({
+  title: "Acme Docs",
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      custom(
+        contentfulSource({
+          name: "guides",
+          prefix: "guides",
+          space: "your-space-id",
+          contentType: "docPage",
+          serializers: {
+            // Keyed by content type ID; returns Markdown for the entry.
+            codeBlock: (entry) => {
+              const { code = "", language = "" } = entry.fields as {
+                code?: string;
+                language?: string;
+              };
+              // A fence longer than any run of backticks in the code.
+              const runs = code.match(/\`+/g) ?? [];
+              const fence = "\`".repeat(
+                Math.max(3, ...runs.map((run) => run.length + 1))
+              );
+              return [fence + language, code, fence].join("\\n");
+            },
+          },
+        })
+      ),
+    ],
+  },
+});`;
+---
+
+<GuidePage guide={guideById("contentful-documentation-website")}>
+  <p>
+    To publish developer documentation from Contentful, create a content type
+    for docs pages with a title, a slug, a description, and a rich text body,
+    then point Blume's Contentful source at that content type. Blume reads your
+    published entries through the Content Delivery API when the site builds,
+    turns each body into Markdown, and serves the pages beside any Markdown
+    files in your repository. Run the same project with{" "}
+    <code>--preview</code> and it reads drafts through the Content Preview API
+    instead.
+  </p>
+  <p>
+    By the end, your writers draft and publish in Contentful, drafts can be
+    reviewed locally or on a protected preview deployment before they ship,
+    code samples render as highlighted code, and publishing an entry rebuilds
+    the live site.
+  </p>
+  <p>
+    Blume imports content at build time, so there's no live preview pane in
+    Contentful's editor: a change shows up after a sync or a rebuild. A space
+    on Contentful's EU data residency is served from separate hosts, so set
+    the source's <code>host</code> to <code>cdn.eu.contentful.com</code> and
+    its <code>previewHost</code> to <code>preview.eu.contentful.com</code>.
+    And if everyone who writes your docs works in Git, plain Markdown files
+    are simpler: that's Blume's default, with no CMS at all.
+  </p>
+
+  <h2>Model technical documentation in Contentful</h2>
+  <p>
+    Blume reads one content type per source and maps four fields by ID:{" "}
+    <code>title</code>, <code>description</code>, <code>slug</code>, and{" "}
+    <code>body</code>. Rich text has no code block node, so this model adds a
+    second content type, <code>codeBlock</code>, that writers embed in a body
+    wherever a sample belongs.
+  </p>
+  <p>
+    Keep the model in your repository as a migration script, so it's reviewed
+    like code and can recreate the model in any space or environment. Save
+    this as <code>migrations/01-docs-model.cjs</code>. The <code>.cjs</code>{" "}
+    extension matters: <code>blume init</code> makes the project an ES module
+    package, and the Contentful CLI loads migrations with{" "}
+    <code>require</code>.
+  </p>
+  <CodeBlock
+    code={`module.exports = function (migration) {
+  const codeBlock = migration
+    .createContentType("codeBlock")
+    .name("Code block")
+    .displayField("title");
+  codeBlock.createField("title").name("Title").type("Symbol").required(true);
+  codeBlock
+    .createField("language")
+    .name("Language")
+    .type("Symbol")
+    .required(true)
+    .validations([{ in: ["bash", "json", "yaml", "ts", "js", "python", "go"] }]);
+  codeBlock.createField("code").name("Code").type("Text").required(true);
+  codeBlock.changeFieldControl("language", "builtin", "dropdown");
+  codeBlock.changeFieldControl("code", "builtin", "multipleLine");
+
+  const docPage = migration
+    .createContentType("docPage")
+    .name("Doc page")
+    .displayField("title");
+  docPage.createField("title").name("Title").type("Symbol").required(true);
+  docPage
+    .createField("slug")
+    .name("Slug")
+    .type("Symbol")
+    .required(true)
+    .validations([
+      { unique: true },
+      { regexp: { pattern: "^[a-z0-9-]+(/[a-z0-9-]+)*$" } },
+    ]);
+  docPage.createField("description").name("Description").type("Symbol");
+  docPage
+    .createField("body")
+    .name("Body")
+    .type("RichText")
+    .required(true)
+    .validations([
+      {
+        enabledNodeTypes: [
+          "heading-2",
+          "heading-3",
+          "heading-4",
+          "ordered-list",
+          "unordered-list",
+          "hr",
+          "blockquote",
+          "table",
+          "hyperlink",
+          "entry-hyperlink",
+          "asset-hyperlink",
+          "embedded-asset-block",
+          "embedded-entry-block",
+        ],
+      },
+      { enabledMarks: ["bold", "italic", "code", "strikethrough"] },
+      {
+        nodes: {
+          "entry-hyperlink": [{ linkContentType: ["docPage"] }],
+          "embedded-entry-block": [{ linkContentType: ["codeBlock"] }],
+        },
+      },
+    ]);
+  docPage.changeFieldControl("slug", "builtin", "slugEditor");
+};`}
+    lang="js"
+    title="migrations/01-docs-model.cjs"
+  />
+  <p>
+    The body's validations are the important part. They leave out Heading 1,
+    because the title is already the page's top heading, and they leave out
+    inline entries, which don't become content on the site. Links to entries
+    are limited to doc pages, and embedded entries to code blocks (more on
+    both below).
+  </p>
+  <p>
+    Sign in to the Contentful CLI, which stores a management token in your
+    home directory, then run the migration against your space:
+  </p>
+  <CodeBlock
+    code={`npx contentful-cli@4.0.10 login
+npx contentful-cli@4.0.10 space migration --space-id your-space-id migrations/01-docs-model.cjs`}
+    lang="bash"
+  />
+  <p>
+    The CLI shows the planned changes and asks before applying them. Running
+    the script against another space or environment recreates the model there.
+    To export the model a space holds as JSON, leaving out entries, assets,
+    roles, and webhooks:
+  </p>
+  <CodeBlock
+    code={`npx contentful-cli@4.0.10 space export --space-id your-space-id \\
+  --skip-content --skip-roles --skip-webhooks --content-file docs-model.json`}
+    lang="bash"
+  />
+  <p>
+    <code>space import</code>, with another <code>--space-id</code> and the
+    same <code>--content-file</code>, loads it into another space.
+  </p>
+
+  <h2>Create delivery and preview keys</h2>
+  <p>
+    Blume reads published content with a Content Delivery API token and drafts
+    with a Content Preview API token. They aren't interchangeable: the Preview
+    API rejects delivery tokens, which keeps unpublished content from leaking
+    through a production key.
+  </p>
+  <p>
+    In Contentful, open <strong>Settings</strong> then{" "}
+    <strong>API keys</strong>, and add an API key. Check that it has access to
+    the environment you read (<code>master</code> by default). Copy three
+    values from it: the Space ID, the Content Delivery API access token, and
+    the Content Preview API access token. Put both tokens in{" "}
+    <code>.env.local</code>, which Blume loads for you. The{" "}
+    <code>blume init</code> step below adds that file to{" "}
+    <code>.gitignore</code>, so it stays out of Git:
+  </p>
+  <CodeBlock
+    code={`cat >> .env.local <<'EOF'
+CONTENTFUL_ACCESS_TOKEN=paste-the-delivery-token
+CONTENTFUL_PREVIEW_TOKEN=paste-the-preview-token
+EOF`}
+    lang="bash"
+  />
+
+  <h2>Connect Contentful to Blume</h2>
+  <p>
+    In the folder that holds <code>migrations/</code> and{" "}
+    <code>.env.local</code>, run <code>npx blume init</code>. When it asks where
+    your content lives, pick both <code>filesystem</code> and{" "}
+    <code>contentful</code>: the local <code>docs/</code> folder holds pages
+    you'd rather keep in Git, like the home page. The Contentful source calls
+    the REST API directly, so there's no SDK to install. Edit{" "}
+    <code>blume.config.ts</code> so it reads:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { contentful, filesystem } from "blume/sources";
+
+export default defineConfig({
+  title: "Acme Docs",
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      contentful({
+        space: "your-space-id",
+        contentType: "docPage",
+        prefix: "guides",
+      }),
+    ],
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Publish a doc page or two in Contentful, then run{" "}
+    <code>npx blume dev</code>. Each entry is served at its slug under the
+    prefix, so <code>install</code> becomes <code>/guides/install</code>. A
+    slug with slashes nests, and the slug <code>index</code> becomes the
+    landing page at <code>/guides</code>. The pages sit in a sidebar group of
+    their own, sorted by title; to order them, add a number field to Doc
+    page and name its ID in <code>fields.order</code>. To read a locale other
+    than your space's default, set <code>locale</code>.
+  </p>
+
+  <h2>How rich text maps to docs pages</h2>
+  <p>
+    Blume lowers each body to Markdown, escaping what writers type so a{" "}
+    <code>{"{"}</code> or <code>&lt;</code> in prose renders as written. Most
+    of the editor maps across, but not every relationship becomes a link:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In the rich text editor</th>
+        <th scope="col">On the docs page</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Headings, marks, lists, quotes, rules, tables</td>
+        <td>The same, in Markdown. A table's first row becomes its header.</td>
+      </tr>
+      <tr>
+        <td>A link to a URL</td>
+        <td>A link. A path like <code>/guides/quickstart</code> stays on the site.</td>
+      </tr>
+      <tr>
+        <td>A link to an asset</td>
+        <td>A link to the file on Contentful's CDN</td>
+      </tr>
+      <tr>
+        <td>An embedded image</td>
+        <td>
+          An image loaded from Contentful's CDN, with the asset's description
+          (or its title) as alt text
+        </td>
+      </tr>
+      <tr>
+        <td>Any other embedded file, like a PDF</td>
+        <td>A link to the file, labeled with its title or file name</td>
+      </tr>
+      <tr>
+        <td>An embedded code block entry</td>
+        <td>An HTML comment, so nothing visible, until you add a serializer</td>
+      </tr>
+      <tr>
+        <td>A link to another doc page entry</td>
+        <td>A link to that page, at the route Blume builds it at</td>
+      </tr>
+      <tr>
+        <td>A link to an entry of any other type</td>
+        <td>The link's text only, with no link</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Those last two rows are why the model limits entry links to doc pages.
+    Only an entry of the source's own content type becomes a page, so only a
+    link to one has somewhere to go. Blume builds the link from the linked
+    page's slug, so <code>install</code> becomes{" "}
+    <code>/guides/install</code>. To link to a page from the{" "}
+    <code>docs/</code> folder, writers use an ordinary link to its path, and{" "}
+    <code>npx blume validate</code> reports any that point at a page that
+    doesn't exist.
+  </p>
+
+  <h2>Turn code block entries into code</h2>
+  <p>
+    An embedded entry becomes content through a serializer: a function, keyed
+    by content type ID, that returns Markdown for the entry. Serializers are
+    an option of the engine behind <code>contentful()</code>, so construct it
+    directly and pass it to{" "}
+    <a href="/docs/content/sources/custom"><code>custom()</code></a>. Replace
+    the config with:
+  </p>
+  <CodeBlock
+    code={blumeConfigTsCode}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Each code block now renders as a highlighted fence in its language. With a
+    serializer set, the source writes its pages as MDX, and it still reads
+    drafts under <code>--preview</code> and caches like the built-in adapter.
+    One difference: <code>custom()</code> declares no secrets, so{" "}
+    <code>blume dev</code> and <code>blume build</code> don't warn about an
+    unset <code>CONTENTFUL_ACCESS_TOKEN</code> up front. The engine still
+    checks: without the token, it stops before its first request with{" "}
+    <code>BLUME_MISSING_SECRET</code>.
+  </p>
+
+  <h2>Preview drafts</h2>
+  <p>
+    Contentful tracks three states that matter here. A draft has never been
+    published. A changed entry is published but has edits that aren't. A
+    published entry matches what's live. Set up one of each to see how Blume
+    treats them:
+  </p>
+  <ol>
+    <li>Publish a doc page with the slug <code>install</code>.</li>
+    <li>
+      Create a page with the slug <code>webhooks</code> and don't publish it.
+    </li>
+    <li>
+      Open the Install page, embed a new code block without publishing that
+      code block, and edit the page's description without publishing the
+      page.
+    </li>
+  </ol>
+  <p>
+    The dev server serves a snapshot of Contentful from its last fetch, so
+    pull the latest published content first, then start it:
+  </p>
+  <CodeBlock
+    code={`npx blume sync
+npx blume dev`}
+    lang="bash"
+  />
+  <p>
+    The Install page shows its published version, without the new code block,
+    and <code>/guides/webhooks</code> is a 404. Stop the server and start it
+    again with drafts:
+  </p>
+  <CodeBlock code="npx blume dev --preview" lang="bash" />
+  <p>
+    Now the Webhooks page is in the sidebar, and the Install page shows the new
+    description and code block:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In Contentful</th>
+        <th scope="col"><code>blume dev</code> and <code>blume build</code></th>
+        <th scope="col">With <code>--preview</code></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Published</td>
+        <td>Shown</td>
+        <td>Shown</td>
+      </tr>
+      <tr>
+        <td>Changed</td>
+        <td>The last published version</td>
+        <td>The latest edits</td>
+      </tr>
+      <tr>
+        <td>Draft</td>
+        <td>Missing</td>
+        <td>Shown</td>
+      </tr>
+      <tr>
+        <td>An unpublished code block or image on a published page</td>
+        <td>Left out of the page</td>
+        <td>Shown</td>
+      </tr>
+      <tr>
+        <td>A link to a draft page on a published page</td>
+        <td>Its text only</td>
+        <td>A link</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    After more edits in Contentful, pull them into the running server with{" "}
+    <code>npx blume sync --preview</code>. Keep the flag: a plain{" "}
+    <code>blume sync</code> regenerates the site from published content. To
+    refresh on its own, set <code>pollInterval</code> (in seconds) on the
+    source. Preview and published content are cached separately, so a
+    production build never falls back to drafts.
+  </p>
+  <p>Then check that a production build leaves the drafts out:</p>
+  <CodeBlock
+    code={`npx blume build
+npx blume preview`}
+    lang="bash"
+  />
+  <p>
+    The Webhooks page is a 404, and the Install page still lacks the new code
+    block. Publish the code block and the page in Contentful, build again, and
+    both appear. The Delivery API only resolves published entries and assets,
+    so anything a page embeds or links to has to be published too, and the
+    build warns <code>BLUME_SOURCE_UNRESOLVED_LINK</code> for each one that
+    isn't.
+  </p>
+
+  <h2>Deploy with protected previews</h2>
+  <p>
+    Blume reads Contentful while the site builds. This guide uses Vercel,
+    where production can run the normal build and preview deployments can run
+    the preview build behind a sign-in, so writers review drafts without
+    running Blume themselves. Add a script that picks between them using
+    Vercel's <code>VERCEL_ENV</code> variable:
+  </p>
+  <CodeBlock
+    code={`{
+  "scripts": {
+    "dev": "blume dev",
+    "build": "blume build",
+    "build:vercel": "if [ \\"$VERCEL_ENV\\" = \\"preview\\" ]; then blume build --preview; else blume build; fi"
+  }
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <ol>
+    <li>Push the project to a GitHub repository and import it in Vercel.</li>
+    <li>
+      Set the build command to <code>npm run build:vercel</code>, the output
+      directory to <code>dist</code>, and Node.js to 22 or later.
+    </li>
+    <li>
+      Under <strong>Environment Variables</strong>, add{" "}
+      <code>CONTENTFUL_ACCESS_TOKEN</code> for Production and{" "}
+      <code>CONTENTFUL_PREVIEW_TOKEN</code> for Preview. Each build reads only
+      the token its mode needs.
+    </li>
+    <li>
+      Under <strong>Deployment Protection</strong>, turn on Vercel
+      Authentication with <strong>Standard Protection</strong>, which protects
+      every deployment except your production domains.
+    </li>
+  </ol>
+  <p>
+    The tokens are read while the site builds, so they never reach readers.
+    To give writers a review copy with a fixed address, push a branch named{" "}
+    <code>preview</code>. Vercel deploys it as a preview deployment, and its
+    branch URL stays the same from one build to the next. For other hosts,
+    the <a href="/docs/deployment#private-docs">private docs</a> section lists
+    their protection options.
+  </p>
+  <Callout type="warning">
+    A preview build is an ordinary static site. Drafts land in its pages,
+    search index, Markdown copies, and <code>llms.txt</code>, and Blume adds no
+    password or <code>noindex</code>. Deploy it only behind access protection,
+    never to your public domain.
+  </Callout>
+
+  <h2>Rebuild when an editor publishes</h2>
+  <p>
+    Production only changes when it rebuilds. In your Vercel project's
+    settings, open <strong>Git</strong>, and under{" "}
+    <strong>Deploy Hooks</strong> create a hook for your production branch.
+    Vercel gives you a URL that starts a build when it receives a{" "}
+    <code>POST</code> request. Anyone with its URL can start a build, so treat
+    it like a password.
+  </p>
+  <p>
+    In Contentful, open <strong>Settings</strong> then{" "}
+    <strong>Webhooks</strong>, add a webhook that sends a <code>POST</code> to
+    the hook's URL, and limit its triggers to publish and unpublish events for
+    entries and assets. Don't filter it to the <code>docPage</code> type:
+    republishing a code block or an image has to rebuild the pages that embed
+    it.
+  </p>
+  <p>
+    Publishing or unpublishing now starts a build, and saving a draft doesn't.
+    The site keeps serving the previous deployment until the build finishes,
+    and a failed build leaves it in place.
+  </p>
+  <p>
+    A preview deployment shows drafts as they were when it built. To refresh
+    it, create a second deploy hook for the <code>preview</code> branch and
+    call it when a draft is ready for review, with{" "}
+    <code>curl -X POST "$PREVIEW_DEPLOY_HOOK"</code>. Calling it on every
+    draft save would start a build per edit, and Vercel accepts at most 60
+    hook calls an hour per project.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>--preview fails with "needs a Preview API token"</h3>
+  <p>
+    <code>CONTENTFUL_PREVIEW_TOKEN</code> isn't set where the command runs.
+    Blume doesn't fall back to the delivery token, since the Preview API would
+    reject it anyway. The error carries the code{" "}
+    <code>BLUME_SOURCE_MISCONFIGURED</code>.
+  </p>
+  <h3>The build fails with 401 or 404</h3>
+  <p>
+    <code>BLUME_SOURCE_FETCH_FAILED</code> includes Contentful's status. A 401
+    means the token is wrong where the build runs, or a delivery token went
+    into <code>CONTENTFUL_PREVIEW_TOKEN</code>. A 404 means the space ID is
+    wrong or the API key can't access the environment: give the key access to
+    it in its settings. A missing <code>CONTENTFUL_ACCESS_TOKEN</code> never
+    gets as far as a request: the source stops first with{" "}
+    <code>BLUME_MISSING_SECRET</code>.
+  </p>
+  <h3>A code block or image shows in preview but not on the live site</h3>
+  <p>
+    The page is published, but the entry or asset it embeds isn't, and the
+    build warns <code>BLUME_SOURCE_UNRESOLVED_LINK</code> naming its ID.
+    Publish it, and the next build includes it.
+  </p>
+  <h3>A link to another doc page is plain text</h3>
+  <p>
+    If the build warns <code>BLUME_SOURCE_UNRESOLVED_LINK</code> naming the
+    linked entry's ID, that page isn't published: publish it, and the next
+    build links it. With no warning, the entry isn't one the source builds as
+    a page, such as an entry of another content type.
+  </p>
+  <h3>A code block is missing even in preview</h3>
+  <p>
+    The serializer's key must match the embedded entry's content type ID
+    exactly (<code>codeBlock</code>), and the source must be the{" "}
+    <code>custom(contentfulSource(...))</code> version, since the built-in{" "}
+    <code>contentful()</code> takes no serializers.
+  </p>
+  <h3>Dev still shows old pages after a config change</h3>
+  <p>
+    A <code>custom()</code> source keeps one snapshot per mode, whatever its
+    options, so after changing its content type, fields, or query parameters,
+    the dev server keeps serving the old snapshot. Run{" "}
+    <code>npx blume sync</code> (with <code>--preview</code> if you're
+    previewing) to fetch afresh.
+  </p>
+  <h3>The site shows old content with a warning</h3>
+  <p>
+    <code>BLUME_SOURCE_OFFLINE</code> means the fetch failed and Blume served
+    the last snapshot it had, with the reason in the warning. A fresh build
+    machine has no snapshot, so there the same failure stops the build and
+    your last deployment stays live.
+  </p>
+</GuidePage>

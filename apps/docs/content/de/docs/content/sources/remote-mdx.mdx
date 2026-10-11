@@ -1,0 +1,49 @@
+---
+title: Remote-MDX
+description: >-
+  Rufe mit der Quelle mdxRemote() Markdown und MDX per HTTP aus einem GitHub-Repository oder von einer Raw-URL ab und rendere sie mit allen Blume-Komponenten.
+---
+
+Der integrierte `mdxRemote()`-Adapter ruft rohe `.md`/`.mdx`-Dateien per HTTP ab. Die Dateien ermittelst du entweder aus einem Unterverzeichnis eines GitHub-Repos (`github`) oder gibst sie explizit zu einer Raw-Basis-URL an (`url` + `files`):
+
+```ts blume.config.ts
+import { defineConfig } from "blume";
+import { filesystem, mdxRemote } from "blume/sources";
+
+export default defineConfig({
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      // The docs/ subtree of acme/sdk, mounted under /sdk
+      mdxRemote({
+        prefix: "sdk",
+        github: { owner: "acme", repo: "sdk", ref: "main", path: "docs" },
+      }),
+    ],
+  },
+});
+```
+
+Wenn du die Dateien selbst auflisten willst, lass `url` auf eine Raw-Basis-URL zeigen:
+
+```ts blume.config.ts
+mdxRemote({
+  prefix: "sdk",
+  url: "https://raw.githubusercontent.com/acme/sdk/main/docs",
+  files: ["intro.mdx", "guide.mdx"],
+});
+```
+
+`include` (Standard: `["**/*.{md,mdx}"]`) filtert die Dateien nach ihrem Pfad unterhalb von `path`, genau wie das `include` einer `filesystem()`-Quelle: Ein Muster, das mit `!` beginnt, schließt alles aus, worauf es passt (`["**/*.mdx", "!drafts/**"]`). Mit `github` listet die Quelle den gesamten Baum des Repositorys bei `ref` auf und behält die Dateien unterhalb von `path`. Liegt bei diesem Ref nichts unter `path`, liest die Quelle keine Seiten und warnt mit `BLUME_SOURCE_PATH_MISSING`. GitHub begrenzt die Auflistung (100.000 Einträge oder 7 MB für das gesamte Repository, unabhängig von `path`). Wird diese Grenze überschritten, warnt die Quelle mit `BLUME_SOURCE_TRUNCATED` – liste die Dateien dann stattdessen mit `url` und `files` auf.
+
+Ein relativer Link zwischen Remote-Dateien (`[Errors](./02-errors.mdx)`) führt zu der Seite, unter der die verlinkte Datei veröffentlicht wird. Ihr Sortierpräfix entfällt dabei in der Route. Das gilt auf der gerenderten Seite, in der [Markdown-Kopie](/docs/discoverability/markdown#raw-markdown) der Seite und in `llms-full.txt` sowie in dem, was der Assistent liest. `blume validate` prüft solche Links auf dieselbe Weise.
+
+Das Token für ein privates Repo wird aus der Umgebungsvariable `GITHUB_TOKEN` gelesen. Das Token landet nie direkt in deiner Konfiguration oder in der generierten Ausgabe. Es wird außerdem nur an GitHubs eigene Hosts (`api.github.com`, `raw.githubusercontent.com`) gesendet, niemals an eine eigene `url`-Basis. Ein öffentliches Repo funktioniert auch ohne Token. Mit `github` deklariert der Adapter die Variable, deshalb warnen `blume dev` und `blume build` mit `BLUME_MISSING_SECRET`, wenn sie nicht gesetzt ist: Die Dateiauflistung läuft über GitHubs API, die ohne Authentifizierung 60 Anfragen pro Stunde erlaubt. Eine Raw-`url` liest nur Dateien, deshalb gibt es vorab keine Warnung. Lehnt GitHub eine Datei mit 401, 403 oder 404 ab, während `GITHUB_TOKEN` nicht gesetzt ist, weist die Warnung für die übersprungene Datei darauf hin, dass die Variable nicht gesetzt ist.
+
+Eine Datei, die zum Lesen auf GitHub geschrieben wurde, beginnt oft mit einer Überschrift wie `# Heading`, während Blume den `title` der Seite als ihr `<h1>` rendert. Ist die erste Zeile einer Remote-Seite eine h1, die mit dem `title` im Frontmatter übereinstimmt, oder setzt das Frontmatter keinen `title`, entfällt die Überschrift und ihr Text wird zum Titel. So zeigt die Seite nur ein `<h1>`. Eine erste Überschrift, die von `title` abweicht, bleibt erhalten.
+
+Remote-Seiten werden vollständig als MDX mit allen Komponenten gerendert. Ihr Inhalt wird dafür in ein verstecktes Staging-Verzeichnis geschrieben und zusammen mit deinen lokalen Docs über Astro gerendert. So funktionieren Callouts, Tabs und alle anderen Blume-Komponenten weiterhin.
+
+Wie bei jeder Remote-Quelle werden abgerufene Seiten für Offline-Builds zwischengespeichert und mit `blume sync` aktualisiert – siehe [Caching und Offline-Builds](/docs/content/sources#caching-and-offline-builds).
+
+Die Anleitung [Ein Docs-Portal aus mehreren GitHub-Repositorys aufbauen](/guides/documentation-multiple-repositories) nutzt diese Quelle, um den Docs-Ordner jedes Repositorys in eine einzige Website zu holen. Jedes Repository ist dabei auf ein Release festgelegt, das erst wechselt, wenn du es selbst änderst.

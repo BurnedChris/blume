@@ -1,0 +1,691 @@
+---
+// Publish a FastAPI documentation site: checked against the OpenAPI
+// reference, navigation, deployment, and validate docs, the init scaffold
+// (cli/init/scaffold.ts), the OpenAPI source and slug rules
+// (openapi/source.ts, openapi/model.ts), and the Try it client
+// (components/openapi/playground-client.ts, request.ts) on main; and against
+// FastAPI's first steps, metadata, CORS, behind-a-proxy, and generate-clients
+// docs, plus Vercel's root directory docs. Ran with uv (Python 3.13, fastapi
+// 0.141.1): the app below under TestClient and `fastapi dev` (401 without a
+// key, 202 with one, preflight 200 for the allowed origin and 400
+// "Disallowed CORS origin" for another), the export script, and Blume's
+// parseSpec, extractOperations, and exampleValue on the exported file (pages
+// at /api/messages/send-message and /api/messages/get-message). Did not run
+// blume dev or blume build. Not yet run end to end.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("fastapi-documentation-website")}>
+  <p>
+    FastAPI already writes an OpenAPI 3.1 document from your routes and
+    Pydantic models: it's what powers the Swagger UI at <code>/docs</code>. To
+    give the API a standalone documentation website, export that document to a
+    file with a short script and commit it into a Blume project. Blume
+    generates a page for every operation, next to guides you write in
+    Markdown. The docs build from the file, so they deploy on their own host
+    and never need the API to be running.
+  </p>
+  <p>
+    By the end of this guide, you have a small FastAPI service with typed
+    models and bearer authentication, a script that exports its spec without
+    starting a server, and a docs site with a getting-started guide, a
+    generated API reference, and a Try it panel your API accepts through CORS.
+  </p>
+  <p>
+    If your only readers are your own team and the reference is all they need,
+    you may not need any of this. FastAPI's built-in docs are already there and
+    always match the running code. A separate site earns its place when outside
+    developers need tutorials, search, and stable URLs that stay up when the API
+    doesn't.
+  </p>
+
+  <h2>Where FastAPI's /docs fits</h2>
+  <p>
+    Out of the box, FastAPI serves the spec at <code>/openapi.json</code>,
+    Swagger UI at <code>/docs</code>, and ReDoc at <code>/redoc</code>, all
+    built from the code it's running. That makes them the right tool while you
+    build. A docs site does a different job:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <td></td>
+        <th scope="col">FastAPI's /docs and /redoc</th>
+        <th scope="col">A Blume site</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Served by</td>
+        <td>The API itself</td>
+        <td>Any static host, separate from the API</td>
+      </tr>
+      <tr>
+        <td>Content</td>
+        <td>The reference</td>
+        <td>Guides and the reference, on one site with one search</td>
+      </tr>
+      <tr>
+        <td>Updates</td>
+        <td>On every reload</td>
+        <td>When you export the spec and rebuild</td>
+      </tr>
+      <tr>
+        <td>Available</td>
+        <td>While the API is up</td>
+        <td>Always, as static files</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    You can keep both. To switch FastAPI's pages off in production, pass{" "}
+    <code>docs_url=None</code> and <code>redoc_url=None</code> to{" "}
+    <code>FastAPI()</code>, and <code>openapi_url=None</code> to stop serving the
+    spec too. The export script below calls <code>app.openapi()</code> directly,
+    so it keeps working with all three off.
+  </p>
+
+  <h2>Set up the two projects</h2>
+  <p>
+    The example keeps the API and its docs in one repository, as two folders:
+  </p>
+  <CodeBlock
+    code={`acme/
+  acme-api/    the FastAPI service (Python, uv)
+  docs-site/   the Blume docs (Node.js)`}
+    lang="txt"
+  />
+  <p>
+    Create both, then add FastAPI to the API project. The{" "}
+    <code>standard</code> extra brings the <code>fastapi</code> CLI and Uvicorn
+    for running it locally.
+  </p>
+  <CodeBlock
+    code={`mkdir acme && cd acme
+uv init --app acme-api
+npx blume init docs-site --template docs --yes
+cd acme-api
+uv add "fastapi[standard]==0.141.1"`}
+    lang="bash"
+  />
+  <p>
+    <code>blume init</code> writes <code>docs-site/</code> with a{" "}
+    <code>docs/</code> content folder, a <code>blume.config.ts</code>, and a{" "}
+    <code>package.json</code> whose <code>dev</code> and <code>build</code>{" "}
+    scripts run Blume, then installs its dependencies.
+  </p>
+
+  <h2>Write typed request and response models</h2>
+  <p>
+    Replace <code>acme-api/main.py</code> with the Acme Messages API: send an
+    email or SMS, then check whether it arrived. Everything the reference shows
+    comes from this file.
+  </p>
+  <CodeBlock
+    code={`import os
+from typing import Annotated, Literal
+from uuid import uuid4
+
+from fastapi import Depends, FastAPI, HTTPException, Path
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.routing import APIRoute
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
+
+
+def route_name(route: APIRoute) -> str:
+    # Use the function name as the operation ID: send_message, not
+    # send_message_messages_post.
+    return route.name
+
+
+app = FastAPI(
+    title="Acme Messages API",
+    version="1.0.0",
+    description="Send transactional email and SMS, and check whether each one arrived.",
+    openapi_tags=[
+        {
+            "name": "Messages",
+            "description": "Send a message and check whether it arrived.",
+        },
+    ],
+    generate_unique_id_function=route_name,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.environ.get("DOCS_ORIGINS", "https://docs.acme.example").split(","),
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+bearer = HTTPBearer(
+    scheme_name="bearerAuth",
+    description="An API key, sent as a bearer token.",
+)
+
+
+def require_api_key(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer)],
+) -> str:
+    if not credentials.credentials.startswith("acme_"):
+        raise HTTPException(status_code=401, detail="Invalid API key.")
+    return credentials.credentials
+
+
+class SendMessageRequest(BaseModel):
+    channel: Literal["email", "sms"] = Field(
+        description="How to deliver the message.",
+    )
+    to: str = Field(
+        description="An email address, or a phone number in E.164 format.",
+        examples=["ada@example.com"],
+    )
+    template: str = Field(
+        description="The ID of the template to send.",
+        examples=["welcome"],
+    )
+    variables: dict[str, str] = Field(
+        default_factory=dict,
+        description="Values for the template's variables.",
+        examples=[{"name": "Ada"}],
+    )
+
+
+class Message(BaseModel):
+    id: str = Field(description="The message ID.", examples=["msg_8f2k"])
+    status: Literal["queued", "sent", "delivered", "failed"] = Field(
+        description="Where the message is in delivery.",
+    )
+    channel: Literal["email", "sms"]
+
+
+messages: dict[str, Message] = {}
+
+
+@app.post(
+    "/messages",
+    tags=["Messages"],
+    summary="Send a message",
+    status_code=202,
+    response_description="The message is queued.",
+    dependencies=[Depends(require_api_key)],
+)
+def send_message(body: SendMessageRequest) -> Message:
+    """Queues an email or SMS for delivery and returns its ID right away."""
+    message = Message(id=f"msg_{uuid4().hex[:8]}", status="queued", channel=body.channel)
+    messages[message.id] = message
+    return message
+
+
+@app.get(
+    "/messages/{id}",
+    tags=["Messages"],
+    summary="Get a message",
+    response_description="The message.",
+    responses={404: {"description": "No message has that ID."}},
+    dependencies=[Depends(require_api_key)],
+)
+def get_message(
+    id: Annotated[
+        str,
+        Path(
+            description="The message ID, from the response to Send a message.",
+            examples=["msg_8f2k"],
+        ),
+    ],
+) -> Message:
+    """Returns a message and its delivery status."""
+    if id not in messages:
+        raise HTTPException(status_code=404, detail="No message has that ID.")
+    return messages[id]`}
+    lang="python"
+    title="acme-api/main.py"
+  />
+  <p>
+    Messages live in a dictionary to keep the example short. Here's where each
+    part ends up on the docs site:
+  </p>
+  <ul>
+    <li>
+      <strong>Models.</strong> <code>SendMessageRequest</code> and{" "}
+      <code>Message</code> become schemas. Each field's{" "}
+      <code>description</code> fills the schema tables, and its{" "}
+      <code>examples</code> fill the examples and the Try it form.
+    </li>
+    <li>
+      <strong>Summary and docstring.</strong> <code>summary</code> is the page
+      title and sidebar label. The docstring becomes the operation's
+      description: the page's introduction and its search result text.
+    </li>
+    <li>
+      <strong>Tags.</strong> <code>tags</code> groups operations, and{" "}
+      <code>openapi_tags</code> gives each group the description shown on the
+      reference overview.
+    </li>
+    <li>
+      <strong>Responses.</strong> <code>status_code</code> and{" "}
+      <code>response_description</code> describe the success response, and{" "}
+      <code>responses</code> adds the 404. FastAPI also adds a 422 Validation
+      Error response to every operation that validates input, and the
+      reference shows it like any other.
+    </li>
+  </ul>
+
+  <h3>Operation IDs become URLs</h3>
+  <p>
+    Blume builds each operation's URL from its first tag and its operation ID.
+    FastAPI's default ID joins the function name, path, and method, so{" "}
+    <code>send_message</code> would get <code>send_message_messages_post</code>{" "}
+    and a page at <code>/api/messages/send-message-messages-post</code>. Passing{" "}
+    <code>route_name</code> as <code>generate_unique_id_function</code> uses the
+    function name alone, so the pages land at{" "}
+    <code>/api/messages/send-message</code> and{" "}
+    <code>/api/messages/get-message</code>. Function names then have to be
+    unique across the app. FastAPI warns with{" "}
+    <code>Duplicate Operation ID</code> when two collide.
+  </p>
+
+  <h3>Security schemes</h3>
+  <p>
+    Authentication goes through <code>HTTPBearer</code> from{" "}
+    <code>fastapi.security</code>. Because it's a security class, FastAPI
+    writes it to <code>components.securitySchemes</code> under the{" "}
+    <code>scheme_name</code> you give it, and adds a security requirement to
+    every operation that depends on it. Blume reads both: each operation page
+    gets an Authorization section, the Try it panel gets a Bearer token field,
+    and the code samples send <code>Authorization: Bearer YOUR_TOKEN</code>.
+  </p>
+  <p>
+    <code>APIKeyHeader</code>, <code>HTTPBasic</code>, and{" "}
+    <code>OAuth2PasswordBearer</code> work the same way. For OAuth2, the panel
+    takes a pasted access token rather than running the flow.
+  </p>
+  <p>Start the API and try it in Swagger UI:</p>
+  <CodeBlock code="uv run fastapi dev main.py" lang="bash" />
+  <p>
+    Open <code>http://127.0.0.1:8000/docs</code>. A request without a key gets
+    a 401 with <code>Not authenticated</code>, and one with a key that starts
+    with <code>acme_</code> gets a 202.
+  </p>
+
+  <h2>Export the spec without starting the server</h2>
+  <p>Add a script beside <code>main.py</code>:</p>
+  <CodeBlock
+    code={`"""Write the API's OpenAPI document to a file, without starting the server."""
+
+import json
+import sys
+from pathlib import Path
+
+from main import app
+
+spec = app.openapi()
+spec["servers"] = [
+    {"url": "https://api.acme.example/v1", "description": "Production"},
+]
+
+out = Path(sys.argv[1] if len(sys.argv) > 1 else "openapi.json")
+out.write_text(json.dumps(spec, indent=2) + "\\n")
+print(f"Wrote {out}")`}
+    lang="python"
+    title="acme-api/export_openapi.py"
+  />
+  <p>Run it from <code>acme-api</code>, writing into the docs project:</p>
+  <CodeBlock
+    code="uv run python export_openapi.py ../docs-site/openapi.json"
+    lang="bash"
+  />
+  <p>
+    The script imports the app and calls <code>app.openapi()</code>, which
+    builds the document in memory from your routes and models. Nothing listens
+    on a port, no request goes out, and FastAPI's lifespan handler doesn't run.
+    So the export works the same on a laptop or a CI runner, with no database
+    and no production API to reach. Keep connections in the lifespan handler,
+    not at import time, and it stays that way.
+  </p>
+
+  <h3>Set the server URL</h3>
+  <p>
+    FastAPI's document has no <code>servers</code> entry unless you configure
+    one, and here that matters. Blume's Try it panel and code samples send
+    requests to the spec's first server. With none, they use the bare path,
+    like <code>/messages</code>, which the browser sends to the docs site
+    itself.
+  </p>
+  <p>
+    The script adds the production server to the exported file, not to the
+    app, so FastAPI's own <code>/docs</code> keeps targeting whichever host
+    serves it. The Acme API sits under <code>/v1</code> behind a gateway, so
+    the paths stay <code>/messages</code> and the server URL carries the
+    prefix. If your routes include the prefix themselves, say from an{" "}
+    <code>APIRouter</code> with <code>prefix="/v1"</code>, use the bare origin
+    instead.
+  </p>
+
+  <h2>Build the docs site</h2>
+  <p>
+    Point Blume at the exported file and give the reference a header tab.
+    Replace <code>docs-site/blume.config.ts</code>:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  description: "Guides and API reference for the Acme Messages API.",
+  navigation: {
+    tabs: [
+      { label: "Docs", path: "/" },
+      { label: "API reference", path: "/api" },
+    ],
+  },
+  reference: [openapi({ route: "/api", spec: "./openapi.json" })],
+});`}
+    lang="ts"
+    title="docs-site/blume.config.ts"
+  />
+  <p>
+    The reference mounts at <code>/api</code>. It never adds a tab on its own,
+    so the API reference tab is what makes it reachable. For the reference's
+    other options, like which code-sample languages to show, see{" "}
+    <a href="/guides/openapi-documentation-website">Generate API docs from an OpenAPI spec</a>.
+  </p>
+
+  <h3>Write the getting-started guide</h3>
+  <p>
+    The reference answers "what does this endpoint take?" A getting-started
+    guide answers "how do I make my first call?" Replace the scaffolded home
+    page first:
+  </p>
+  <CodeBlock
+    code={`---
+title: Acme Messages API
+description: Send transactional email and SMS from your app with one API call, then check whether each message was delivered.
+---
+
+The Acme Messages API sends transactional email and SMS for your app.
+
+- [Getting started](/getting-started): send your first message and check that it arrived.
+- [API reference](/api): every endpoint, generated from the API's own code.`}
+    lang="mdx"
+    title="docs-site/docs/index.mdx"
+  />
+  <p>Then add the guide beside it:</p>
+  <CodeBlock
+    code={`---
+title: Getting started
+description: Authenticate with an API key, send your first message with the Acme Messages API, and check whether it was delivered.
+---
+
+Every request needs an API key, sent as a bearer token in the \`Authorization\`
+header. Keys start with \`acme_\`.
+
+## Send a message
+
+\`\`\`bash
+curl https://api.acme.example/v1/messages \\
+  -H "Authorization: Bearer $ACME_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"channel":"email","to":"ada@example.com","template":"welcome"}'
+\`\`\`
+
+The API answers \`202\` with the queued message:
+
+\`\`\`json
+{ "id": "msg_8f2k", "status": "queued", "channel": "email" }
+\`\`\`
+
+## Check delivery
+
+Pass the ID to [Get a message](/api/messages/get-message):
+
+\`\`\`bash
+curl https://api.acme.example/v1/messages/msg_8f2k \\
+  -H "Authorization: Bearer $ACME_API_KEY"
+\`\`\`
+
+\`status\` moves from \`queued\` to \`sent\`, then to \`delivered\` or \`failed\`.
+
+## Errors
+
+A missing or invalid key returns \`401\`. A body that fails validation returns
+\`422\`, with a \`detail\` list naming each field that failed.
+[Send a message](/api/messages/send-message) lists every field.`}
+    lang="mdx"
+    title="docs-site/docs/getting-started.mdx"
+  />
+  <p>
+    The guide links to operation pages by URL like any other page: guides and
+    reference share one sidebar and one search. Start the dev server from{" "}
+    <code>docs-site</code>:
+  </p>
+  <CodeBlock code="npm run dev" lang="bash" />
+  <p>Open <code>http://localhost:4321</code> and you have these pages:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Page</th>
+        <th scope="col">From</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>/</code></td>
+        <td><code>docs/index.mdx</code></td>
+      </tr>
+      <tr>
+        <td><code>/getting-started</code></td>
+        <td><code>docs/getting-started.mdx</code></td>
+      </tr>
+      <tr>
+        <td><code>/api</code></td>
+        <td>The spec's title, description, and tags</td>
+      </tr>
+      <tr>
+        <td><code>/api/messages/send-message</code></td>
+        <td><code>POST /messages</code></td>
+      </tr>
+      <tr>
+        <td><code>/api/messages/get-message</code></td>
+        <td><code>GET /messages/&#123;id&#125;</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Allow the docs site through CORS</h2>
+  <p>
+    The Try it panel sends requests from the reader's browser straight to your
+    API. The docs and the API are on different origins, and each request
+    carries an <code>Authorization</code> header and a JSON body, so the
+    browser first sends a preflight <code>OPTIONS</code> request. It only sends
+    the real request if the API answers that it allows the docs origin.
+  </p>
+  <p>
+    That's the <code>CORSMiddleware</code> block in <code>main.py</code>. It
+    allows the origins in <code>DOCS_ORIGINS</code>, set per environment, and
+    only the methods and headers the panel uses. The panel sends no cookies, so{" "}
+    <code>allow_credentials</code> stays off.
+  </p>
+  <p>
+    You can test this without production. Stop the API and start it again,
+    allowing the docs dev server's origin:
+  </p>
+  <CodeBlock
+    code="DOCS_ORIGINS=http://localhost:4321 uv run fastapi dev main.py"
+    lang="bash"
+  />
+  <p>Then send the preflight a browser would:</p>
+  <CodeBlock
+    code={`curl -i -X OPTIONS http://127.0.0.1:8000/messages \\
+  -H "Origin: http://localhost:4321" \\
+  -H "Access-Control-Request-Method: POST" \\
+  -H "Access-Control-Request-Headers: authorization,content-type"`}
+    lang="bash"
+  />
+  <p>
+    A 200 with <code>access-control-allow-origin: http://localhost:4321</code>{" "}
+    means the browser will go ahead. A 400 with{" "}
+    <code>Disallowed CORS origin</code> means the origin isn't in the list.
+  </p>
+  <p>
+    Now run the whole loop in the browser. With both dev servers running, open{" "}
+    <code>/api/messages/send-message</code>, expand Try it, and enter{" "}
+    <code>http://127.0.0.1:8000</code> as the Custom base URL. Put a token that
+    starts with <code>acme_</code> in the Bearer token field and click Send:
+    the panel shows the 202 and the queued message. Any other token gets the
+    401.
+  </p>
+  <Callout type="info">
+    If you can't change the API's CORS policy, Blume can forward Try it
+    requests through a proxy on the docs site instead, which needs a server
+    deployment. See{" "}
+    <a href="/guides/api-documentation-cors-errors">Fix CORS errors in an API documentation playground</a>.
+  </Callout>
+
+  <h2>Keep the spec in sync</h2>
+  <p>
+    The reference changes only when <code>openapi.json</code> does. After you
+    change a route or a model, run the export again and commit the new file
+    with the code change. The dev server watches the spec file, so a running{" "}
+    <code>npm run dev</code> picks up each export.
+  </p>
+  <p>To catch a forgotten export, run the script in CI and fail when the file changes:</p>
+  <CodeBlock
+    code={`cd acme-api
+uv run python export_openapi.py ../docs-site/openapi.json
+git diff --exit-code ../docs-site/openapi.json`}
+    lang="bash"
+  />
+  <p>
+    It needs only the checkout: no running server and no production API.{" "}
+    <a href="/guides/openapi-documentation-ci">Keep API documentation in sync with backend changes in CI</a>{" "}
+    turns it into a full workflow.
+  </p>
+  <p>
+    Renaming a route function changes its operation ID, and changing its first
+    tag changes its group, so either one moves its page. Add a{" "}
+    <a href="/docs/deployment#redirects">redirect</a> from the old URL in{" "}
+    <code>blume.config.ts</code> so links to it keep working.
+  </p>
+
+  <h2>Deploy the docs separately</h2>
+  <p>From <code>docs-site</code>, build the site and check its links:</p>
+  <CodeBlock
+    code={`npm run build
+npx blume validate`}
+    lang="bash"
+  />
+  <p>
+    <code>blume build</code> fails if it can't read the spec, and{" "}
+    <code>blume validate</code> checks every internal link, including the
+    getting-started guide's links to operation pages.
+  </p>
+  <p>
+    The result in <code>dist/</code> is static HTML for any static host. The
+    build reads the committed <code>openapi.json</code> and never runs Python,
+    so the docs need nothing from the API's runtime or deployment. Point your
+    host at the <code>docs-site</code> folder:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Setting</th>
+        <th scope="col">Value</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Root directory</td>
+        <td><code>docs-site</code></td>
+      </tr>
+      <tr>
+        <td>Build command</td>
+        <td><code>npm run build</code></td>
+      </tr>
+      <tr>
+        <td>Output directory</td>
+        <td><code>dist</code></td>
+      </tr>
+      <tr>
+        <td>Node.js version</td>
+        <td>22.19 or later</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    On Vercel, the Root Directory setting is under Build and Deployment in the
+    project settings. With{" "}
+    <strong>Include source files outside of the Root Directory in the Build Step</strong>{" "}
+    turned off (it's on by default), a build there can't read files outside
+    that directory, which is one more reason to commit the spec inside{" "}
+    <code>docs-site</code> rather than generate it during the build.
+  </p>
+  <p>
+    Blume detects your site's URL on Vercel and Netlify. On other hosts,
+    Cloudflare Pages included, set it so the sitemap, canonical links, and Open
+    Graph images use your docs domain:
+  </p>
+  <CodeBlock
+    code={`deployment: {
+  site: "https://docs.acme.example",
+},`}
+    lang="ts"
+    title="docs-site/blume.config.ts"
+  />
+  <p>
+    Last, set <code>DOCS_ORIGINS</code> on the API to the docs' production
+    origin, written exactly as the browser sends it: scheme, host, and any
+    port, with no trailing slash, like <code>https://docs.acme.example</code>.
+    Preview deployments of the docs have their own origins, so Try it is
+    blocked there unless you add them too. The pages themselves render fine.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>Operation URLs end in -messages-post</h3>
+  <p>
+    The spec has FastAPI's default operation IDs. Pass{" "}
+    <code>generate_unique_id_function</code> to <code>FastAPI()</code> as shown
+    above, or set <code>operation_id</code> on a single route, then export
+    again. If the old URLs are already live, add redirects for them.
+  </p>
+  <h3>Try it sends requests to the docs site</h3>
+  <p>
+    The spec's first server is missing or relative. Check{" "}
+    <code>servers</code> in <code>openapi.json</code>. A spec saved from a
+    running app's <code>/openapi.json</code> has no servers unless you set
+    them, and behind a proxy with <code>root_path</code> set, FastAPI adds a
+    relative server like <code>/api/v1</code>. Export with the script instead,
+    which calls <code>app.openapi()</code> outside a request and sets an
+    absolute URL.
+  </p>
+  <h3>Send fails, but curl works</h3>
+  <p>
+    That's CORS. Run the preflight <code>curl</code> above against the API
+    with your docs origin. The 400 body names what failed:{" "}
+    <code>origin</code>, <code>method</code>, or <code>headers</code>. Starlette
+    compares origins as exact strings, so a trailing slash or the wrong scheme
+    fails. When you add a <code>PUT</code>, <code>PATCH</code>, or{" "}
+    <code>DELETE</code> route, or a header parameter, add it to{" "}
+    <code>allow_methods</code> or <code>allow_headers</code> too.
+  </p>
+  <h3>An operation has no Authorization section</h3>
+  <p>
+    The route doesn't declare a security scheme. Reading the key with{" "}
+    <code>Header()</code> documents it as an ordinary header parameter, not a
+    scheme. Depend on a class from <code>fastapi.security</code>, like{" "}
+    <code>HTTPBearer</code>, on every protected route, then export again.
+  </p>
+  <h3>The build fails with BLUME_OPENAPI_UNAVAILABLE</h3>
+  <p>
+    Blume couldn't read or parse the spec. Usually <code>openapi.json</code>{" "}
+    was never exported or committed, or <code>spec</code> isn't relative to{" "}
+    <code>docs-site</code>. In <code>blume dev</code> it's only a warning and
+    the reference is skipped, so a working dev server can hide it until the
+    build.
+  </p>
+</GuidePage>

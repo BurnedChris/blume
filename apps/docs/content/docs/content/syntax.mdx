@@ -7,7 +7,7 @@ Blume renders standard Markdown and MDX with a curated, GitHub-flavored feature 
 
 ## Headings
 
-Structure a page with headings. Blume renders your frontmatter `title` as the page heading, so start your content at `##` — `##` and `###` become entries in the table of contents. Every `##`–`######` heading is also wrapped in a link to its own anchor, so readers can click a heading to copy, bookmark, or share a permalink straight to that section (hover to reveal the `#`). Turn this off with `markdown: { headingAnchors: false }` in `blume.config.ts`.
+Structure a page with headings. Blume renders your frontmatter `title` as the page heading, so start your content at `##` — `##` and `###` become entries in the table of contents. A page without a `title` takes its first `#` heading as its title, and when the page opens with that heading, it shows once, as the page heading, which keeps the heading's anchor so links to it still land. `llms-full.txt` lists it once too. Every `##`–`######` heading is also wrapped in a link to its own anchor, so readers can click a heading to copy, bookmark, or share a permalink straight to that section (hover to reveal the `#`). Turn this off with `markdown: { headingAnchors: false }` in `blume.config.ts`.
 
 ```md
 ## Section
@@ -19,21 +19,27 @@ Structure a page with headings. Blume renders your frontmatter `title` as the pa
 
 ### Custom anchors
 
-Anchor ids are generated from the heading text, so a reworded heading gets a new anchor. Append `[#custom-id]` to pin the anchor instead — the marker never renders, and links keep working no matter how the heading reads. Pinned anchors also stay identical across [translated locales](/docs/content/i18n), where auto-generated ids would otherwise differ per language.
+Anchor ids are generated from the heading text, so a reworded heading gets a new anchor. A `<Badge>` in a heading is a label, not part of that text: `## Install <Badge>beta</Badge>` anchors as `#install` and reads "Install" in the table of contents. An id never ends in a dash, so `## Features ✨` anchors as `#features`, and a component or image at either end of a heading adds no dash. Append `[#custom-id]` to pin the anchor instead — the marker never renders, and links keep working no matter how the heading reads. Pinned anchors also stay identical across [translated locales](/docs/content/i18n), where auto-generated ids would otherwise differ per language.
 
 ```md
 ## Getting started [#setup]
 ```
 
-Link to it as `/page#setup`. The syntax matches Fumadocs, so migrated content works verbatim.
+Link to it as `/page#setup`. The syntax matches Fumadocs, so migrated content works verbatim. The id is used exactly as written: smart punctuation turns `--` into a dash and curls quotes in the heading's text, but not in the marker, so `[#read--write]` anchors as `#read--write`.
 
-The `{#custom-id}` form used by Pandoc, kramdown, and Markdown-based specification toolchains is accepted as an equivalent in `.md` files. In `.mdx`, a bare `{…}` is a JSX expression and the page fails to compile — `blume check` reports the marker as `BLUME_MDX_CURLY_ANCHOR` — so write `[#custom-id]` there, or escape the braces. The escaped form pins the same anchor in both formats, which makes it the right spelling for a partial that `.mdx` pages [include](/docs/content/includes):
+The `{#custom-id}` form used by Pandoc, kramdown, and Markdown-based specification toolchains is accepted as an equivalent in `.md` files. Only that unspaced spelling pins an anchor: the spaced `{ #custom-id }` and kramdown's `{: #custom-id }` (both from MkDocs' `attr_list`), and an attribute list that sets the id beside classes or attributes (`{ #custom-id .wide }`), stay in the heading's text and its anchor, and `blume check` warns about them in `.md` as `BLUME_MD_CURLY_ANCHOR`. In `.mdx`, a bare `{…}` is a JSX expression and the page fails to compile — `blume check` reports all three spellings as `BLUME_MDX_CURLY_ANCHOR` — so write `[#custom-id]` there, or escape the braces. The escaped form pins the same anchor in both formats, which makes it the right spelling for a partial that `.mdx` pages [include](/docs/content/includes):
 
 ```md
 ## Getting started \{#setup\}
 ```
 
-Fragment links can also target a raw HTML element with an `id` (`<a id="setup"></a>`); `blume validate` accepts those alongside heading anchors.
+Fragment links can also target a raw HTML element with an `id` (`<a id="setup"></a>`), or an `<a name="setup">`; `blume validate` accepts those alongside heading anchors.
+
+An empty `<a>` inside a heading is the heading's own anchor, the way GitBook exports (`<a href="#setup" id="setup"></a>`) and wikis (`<a name="setup"></a>`) write one. Blume takes it out of the heading and gives the heading its `id`, or else its `name`, so `#setup` links keep landing there and the heading keeps its own self-link. A `[#custom-id]` marker on the same heading wins.
+
+```md
+## Getting started <a id="setup"></a>
+```
 
 ### Table of contents markers
 
@@ -150,6 +156,10 @@ Link to other pages or external sites. Images accept a relative path to a file n
 
 A relative page link (`./install`, `../guides/setup`) resolves from the page's own folder — on an index page, the folder it introduces — and a link to a Markdown file (`./setup.md`, `../intro.mdx`) lands on the page that file publishes, its `slug` included. A dotted page name (`./node.js` for a `node.js.mdx` page) counts as a page link when a page publishes there, and a component's string `href` (`<Card href="./install">`) resolves the same way. Blume writes each one as the root-relative route in the built page, so links authored for GitHub or Docusaurus keep working, and [`blume validate`](/docs/cli/validate) checks them the same way.
 
+A root-relative link to a Markdown file (`/guides/setup.md`, the way VitePress and Docsify write one) lands on that file's page too, read from your content root; under a [deployment `base`](/docs/deployment#subpath-deploys), one that starts with the base is read as including it. One that names no file in your content keeps its path, since `/guides/setup.md` is also the URL of that page's [Markdown copy](/docs/discoverability/markdown#raw-markdown). To link a page's Markdown copy whatever its file is called, write a raw `<a href="/guides/setup.md">`, which keeps its path, or the copy's full URL.
+
+A link to a Markdown file that doesn't exist tries the same file with the other extension first. So after you rename `setup.md` to `setup.mdx`, a link to `./setup.md` still lands on that file's page, its `slug` and ordering prefix included, and `blume validate` passes it. A link that names neither file falls back to a plain relative link with the extension dropped. Either way, the link no longer names a real file, so it breaks wherever the Markdown is read as files, such as on GitHub. Update the extension in your links when you rename a file.
+
 Read the [quickstart](/docs/quickstart) to get started.
 
 ```md
@@ -165,6 +175,10 @@ External links open in the same tab by default. Set `markdown: { externalLinks: 
 ```md
 ![Build output](./images/build-output.png)
 ```
+
+An SVG whose size Astro can't read is served as it is instead of failing the build. Astro reads an SVG's size from its `<svg>` tag, which needs a width and height or a viewBox and has to end within the file's first 1,000 bytes; a draw.io export puts its whole diagram in a `content` attribute on that tag, which pushes it past them. Blume warns about each one as `BLUME_SVG_UNOPTIMIZED` at the line that embeds it. The image still shows, without the intrinsic size an optimized image carries; export the diagram without the copy of its source, or remove the `content` attribute, to have it optimized.
+
+A link to a file next to your content that isn't a page (`[the spec](./spec.pdf)`, `[data](../files/data.csv)`, or a reference definition like `[spec]: ./spec.pdf`) publishes that file with the page, and the built link points at the published copy, keeping a suffix like `#page=2`. So does an HTML element that names one: the `src` of an `<img>`, `<video>`, `<source>`, or `<audio>`, and the `href` of an `<a>` or of a component like `<Card>`, as raw HTML in `.md` or an element in `.mdx`. These copies are served as they are, without the optimization an image embed gets. A relative link that names no file next to the page keeps its path, so one to a file under `public/` still works.
 
 Absolute paths under `public/` (`![Alt text](/screenshot.png)`) are served verbatim with no optimization — use them for files that must keep their exact bytes and URL, like a logo referenced from outside your docs. Remote images are also passed through untouched unless their host is authorized in the [`image` config](/docs/configuration#images).
 
@@ -201,6 +215,20 @@ export default defineConfig({
 });
 ```
 ````
+
+The title is every word after the language, so ` ```js Install the client ` titles the block "Install the client". Keywords like `lineNumbers` and `wrap`, line ranges like `{1,4-5}`, and `key="value"` options aren't part of it, and `title="..."` sets the title explicitly. A title in brackets, like ` ```ts [blume.config.ts] `, shows without them, and a line range written against the brackets, as in ` ```ts [blume.config.ts]{2} `, still highlights its lines.
+
+The language is any [Shiki language](https://shiki.style/languages) id or alias, in any case: ` ```JSON ` highlights like ` ```json `. A block in a language Shiki doesn't know renders as plain text, and Blume warns about its fence as `BLUME_UNKNOWN_CODE_LANGUAGE`; write `text` for a block that's plain on purpose.
+
+Options other docs tools read do nothing here, and Blume warns about each as `BLUME_CODE_FENCE_OPTION` with the spelling to use instead: MkDocs' `hl_lines="2 3"` (a `{2,3}` range here) and `linenums="1"` (`lineNumbers`), `showLineNumbers` (`lineNumbers`), Mintlify's `lines` (`lineNumbers`), Fern's `wordWrap` (`wrap`), and `filename="app.js"` (`title="app.js"`). On a Rust block, rustdoc's and mdBook's `ignore`, `no_run`, `should_panic`, `compile_fail`, `edition2015` through `edition2024`, `noplayground`, and `editable` warn too: Blume never compiles, tests, or runs a code block, so remove them. None of them becomes part of the title.
+
+A `console` (or `shellsession`) block is a terminal session: commands after a prompt like `$`, with their output. Its copy button copies only the commands, without their prompts, so the copy pastes straight into a terminal. A command that ends in `\` keeps its continuation lines.
+
+```console
+$ npm install blume
+added 1 package in 2s
+$ npx blume dev
+```
 
 Inline code can be highlighted too: add a `{:lang}` marker inside a backtick span and it's colored like a tiny code block — `useState(){:js}` or `T extends object{:ts}`. It only kicks in when you add the marker, so plain inline code stays untouched — nothing to switch on.
 
@@ -309,7 +337,7 @@ Both work alongside a title and `lineNumbers`. To wrap every block, set `markdow
 
 ### Highlighting
 
-Annotate code with GitHub-style comments to draw attention to lines, words, and changes. The comments are stripped from the rendered output, so the code stays copy-paste clean. All four are on by default — no configuration.
+Annotate code with GitHub-style comments to draw attention to lines, words, and changes. The comments are stripped from the rendered output, so the code stays copy-paste clean. All of them are on by default — no configuration.
 
 Mark a line with `// [!code highlight]` to give it a highlighted background:
 
@@ -336,6 +364,13 @@ import { createServer } from "node:http"; // [!code word:createServer]
 createServer().listen(3000);
 ```
 
+Flag a line as a problem with `// [!code error]` or `// [!code warning]`, tinted red and amber:
+
+```ts
+const port = process.env.PORT; // [!code warning]
+server.listen(port.trim()); // [!code error]
+```
+
 Dim everything except the lines you mark with `// [!code focus]` (the rest sharpens on hover):
 
 ```ts
@@ -345,7 +380,7 @@ export default defineConfig({
 });
 ```
 
-Or highlight lines by **number** instead of comments — useful when you can't edit the code. Put a brace range after the language; single lines, comma lists, and `start-end` spans all work:
+Or highlight lines by **number** instead of comments — useful when you can't edit the code. Put a brace range after the language, with or without a space between them (` ```ts{1,4-5} ` works too); single lines, comma lists, and `start-end` spans all work:
 
 ```ts {1,4-5}
 import { defineConfig } from "blume";
@@ -457,7 +492,7 @@ flowchart LR
 ```
 ````
 
-Diagrams render on the client, so this is an MDX-only feature, and the Mermaid library loads only on pages that include one; a site with no diagram doesn't ship it at all. Diagrams use Mermaid's dagre layout and classic look by default; opt a single diagram into another layout or look through Mermaid front matter (a `config:` block with `layout: elk` or `look: neo`), and the ELK engine loads only for diagrams that ask for it. The rest of this section is a gallery of common types — see the [Mermaid docs](https://mermaid.js.org/intro/) for the full list.
+Diagrams render on the client, so this is an MDX-only feature, and the Mermaid library loads only on pages that include one; a site with no diagram doesn't ship it at all. Diagrams use Mermaid's dagre layout and classic look by default; opt a single diagram into another layout or look through Mermaid front matter (a `config:` block with `layout: elk` or `look: neo`), and the ELK engine loads only for diagrams that ask for it. A diagram Mermaid can't parse shows "Could not render this diagram." in its place; Mermaid's parser error, with the line it stopped on, goes to the browser console, and `blume dev` also prints it under the message. The rest of this section is a gallery of common types — see the [Mermaid docs](https://mermaid.js.org/intro/) for the full list.
 
 ### Flowchart
 
@@ -580,7 +615,7 @@ timeline
 
 ## Callouts
 
-Callouts pull a reader's attention to context, advice, or risk. Write them as `:::type` directives; add a title in brackets, like `:::warning[Heads up]`. Directives are an MDX-only feature — in a `.md` file a `:::note` line stays literal text.
+Callouts pull a reader's attention to context, advice, or risk. Write them as `:::type` directives; add a title in brackets, like `:::warning[Heads up]`. The title keeps its inline formatting, so code, emphasis, and links in the brackets render in the title. Directives are an MDX-only feature — in a `.md` file a `:::note` line stays literal text, and `blume dev`, `blume build`, and `blume check` warn about it as `BLUME_MD_DIRECTIVE`. Rename the page to `.mdx` to render it as a callout.
 
 ### Note
 
@@ -682,6 +717,28 @@ Commit `blume.config.ts`, not `.blume/`.
 ::::
 ```
 
+Write the name right after the colons. `::: tip`, with a space (the spelling VitePress, VuePress, and Docusaurus v2 use), isn't a directive, so the page shows the line as text, and Blume warns about a callout name written that way as `BLUME_DIRECTIVE_SPACED_NAME`. A title goes in brackets: text after the name, as in `:::tip Some title`, opens the callout but never shows, and Blume warns about it as `BLUME_DIRECTIVE_OPENING_TEXT` with the bracketed spelling, `:::tip[Some title]`. Inside a container, a closing fence with text after its colons still closes it, and the text is dropped: a `::: card` line inside a `:::warning` ends the callout there, and `card` never shows. Blume warns about that line as `BLUME_DIRECTIVE_CLOSING_TEXT`. To keep it inside the callout as text, give the callout a longer fence, as above, or remove the text after the colons.
+
+### GitHub alerts
+
+GitHub's alert syntax renders as a callout too: a quote whose first line is `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, or `[!CAUTION]`, in any case. Text after the marker on that line becomes the title.
+
+{/* prettier-ignore */}
+> [!TIP]
+> Set `deployment.site` so sitemaps and Open Graph images use absolute URLs.
+
+{/* prettier-ignore */}
+```md
+> [!TIP]
+> Set `deployment.site` so sitemaps and Open Graph images use absolute URLs.
+```
+
+`[!NOTE]` and `[!TIP]` render as the callouts of the same name, `[!IMPORTANT]` as a note, `[!WARNING]` as a warning, and `[!CAUTION]` as a danger callout, matching GitHub's red. As on GitHub, an alert quoted inside another stays a quote, and so does any other marker, such as `[!INFO]`.
+
+A formatter that joins lines, like oxfmt with `proseWrap: "never"`, pulls the first body line up beside the marker, where it becomes the title (it [collapses directives](/docs/faq#why-is-oxfmt--ultracite-collapsing-my-directives) the same way). Leave a `>` line blank after the marker to keep them apart; GitHub renders that form too.
+
+Alerts are MDX-only, like directives. In a `.md` file the quote stays a quote and shows its marker as text, and `blume dev`, `blume build`, and `blume check` warn about it as `BLUME_MD_GITHUB_ALERT`. Rename the page to `.mdx` to render it as a callout.
+
 ## Math
 
 Render LaTeX with KaTeX, useful for math-heavy or scientific docs. Put `$$…$$` on lines of its own for a centered block:
@@ -715,3 +772,14 @@ Blume converts straight quotes and dashes to typographic equivalents as you writ
 ```md
 "Quotes" become curly, -- becomes an en dash, --- an em dash, and ... an ellipsis.
 ```
+
+## Syntax from other tools
+
+Blume reads the syntax on this page and nothing else. Syntax another docs tool reads shows on the page as written, or breaks an `.mdx` page when it renders, so `blume dev`, `blume build`, and `blume check` warn about it at its line. Code blocks, inline code, and comments are skipped, so wrap an example in inline code to show it as text.
+
+- `BLUME_TEMPLATE_TAG`: a Liquid or Markdoc tag (`{% include note.html %}`, `{% /callout %}`) or a Liquid output (`{{ site.title }}`) in a `.md` page. Blume runs no template language, so replace the tag with what it produced, and a site-wide value with a [variable](/docs/content/variables). A `{{name}}` that could be a variable isn't reported here.
+- `BLUME_WIKILINK_UNSUPPORTED`: a wiki link (`[[Home]]`, `[[Text|Page]]`) that names one of the site's pages by its file name or title, or any wiki link with a `|`. Only an [Obsidian vault](/docs/content/sources/obsidian) source reads wiki links. The warning gives the Markdown link that replaces it.
+- `BLUME_MDC_SYNTAX`: a Nuxt Content (MDC) block component (`::callout` … `::`) or inline component (`:badge[New]{color="primary"}`). Use the matching [component](/docs/content/components) or a `:::` callout instead.
+- `BLUME_MDX_ATTRIBUTE_LIST`: an attribute list (`{ width="300" }`, `{: .note }`) in an `.mdx` page. MDX reads the braces as JavaScript, so the page fails to build. Set the attributes on a JSX element instead (`<img src="…" width="300" />`), and pin a heading's anchor with `[#id]`.
+- `BLUME_MD_ATTRIBUTE_LIST`: an attribute list in a `.md` page, like kramdown's `{: .note }` or `{: #intro }` on its own line or after a block, or `{ width="300" }` after an image. The page shows it as written. Set the attributes on an HTML element instead (`<img src="…" width="300">`), and pin a heading's anchor with `[#id]`. A heading's `{#id}` marker is covered by [`BLUME_MD_CURLY_ANCHOR`](#custom-anchors) instead.
+- `BLUME_MDX_UNCLOSED_ELEMENT`: an HTML void element without a closing slash (`<img …>`, `<br>`) in an `.mdx` page, or in a partial an `.mdx` page [includes](/docs/content/includes). MDX reads it as an unclosed JSX element, so close it: `<br />`.

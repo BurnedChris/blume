@@ -1,0 +1,386 @@
+---
+// Measure AI search referrals and citations: checked against the analytics,
+// page feedback, search analytics, assistant analytics, metadata, sitemap,
+// and deployment docs, and against packages/blume/src/analytics (script,
+// google-analytics, head), components/layout (Analytics.astro,
+// analytics-client.ts, page-feedback.ts, search/analytics.ts), and the
+// seo.metatags schema on main. Third-party facts checked against Google's AI
+// features page (updated 2025-12-10), the Search Console Performance and
+// verification help, the GA4 default channel group, traffic acquisition,
+// key events, and custom dimension help, OpenAI's publishers FAQ, and Bing's
+// AI Performance posts (2026-02-10 and 2026-06-16). Ran: the blume.config.ts
+// below parsed with blumeConfigSchema, and the app_click script in happy-dom
+// (fires once per click on an app link, ignores other links, and a second
+// run adds no second listener). Not yet run end to end on a deployed site.
+// Review pass: re-checked GA4's key-event steps and AI Assistant channel rule,
+// and Bing's AI Performance wording (surfaces, sampled grounding queries).
+// 2026-10-05: added Search Console's Generative AI performance report (rolled
+// out to every site 2026-08-31), checked against its help page and an export
+// of the report for useblume.dev.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("measure-ai-search-documentation")}>
+  <p>
+    You can see part of it, but no single report adds it up. Citations,
+    referrals, and what readers do next are separate numbers from separate
+    tools. Bing Webmaster Tools counts how often Copilot and Bing's AI answers
+    cite your pages. Your analytics shows readers who clicked through from an
+    assistant, and ChatGPT tags its links with{" "}
+    <code>utm_source=chatgpt.com</code>. Search Console counts how often AI
+    Overviews and AI Mode showed a link to your pages, but their clicks stay
+    inside its ordinary Web totals. None of them proves anyone adopted your
+    product.
+  </p>
+  <p>
+    By the end, your Blume site sends page views and a few chosen reader
+    actions to Google Analytics 4, your docs domain is verified in both search
+    consoles, and you have a worksheet with a dated baseline to compare each
+    month against.
+  </p>
+  <p>
+    Blume's part is small: an analytics adapter, the events it already sends,
+    and the verification tags. The rest happens in each tool. This guide uses
+    GA4 because its channel rules already recognize AI assistants, but any
+    adapter from the <a href="/docs/configuration/analytics">analytics docs</a>{" "}
+    works if you swap the event call. If you only want a traffic trend, GA4's
+    Traffic acquisition report answers that on its own. Nothing here measures
+    how often an assistant mentions you without a link.
+  </p>
+
+  <h2>Citations, clicks, and activation are different numbers</h2>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Measure</th>
+        <th scope="col">What it tells you</th>
+        <th scope="col">Where to read it</th>
+        <th scope="col">What it can't tell you</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Citations</td>
+        <td>An AI answer listed your page as a source</td>
+        <td>Bing Webmaster Tools, AI Performance report</td>
+        <td>Whether anyone clicked</td>
+      </tr>
+      <tr>
+        <td>AI impressions</td>
+        <td>Google's AI Overviews or AI Mode showed a link to your page</td>
+        <td>Search Console, Generative AI performance report</td>
+        <td>Whether anyone clicked, or what they searched for</td>
+      </tr>
+      <tr>
+        <td>Search clicks</td>
+        <td>
+          Readers clicked your page in Google Search, AI Overviews and AI Mode
+          included
+        </td>
+        <td>Search Console, Performance report, Web</td>
+        <td>Which of those clicks came from an AI feature</td>
+      </tr>
+      <tr>
+        <td>Assistant referrals</td>
+        <td>A reader clicked through from an assistant</td>
+        <td>GA4, by session source</td>
+        <td>Visits that arrive with no referrer and no tag</td>
+      </tr>
+      <tr>
+        <td>Activation</td>
+        <td>The reader then did something you care about</td>
+        <td>GA4 key events and Blume's events</td>
+        <td>Whether they went on to use the product</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Keep them in separate columns. A page that is cited often and clicked
+    rarely may have answered the question in place, which is a different
+    finding from a page that gets clicks and no follow-up.
+  </p>
+
+  <h2>Decide which reader actions count</h2>
+  <p>
+    A visit from an assistant tells you a reader arrived. Pick one or two
+    actions that mean the page did its job. Blume already sends some of them
+    as <a href="/docs/configuration/analytics#custom-events">analytics events</a>:
+  </p>
+  <ul>
+    <li>
+      <code>feedback</code>, with <code>helpful</code> set to{" "}
+      <code>"yes"</code> or <code>"no"</code>, from the{" "}
+      <a href="/docs/configuration#page-feedback">rating</a> at the end of
+      every docs page. It's on by default.
+    </li>
+    <li>
+      <code>search_select</code>, when a reader{" "}
+      <a href="/docs/configuration/search#search-analytics">searches</a> and
+      opens a result.
+    </li>
+    <li>
+      <code>ask_answer</code>, when{" "}
+      <a href="/docs/configuration/assistant#analytics">the assistant</a>{" "}
+      finishes an answer, if you've turned it on.
+    </li>
+  </ul>
+  <p>
+    For product docs, the strongest signal is usually a click into the product
+    itself: a sign-up, a dashboard, an API keys page. Blume doesn't send that
+    one, so add it with a{" "}
+    <a href="/docs/configuration/analytics#custom-scripts"><code>script()</code></a>{" "}
+    adapter. This config also sets the site URL and the two verification tags
+    you'll need later:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { googleAnalytics, script } from "blume/analytics";
+
+// Send an app_click event when a reader follows a link into the Acme app.
+const appClicks = \`
+(function () {
+  if (window.acmeAppClicks) return;
+  window.acmeAppClicks = true;
+  document.addEventListener("click", function (event) {
+    var link = event.target instanceof Element ? event.target.closest("a[href]") : null;
+    if (!link || link.origin !== "https://app.acme.example") return;
+    if (typeof window.gtag === "function") {
+      window.gtag("event", "app_click", { link_url: link.href });
+    }
+  });
+})();
+\`;
+
+export default defineConfig({
+  deployment: { site: "https://docs.acme.example" },
+  seo: {
+    metatags: {
+      "google-site-verification": "abc123",
+      "msvalidate.01": "def456",
+    },
+  },
+  analytics: [
+    googleAnalytics({ id: "G-XXXXXXXXXX" }),
+    script({ content: appClicks }),
+  ],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Change <code>https://app.acme.example</code> to your product's origin, and
+    replace the measurement ID and both tokens with your own. Analytics loads in
+    production builds only, so deploy before you look for events. With{" "}
+    <a href="/docs/configuration/consent"><code>consent</code></a> set, both
+    tags wait until the reader allows analytics.
+  </p>
+  <p>Then tell GA4 what to count:</p>
+  <ol>
+    <li>
+      In Admin, under Data display, click <strong>Events</strong>. Once{" "}
+      <code>app_click</code> appears under <strong>Recent events</strong>,
+      click the star next to it to mark it as a key event.
+    </li>
+    <li>
+      In Admin, under Data display, open <strong>Custom definitions</strong>,
+      click <strong>Create custom dimensions</strong>, and add one named{" "}
+      <code>helpful</code> with the Event scope and the event parameter{" "}
+      <code>helpful</code>. That splits <code>feedback</code> into yes and no.
+    </li>
+  </ol>
+
+  <h2>Read the referral URLs you actually get</h2>
+  <p>
+    Before you trust a report, look at one real referral. Ask ChatGPT a
+    question your docs answer. If it cites one of your pages, click the link
+    and read the address bar:
+  </p>
+  <CodeBlock
+    code="https://docs.acme.example/quickstart?utm_source=chatgpt.com"
+    lang="txt"
+  />
+  <p>
+    OpenAI adds <code>utm_source=chatgpt.com</code> to referral links from
+    ChatGPT, so GA4 records the session source as <code>chatgpt.com</code> even
+    when the browser sends no referrer. Other assistants may send a referrer, a
+    tag, or nothing. Try the ones your readers use and write down what you see.
+  </p>
+  <p>
+    In GA4, open Reports, then Acquisition, then{" "}
+    <strong>Traffic acquisition</strong>. Switch the table's dimension to{" "}
+    <strong>Session source</strong> and search for each assistant's hostname,
+    like <code>chatgpt.com</code>, <code>perplexity.ai</code>,{" "}
+    <code>gemini.google.com</code>, <code>copilot.microsoft.com</code>, and{" "}
+    <code>claude.ai</code>. Keep the ones that return rows. While{" "}
+    <code>app_click</code> is your only key event, the table's Key events column
+    is your activation count for each source.
+  </p>
+  <p>
+    GA4's default channel group also has an <strong>AI Assistant</strong>{" "}
+    channel, for sessions whose referrer matches Google's list of AI
+    assistants. Google's examples are ChatGPT, Gemini, DeepSeek, Copilot, and
+    Grok. Its Organic Search channel includes clicks from AI Overviews and AI
+    Mode, so clicks from Google's own AI features land there, not under AI
+    Assistant.
+  </p>
+  <p>
+    Every AI visit is one of three kinds: tagged, referred, or neither. The
+    third lands in Direct with nothing to say where it came from. Record the
+    first two, and don't try to estimate the third.
+  </p>
+
+  <h2>Compare Google and Bing reports</h2>
+  <p>
+    Add your docs domain in Google Search Console and Bing Webmaster Tools,
+    choose the HTML meta tag method, and put each tool's token in{" "}
+    <a href="/docs/discoverability/metadata#your-own-tags"
+      ><code>seo.metatags</code></a
+    >{" "}
+    as the config above does. In Search Console, the meta tag works for a
+    URL-prefix property; a Domain property needs a DNS record instead. Then
+    submit <code>https://docs.acme.example/sitemap.xml</code> in both. Blume
+    writes the <a href="/docs/discoverability/sitemap-and-robots#sitemap"
+      >sitemap</a
+    > on every build once <code>deployment.site</code> is set.
+  </p>
+  <h3>Search Console</h3>
+  <p>
+    Google reports AI Overviews and AI Mode in two places. The Performance
+    report's Web search type counts them together with the rest of Search: a
+    click on a link in either counts as a click, and every link in an AI
+    Overview shares that overview's single position. Treat the Web totals as
+    all of Google Search, AI included. The Pages tab gives you clicks per page.
+  </p>
+  <p>
+    The <strong>Generative AI performance report</strong>, listed with the
+    other performance reports, takes the AI features' share of that Web data
+    and counts impressions only: how many times a link to your site was shown in
+    AI Overviews or AI Mode, with two of your links in the same answer counting
+    once. It has Pages, Countries, Devices, and Dates tabs, no queries, and no
+    clicks, and it leaves out experiments in Search Labs. Keep its impressions
+    in their own column. Dividing Web clicks by them gives no click-through
+    rate, since those clicks include ordinary results.
+  </p>
+  <h3>Bing Webmaster Tools</h3>
+  <p>
+    The AI Performance report, in public preview, counts citations across
+    Microsoft Copilot, AI-generated summaries in Bing, and select partner
+    integrations. It shows total citations, average cited pages per day, the
+    grounding queries behind them, and citations per page, plus newer previews
+    of intents, topics, citation share, and a compare view. Bing says the
+    grounding queries are a sample of overall citation activity, and that the
+    counts reflect how often pages are cited, not ranking or placement. None of
+    its numbers are clicks.
+  </p>
+  <h3>Line them up by page</h3>
+  <p>
+    Put citations from Bing, AI impressions and clicks from Search Console,
+    and AI-referred sessions and key events from GA4 side by side for each
+    page. Read the pairs,
+    not the totals:
+  </p>
+  <ul>
+    <li>
+      <strong>Cited often, few referrals.</strong> The answer may have been
+      enough. That isn't a failure to fix.
+    </li>
+    <li>
+      <strong>Referrals, no actions.</strong> The page may not deliver what the
+      answer promised. Read it as someone arriving from that answer would.
+    </li>
+    <li>
+      <strong>Actions rising.</strong> Still not adoption. That shows up in your
+      product's own data, like new API keys that make a first request.
+    </li>
+  </ul>
+
+  <h2>Keep a dated baseline</h2>
+  <p>
+    These numbers only mean something next to earlier ones taken the same way.
+    Once a month, read every tool over the same range (the previous calendar
+    month) and add a row per number to one file:
+  </p>
+  <CodeBlock
+    code={`date,range,source,measure,scope,value,notes
+2026-10-01,2026-09-01 to 2026-09-30,Bing AI Performance,Total citations,site,,
+2026-10-01,2026-09-01 to 2026-09-30,Bing AI Performance,Average cited pages,site,,
+2026-10-01,2026-09-01 to 2026-09-30,Bing AI Performance,Citations,/quickstart,,
+2026-10-01,2026-09-01 to 2026-09-30,Search Console Generative AI,Impressions,site,,
+2026-10-01,2026-09-01 to 2026-09-30,Search Console Generative AI,Impressions,/quickstart,,
+2026-10-01,2026-09-01 to 2026-09-30,Search Console Web,Clicks,site,,includes AI Overviews and AI Mode
+2026-10-01,2026-09-01 to 2026-09-30,Search Console Web,Clicks,/quickstart,,
+2026-10-01,2026-09-01 to 2026-09-30,GA4,Sessions,Session source chatgpt.com,,
+2026-10-01,2026-09-01 to 2026-09-30,GA4,Sessions,AI Assistant channel,,
+2026-10-01,2026-09-01 to 2026-09-30,GA4,Key events (app_click),Session source chatgpt.com,,
+2026-10-01,2026-09-01 to 2026-09-30,GA4,feedback helpful=yes,site,,
+2026-09-18,,Change,Rewrote the quickstart,/quickstart,,shipped to production`}
+    lang="csv"
+    title="ai-search-baseline.csv"
+  />
+  <p>
+    The dates are examples; use the day you read the numbers. Add a row per
+    page you care about, and a row per assistant hostname you found. Log your
+    own changes as dated rows too, like the rewritten quickstart above, so a
+    jump has a likely cause.
+  </p>
+  <p>
+    Log the tools' changes as well. Bing's report is a preview, and GA4 matches
+    the AI Assistant channel against its own list of assistants, so a number
+    can move with nothing changing on your site. Never compare a partial month
+    with a full one.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>GA4 shows no events from the docs</h3>
+  <p>
+    Blume adds analytics to production builds only, so pages from{" "}
+    <code>blume dev</code> send nothing. Check that the deployed page's{" "}
+    <code>&lt;head&gt;</code> has the <code>gtag</code> scripts. With{" "}
+    <code>consent</code> set, nothing loads until a reader allows analytics, so
+    every count covers consenting readers only, and the page rating is hidden
+    from everyone else.
+  </p>
+  <h3>ChatGPT sessions are missing from the AI Assistant channel</h3>
+  <p>
+    GA4 assigns that channel from the referrer, while ChatGPT's tag sets the
+    session source. A tagged session that arrives without a referrer can land
+    in another channel. Count by Session source, and use the channel as a
+    cross-check.
+  </p>
+  <h3>The helpful dimension is empty</h3>
+  <p>
+    GA4 makes a new custom dimension available 24 to 48 hours after it's
+    created and events carrying the parameter have arrived. Rate a page on the
+    live site yourself, then check again two days later.
+  </p>
+  <h3>Bing's AI Performance report is empty</h3>
+  <p>
+    Check that the site is verified and the sitemap was read. The report only
+    counts citations that happened, so an empty range can mean Bing's AI
+    answers cited none of your pages, not that setup failed. Blume's{" "}
+    <code>robots.txt</code> allows every crawler, so if Bingbot still can't
+    fetch your pages, look at your host's or CDN's bot rules, as{" "}
+    <a href="/guides/ai-search-documentation-crawlability"
+      >checking AI crawler access</a
+    > covers.
+  </p>
+  <h3>Agent reads never show up</h3>
+  <p>
+    Agents that read your{" "}
+    <a href="/docs/discoverability/llms-txt"><code>llms.txt</code></a>, a
+    page's <a href="/docs/discoverability/markdown">Markdown</a>, or your{" "}
+    <a href="/docs/discoverability/mcp">MCP server</a> never run the analytics
+    script, so no client-side tool counts them. Only your host's request logs
+    see those reads.
+  </p>
+  <h3>Search Console shows no clicks for a page</h3>
+  <p>
+    To appear as a supporting link in AI Overviews or AI Mode, a page must be
+    indexed and eligible to show with a snippet, the same as a regular result.
+    If it isn't indexed, work through{" "}
+    <a href="/guides/documentation-not-indexed">pages that are not indexed</a>{" "}
+    first.
+  </p>
+</GuidePage>

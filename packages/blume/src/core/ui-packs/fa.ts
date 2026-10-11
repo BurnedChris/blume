@@ -33,6 +33,7 @@ export const fa: UIStringsOverride = {
     error: "متأسفیم، مشکلی پیش آمد.",
     explainCode: "این کد را توضیح بده.",
     label: "یک سؤال بپرسید",
+    open: "باز کردن دستیار",
     placeholder: "یک سؤال بپرسید…",
     rateLimited: "سؤال‌های زیادی پرسیده‌اید. چند دقیقه دیگر دوباره امتحان کنید.",
     removeCode: "حذف کد",
@@ -48,6 +49,7 @@ export const fa: UIStringsOverride = {
   banner: { dismiss: "بستن اطلاعیه" },
   changelog: {
     description: "به‌روزرسانی‌های محصول و یادداشت‌های انتشار.",
+    empty: "هنوز هیچ موردی در گزارش تغییرات نیست.",
     title: "گزارش تغییرات",
   },
   consent: {
@@ -69,6 +71,7 @@ export const fa: UIStringsOverride = {
     preview: "پیش‌نمایش",
     prop: "ویژگی",
     selectTab: "انتخاب زبانه",
+    selectView: "انتخاب نما",
     showLess: "نمایش کمتر",
     showMore: "نمایش بیشتر",
     stars: "ستاره‌ها",

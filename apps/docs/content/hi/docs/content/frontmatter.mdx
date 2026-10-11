@@ -6,6 +6,8 @@ description: >-
 
 हर पेज निम्नलिखित फ़्रंटमैटर स्वीकार करता है। सभी फ़ील्ड वैकल्पिक हैं।
 
+फ़्रंटमैटर YAML होता है। इसलिए जिस मान में कोलन के बाद स्पेस हो, उसे उद्धरण चिह्नों में रखें, जैसे `description: "Setup: the easy way"`। उद्धरण चिह्नों के बिना YAML दूसरे कोलन को एक नेस्टेड कुंजी की शुरुआत मानता है, और Blume उस फ़ाइल और पंक्ति की रिपोर्ट `BLUME_FRONTMATTER_INVALID` के रूप में करता है।
+
 <TypeTable
   type={{
     title: { type: "string", description: "Page title." },
@@ -22,7 +24,7 @@ description: >-
     authors: {
       type: "string | string[] | object[]",
       description:
-        "Post author(s) for blog/changelog content — a name, or objects with a name plus optional avatar/url and any extra fields. Preserved as-is.",
+        "Post author(s) for blog/changelog content — a name, or objects with a name plus optional avatar/url and any extra fields. Credited as Person nodes in the page's JSON-LD; other fields are preserved as-is.",
     },
     slug: {
       type: "string",
@@ -50,6 +52,23 @@ description: >-
       default: "false",
       description: "Shorthand for seo.noindex.",
     },
+    narration: {
+      type: "boolean",
+      default: "true",
+      description:
+        "Set to false to leave this page without the Listen to this page player when narration is on.",
+    },
+    related: {
+      type: "(string | { [title]: string })[] | false",
+      description:
+        "Pages to suggest at the foot of this one, up to ten: root-relative paths, absolute URLs, or { Title: link } to name a link. See Related pages below.",
+    },
+    pagination: {
+      type: "boolean",
+      default: "true",
+      description:
+        "Set to false to drop the previous and next links at the foot of the page. The page stays in the order, so its neighbors still link to it.",
+    },
     icon: {
       type: "string",
       description:
@@ -60,8 +79,63 @@ description: >-
       description:
         'Pin the page\'s "last updated" date (ISO or YAML date); overrides the git-derived date.',
     },
+    mode: {
+      type: '"default" | "wide" | "center" | "custom" | "frame"',
+      default: '"default"',
+      description: "What the page shows around its content. See Layout below.",
+    },
+    api: {
+      type: "string",
+      description:
+        "An endpoint this page documents by hand, as an HTTP method and a path or URL (POST /v1/users). See Hand-written API pages.",
+    },
+    authMethod: {
+      type: '"bearer" | "basic" | "key" | "none"',
+      description:
+        "How an api page's endpoint authenticates, over the site's api.auth.",
+    },
+    playground: {
+      type: '"interactive" | "simple" | "none"',
+      default: '"interactive"',
+      description:
+        "What an api page shows: the Try it panel and samples, the samples only, or neither.",
+    },
   }}
 />
+
+## लेआउट [#layout]
+
+`mode` यह तय करता है कि कोई पेज अपने कंटेंट के आसपास क्या दिखाता है:
+
+| मोड | साइडबार | शीर्षक और विषय-सूची | पेज के अंत के लिंक और फ़ुटर | कंटेंट की चौड़ाई |
+| --- | --- | --- | --- | --- |
+| `default` | हाँ | हाँ | हाँ | गद्य पाठ की मानक चौड़ाई |
+| `wide` | हाँ | केवल शीर्षक | हाँ | पूरा कॉलम |
+| `center` | नहीं | केवल शीर्षक | हाँ | एक अधिक चौड़ा कॉलम, बीच में |
+| `frame` | हाँ | नहीं | नहीं | पूरा कॉलम |
+| `custom` | नहीं | नहीं | नहीं | पूरा पेज |
+
+`wide` चौड़ी तालिकाओं या डायग्राम वाले पेज के लिए उपयुक्त है, और `center` रिलीज़ नोट्स या ऊपर से नीचे तक पढ़ी जाने वाली किसी घोषणा के लिए। `custom` केवल हेडर रखता है, जो MDX में लिखे गए लैंडिंग पेज के लिए है, और `frame` साइडबार भी रखता है, जो ऐसे टूल या डैशबोर्ड के लिए है जो डॉक्स के नेविगेशन के भीतर रहता है। इन दोनों में से कोई भी पेज का शीर्षक या विवरण रेंडर नहीं करता, इसलिए आप अपनी स्वयं की हेडिंग लिखें। हर मोड में पेज खोज में बना रहता है और उसकी Markdown कॉपी भी बनी रहती है।
+
+```yaml lineNumbers
+title: Welcome
+mode: custom
+```
+
+ये मान Mintlify के मानों से मेल खाते हैं; उसके `assistant` मोड का, जो पूरे पेज पर चलने वाला चैट है, यहाँ कोई समकक्ष नहीं है।
+
+## संबंधित पेज [#related-pages]
+
+`related` उन पेजों की सूची देता है जिन्हें इस पेज के नीचे सुझाया जाना है। ये **संबंधित पेज** हेडिंग के अंतर्गत कार्ड के रूप में दिखाए जाते हैं:
+
+```yaml lineNumbers
+related:
+  - /guides/deployment
+  - Search setup: /configuration/search
+  - https://astro.build
+```
+
+रूट-सापेक्ष पथ किसी दूसरे पेज की ओर संकेत करता है, जिसे कार्ड उस पेज के शीर्षक और विवरण के साथ दिखाता है; किसी अनुवादित पेज पर, अनुवाद उपलब्ध होने पर यह उस अनुवाद से लिंक करता है। `Title: link` प्रविष्टि कार्ड का शीर्षक स्वयं सेट करती है, और कोई एब्सोल्यूट URL साइट से बाहर लिंक करता है, जिसके कार्ड पर उसका होस्ट नाम दिखाया जाता है। पथों की जाँच पेज के किसी भी अन्य लिंक की तरह की जाती है, इसलिए यदि कोई पथ किसी भी पेज से मेल नहीं खाता, तो [`blume validate`](/docs/cli/validate) उसकी रिपोर्ट करता है। यह कुंजी Mintlify की कुंजी से मेल खाती है, इसलिए माइग्रेट किए गए पेजों में यह जैसी लिखी है वैसी ही बनी रहती है।
 
 ## साइडबार [#sidebar]
 
@@ -75,7 +149,7 @@ sidebar:
   display: page
 ```
 
-`hidden` पेज को साइडबार से और पिछले/अगले पेजिनेशन से हटा देता है। किसी फ़ोल्डर के `index` पेज पर यह केवल उस पेज की अपनी पंक्ति हटाता है: समूह की पंक्ति फिर भी उस पेज से लिंक करती रहती है, और पिछले/अगले लिंक अब भी उससे होकर गुज़रते हैं।
+`hidden` पेज को साइडबार से और पिछले/अगले पेजिनेशन से हटा देता है, और इसी कारण साइटमैप, खोज और `llms.txt` से भी ([छिपे हुए पेज](/docs/content/navigation#hidden-pages) देखें)। किसी फ़ोल्डर के `index` पेज पर यह केवल उस पेज की अपनी पंक्ति हटाता है: समूह की पंक्ति फिर भी उस पेज से लिंक करती रहती है, इसलिए पिछले/अगले लिंक अब भी उससे होकर गुज़रते हैं और पेज साइटमैप, खोज और `llms.txt` में बना रहता है। होम पेज, यानी रूट `index` पेज, पर भी यह केवल उसकी पंक्ति हटाता है: पेज साइटमैप, खोज और `llms.txt` में बना रहता है।
 
 `display` पेज के फ़ोल्डर समूह का रेंडर मोड सेट करता है ([प्रति-समूह ओवरराइड](/docs/content/navigation#per-group-overrides))। इसका अर्थ केवल जेनरेट किए गए साइडबार के अंतर्गत किसी फ़ोल्डर के `index` पेज पर होता है। कहीं और (कोई गैर-index पेज, कंटेंट रूट का अपना `index` पेज, या किसी स्पष्ट `navigation.sidebar` के अंतर्गत कोई भी पेज) कॉन्फ़िगर करने के लिए कोई समूह नहीं होता, और Blume `BLUME_SIDEBAR_DISPLAY_IGNORED` के साथ चेतावनी देता है।
 
@@ -92,7 +166,7 @@ seo:
     creator: "@jane"
 ```
 
-`noindex` एक robots `noindex` जोड़ता है, पेज को साइटमैप से हटा देता है, और उसका स्ट्रक्चर्ड डेटा नहीं बनाता। `x.creator` पेज का श्रेय किसी X खाते (`twitter:creator`) को देता है, जैसे किसी गेस्ट पोस्ट के लेखक को। सभी फ़ील्ड के लिए [मेटाडेटा](/docs/discoverability/metadata#per-page-overrides) देखें।
+`noindex` एक robots `noindex` जोड़ता है, पेज को साइटमैप से हटा देता है, और उसका स्ट्रक्चर्ड डेटा नहीं बनाता। जो `canonical` किसी दूसरे URL की ओर संकेत करता है, वह भी पेज को साइटमैप से हटा देता है, क्योंकि साइटमैप में केवल कैनॉनिकल URL ही सूचीबद्ध होते हैं। `x.creator` पेज का श्रेय किसी X खाते (`twitter:creator`) को देता है, जैसे किसी गेस्ट पोस्ट के लेखक को। सभी फ़ील्ड के लिए [मेटाडेटा](/docs/discoverability/metadata#per-page-overrides) देखें।
 
 ## खोज [#search]
 
@@ -100,7 +174,11 @@ seo:
 search:
   exclude: false
   tags: [api]
+  keywords: [install, setup]
+  boost: 3
 ```
+
+`exclude` पेज को खोज से बाहर रखता है। `tags` पेज के रिकॉर्ड को लेबल करता है, ताकि कोई होस्टेड खोज एडैप्टर उन लेबल के आधार पर फ़िल्टर कर सके ([टैग](/docs/configuration/search#tags) देखें)। `keywords` ऐसे अतिरिक्त शब्द हैं जिनसे पेज, अपने स्वयं के टेक्स्ट के अलावा, खोजा जा सकता है। `boost` पेज की प्रासंगिकता को गुणा करता है: 1 से अधिक मान उसे ऊँची रैंक देता है, और 1 से कम मान नीची। [रैंकिंग](/docs/configuration/search#ranking) देखें।
 
 ## AI
 
@@ -109,7 +187,7 @@ ai:
   exclude: true
 ```
 
-`ai.exclude` पेज को [`llms.txt` और `llms-full.txt`](/docs/discoverability/llms-txt#excluding-a-page) से बाहर रखता है। पेज फिर भी रेंडर होता है, खोज में बना रहता है, और साइटमैप में भी बना रहता है।
+`ai.exclude` पेज को [`llms.txt` और `llms-full.txt`](/docs/discoverability/llms-txt#excluding-a-page) से बाहर रखता है। यह पेज को आपकी [साइट की स्किल](/docs/discoverability/agent-discovery#your-sites-skill) के पेज मैप से भी बाहर रखता है। पेज फिर भी रेंडर होता है। वह खोज, [MCP सर्वर](/docs/discoverability/mcp) और [JSON API](/docs/discoverability/json-api) में बना रहता है, और साइटमैप में भी उसका स्थान बना रहता है।
 
 ## चेंजलॉग [#changelog]
 

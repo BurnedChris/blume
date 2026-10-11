@@ -34,6 +34,7 @@ export const sv: UIStringsOverride = {
     error: "Tyvärr, något gick fel.",
     explainCode: "Förklara den här koden.",
     label: "Ställ en fråga",
+    open: "Öppna assistenten",
     placeholder: "Ställ en fråga…",
     rateLimited: "Du har ställt många frågor. Försök igen om några minuter.",
     removeCode: "Ta bort koden",
@@ -48,6 +49,7 @@ export const sv: UIStringsOverride = {
   banner: { dismiss: "Stäng meddelandet" },
   changelog: {
     description: "Produktuppdateringar och versionsinformation.",
+    empty: "Inga poster i ändringsloggen ännu.",
     title: "Ändringslogg",
   },
   consent: {
@@ -69,6 +71,7 @@ export const sv: UIStringsOverride = {
     preview: "Förhandsgranskning",
     prop: "Egenskap",
     selectTab: "Välj flik",
+    selectView: "Välj vy",
     showLess: "Visa mindre",
     showMore: "Visa mer",
     stars: "Stjärnor",

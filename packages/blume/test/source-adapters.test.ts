@@ -154,10 +154,12 @@ const secretsFor = (url: string) =>
   mdxRemote({ files: ["intro.mdx"], url }).requiredSecrets;
 
 describe("blume/sources factories", () => {
-  it("declare GITHUB_TOKEN for an mdxRemote url base only on a GitHub host", () => {
+  it("declare GITHUB_TOKEN for mdxRemote only when it lists files through GitHub's API", () => {
+    // A public repository's raw files need no token, so a raw `url` base
+    // declares none, even on GitHub's own host.
     expect(
       secretsFor("https://raw.githubusercontent.com/acme/sdk/main/docs")
-    ).toStrictEqual(["GITHUB_TOKEN"]);
+    ).toStrictEqual([]);
     expect(secretsFor("https://cdn.example.com/docs")).toStrictEqual([]);
     expect(secretsFor("not a url")).toStrictEqual([]);
     expect(mdxRemote({ files: ["intro.mdx"] }).requiredSecrets).toStrictEqual(
@@ -355,7 +357,8 @@ describe("content shorthand", () => {
       {
         kind: "filesystem",
         options: {
-          exclude: ["drafts/**"],
+          // An `exclude` adds to the defaults rather than replacing them.
+          exclude: ["**/_*", "**/.*", "drafts/**"],
           include: ["**/*.mdx"],
           root: "content",
         },
@@ -413,7 +416,7 @@ describe("resolveDocsCollection", () => {
     ]);
     expect(resolveDocsCollection(config, "/p")).toStrictEqual({
       base: "/abs",
-      exclude: ["vault/**"],
+      exclude: ["**/_*", "**/.*", "vault/**"],
       include: ["**/*.mdx"],
     });
     // The project context's content root is that same base.
@@ -436,9 +439,18 @@ describe("resolveDocsCollection", () => {
     ]);
     expect(resolveDocsCollection(config, "/p")).toStrictEqual({
       base: "/p",
-      exclude: ["**/_*"],
+      exclude: ["**/_*", "**/.*"],
       include: ["docs/**", "guides/**"],
     });
+  });
+
+  it("drops an excluded pattern a negated entry names, a default included", () => {
+    const config = parse([
+      filesystem({ exclude: ["!**/_*", "vault/**", "!vault/**", "!x/**"] }),
+    ]);
+    expect(resolveDocsCollection(config, "/p").exclude).toStrictEqual([
+      "**/.*",
+    ]);
   });
 
   it("anchors an all-staged project at the default docs directory", () => {
@@ -634,24 +646,24 @@ export default {
   });
 });
 
-describe("blume sync", () => {
-  const run = async (root: string, ...args: string[]) => {
-    const proc = Bun.spawn([process.execPath, CLI, "sync", ...args], {
-      cwd: root,
-      // bun test exports NODE_ENV=test, which drops consola's default level to
-      // warnings-only in the child — raise it so success output is visible.
-      env: { ...process.env, CONSOLA_LEVEL: "3" },
-      stderr: "pipe",
-      stdout: "pipe",
-    });
-    const [exitCode, stdout, stderr] = await Promise.all([
-      proc.exited,
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    return { exitCode, output: stdout + stderr };
-  };
+const run = async (root: string, ...args: string[]) => {
+  const proc = Bun.spawn([process.execPath, CLI, "sync", ...args], {
+    cwd: root,
+    // bun test exports NODE_ENV=test, which drops consola's default level to
+    // warnings-only in the child — raise it so success output is visible.
+    env: { ...process.env, CONSOLA_LEVEL: "3" },
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  return { exitCode, output: stdout + stderr };
+};
 
+describe("blume sync", () => {
   const sdk = mdxRemote({
     files: ["intro.mdx"],
     prefix: "sdk",

@@ -1,0 +1,689 @@
+---
+// Add Pagefind search to a static documentation site: checked against the
+// search, i18n, versioning, navigation, frontmatter, and deployment docs, and
+// against the source on main: search/adapters/pagefind.ts, search/build.ts,
+// search/pagefind-ranking.ts, search/adapters/version-scope.ts,
+// deploy/artifacts.ts (the build log lines), core/manifest.ts (what's
+// indexable), components/layout/RootLayout.astro (data-pagefind-body and
+// data-pagefind-ignore), components/layout/Search.astro and
+// components/layout/search/pagefind.ts (the dialog), astro/templates.ts
+// (trailingSlash "never", the client URL), cli/commands/preview.ts, and
+// Astro's preview server. Checked Pagefind behavior against pagefind.app and
+// the pagefind.js it emits. Ran Pagefind 1.5.2 (Blume's version) through
+// Blume's indexing code (search/build.ts) on a copy of the built
+// apps/docs HTML (five languages) and on hand-rendered, Blume-shaped HTML of
+// the Acme pages below, and queried both from Node. The Acme block code is
+// the exact code that ran: search-check.mjs passed every check over HTTP.
+// Did not run `blume build` or `blume preview`. Rechecked on 2026-09-30,
+// from reading code: the dialog's result links, the "All languages" merge,
+// and the per-language client (components/layout/search/pagefind.ts,
+// search/adapters/locale-scope.ts), the indexed-page count (search/build.ts),
+// and the Orama tokenizers (search/orama-index.ts). Ran the dialog's
+// every-language merge over the Acme bundle in Bun: 送信 on an English page
+// found the Japanese guide. Not yet run end to end.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const sendAMessageMdxCode = `---
+title: Send a message
+description: Send an email or SMS with one request, and retry it safely.
+---
+
+Every message goes through \`POST /messages\`. Pick a channel first.
+
+<Tabs>
+  <Tab title="Email">
+    Set \`channel\` to \`email\` and pass a \`subject\`. Acme renders your template
+    and sends it from your verified domain.
+  </Tab>
+  <Tab title="SMS">
+    Set \`channel\` to \`sms\`. A message longer than 160 characters is split into
+    segments, and each segment counts against your quota.
+  </Tab>
+</Tabs>
+
+## Send the request
+
+\`\`\`bash
+curl https://api.acme.example/v1/messages \\
+  -H "Authorization: Bearer $ACME_API_KEY" \\
+  -H "Idempotency-Key: order-1234-receipt" \\
+  -d channel=email -d to=ada@example.com -d template=receipt
+\`\`\`
+
+## Retries
+
+If a request times out, send it again with the same idempotency key. Acme
+returns the first message instead of sending a second one.`;
+---
+
+<GuidePage guide={guideById("pagefind-documentation-search")}>
+  <p>
+    You don't need a search server to search static docs. Blume's default
+    engine, Orama, writes one index file during the build and searches it in
+    the reader's browser. Pagefind is the other keyless option: with{" "}
+    <code>search: pagefind()</code> in your config, <code>blume build</code>{" "}
+    renders your pages, Pagefind indexes the finished HTML into small pieces in{" "}
+    <code>dist/pagefind/</code>, and the browser downloads only the pieces
+    each query needs.
+  </p>
+  <p>
+    By the end of this guide you have a small Acme docs site with
+    representative content, built with Pagefind, and a query checklist you
+    rerun after every build to confirm that headings, languages, long pages,
+    and exclusions behave.
+  </p>
+  <p>
+    Pagefind isn't an upgrade for every site. If your docs are small, or you
+    want search while you write in <code>blume dev</code>, keep the default. If
+    you're also weighing hosted or semantic search,{" "}
+    <a href="/guides/choose-documentation-search">
+      Choose local, hosted or semantic search
+    </a>{" "}
+    compares them all.
+  </p>
+
+  <h2>When Pagefind fits better than the default</h2>
+  <p>
+    Both engines run in the browser, need no API keys, and ship as files in{" "}
+    <code>dist/</code>. They differ in what they index and what a reader
+    downloads:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col"></th>
+        <th scope="col">Orama (default)</th>
+        <th scope="col">Pagefind</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Indexes</td>
+        <td>Your source files</td>
+        <td>The built HTML, after the build</td>
+      </tr>
+      <tr>
+        <td>What a search downloads</td>
+        <td>The whole <code>blume-search.json</code>, on first open</td>
+        <td>The index chunks for the words typed, plus one file per result shown</td>
+      </tr>
+      <tr>
+        <td>In <code>blume dev</code></td>
+        <td>Yes, live as you edit</td>
+        <td>No</td>
+      </tr>
+      <tr>
+        <td>Code blocks</td>
+        <td>Only with <code>indexing.includeCodeBlocks</code></td>
+        <td>Always</td>
+      </tr>
+      <tr>
+        <td>Languages</td>
+        <td>One file with every language, each non-Latin one segmented</td>
+        <td>A separate index for each page language</td>
+      </tr>
+      <tr>
+        <td>Versioned docs</td>
+        <td>Scoped to the version being read, with an "All versions" toggle</td>
+        <td>Every version at once, with no toggle</td>
+      </tr>
+      <tr>
+        <td>Section filters and breadcrumbs</td>
+        <td>Yes</td>
+        <td>No</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>That makes Pagefind the better fit in three cases:</p>
+  <ul>
+    <li>
+      <strong>The index file gets heavy.</strong> Orama's single file grows with
+      every page, and each reader downloads all of it the first time they open
+      search. Pagefind fetches only the chunks a query needs.
+    </li>
+    <li>
+      <strong>You publish many translations.</strong> Orama's file holds every
+      language, so a reader downloads all of your translations to search one.
+      Pagefind indexes each language on its own and loads the others only when
+      a reader searches across all of them.
+    </li>
+    <li>
+      <strong>Readers search for code.</strong> Option names and error codes
+      often live only in code blocks, which Pagefind always indexes.
+    </li>
+  </ul>
+  <p>
+    Before you switch an existing site, measure what you have. Build it once
+    with the default and check the size of the one file every searching reader
+    downloads:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+ls -lh dist/blume-search.json`}
+    lang="bash"
+  />
+
+  <h2>Create a project with representative content</h2>
+  <p>
+    Search problems hide in content a hello-world page doesn't have: headings,
+    tabs, code, long pages, pages you don't want found, and other languages.
+    Build a small site with all of them. Scaffold a project:
+  </p>
+  <CodeBlock
+    code={`npx blume init acme-docs --yes
+cd acme-docs`}
+    lang="bash"
+  />
+  <p>Replace the starter page with a short introduction:</p>
+  <CodeBlock
+    code={`---
+title: Acme docs
+description: Send transactional email and SMS with the Acme Messages API.
+---
+
+Acme sends transactional email and SMS through one API. Start with
+[Send a message](/guides/send-a-message), then look up any command in the
+[CLI reference](/reference/cli).`}
+    lang="mdx"
+    title="docs/index.mdx"
+  />
+  <p>
+    Add a guide with a heading, content inside tabs, and a term that only
+    appears in a code block:
+  </p>
+  <CodeBlock
+    code={sendAMessageMdxCode}
+    lang="mdx"
+    title="docs/guides/send-a-message.mdx"
+  />
+  <p>
+    Add two pages that should never appear in search: one hidden from the
+    sidebar, and one excluded outright.
+  </p>
+  <CodeBlock
+    code={`---
+title: On-call runbook
+description: What to check when message delivery slows down.
+sidebar:
+  hidden: true
+---
+
+Page the on-call engineer when the delivery backlog passes 10,000 messages,
+then drain the dead-letter queue.`}
+    lang="mdx"
+    title="docs/internal/on-call.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Webhooks (v1)
+description: The retired v1 webhook format, kept for existing integrations.
+search:
+  exclude: true
+---
+
+v1 webhooks carry a signature header computed with your v1 signing secret.
+Move to the current format before the v1 endpoint shuts down.`}
+    lang="mdx"
+    title="docs/legacy/v1-webhooks.mdx"
+  />
+  <p>Translate the guide into Japanese, and leave every other page untranslated:</p>
+  <CodeBlock
+    code={`---
+title: メッセージを送信する
+description: 1 回のリクエストでメールまたは SMS を送信します。
+---
+
+すべてのメッセージは \`POST /messages\` で送信します。リクエストがタイムアウトした場合は、同じ冪等キーを付けて再送信してください。`}
+    lang="mdx"
+    title="docs/ja/guides/send-a-message.mdx"
+  />
+  <p>
+    Last, you need a long page, like the CLI or configuration reference most
+    real sites have. This script writes one with a section for each of 64
+    commands, and puts an error code that appears nowhere else in its last
+    section:
+  </p>
+  <CodeBlock
+    code={`// Writes docs/reference/cli.mdx: one long page with a section per command.
+import { mkdirSync, writeFileSync } from "node:fs";
+
+const resources = ["messages", "templates", "domains", "webhooks", "keys", "logs", "suppressions", "workspaces"];
+const verbs = ["list", "get", "create", "update", "delete", "export", "import", "watch"];
+
+const lines = [
+  "---",
+  "title: CLI reference",
+  "description: Every acme command, its flags, and what it prints.",
+  "---",
+  "",
+];
+for (const resource of resources) {
+  for (const verb of verbs) {
+    lines.push(
+      "## acme " + resource + " " + verb,
+      "",
+      "Runs \`" + verb + "\` against " + resource + " in the current workspace. " +
+        "Pass \`--workspace\` to target another workspace, and \`--json\` to print " +
+        "the API response instead of a table. The command reads your key from " +
+        "\`ACME_API_KEY\` and exits with a non-zero code when the request fails.",
+      "",
+      "| Flag | Default | Description |",
+      "| --- | --- | --- |",
+      "| \`--workspace\` | current | The workspace to act on. |",
+      "| \`--json\` | \`false\` | Print the API response as JSON. |",
+      "| \`--limit\` | \`50\` | The most rows to print. |",
+      ""
+    );
+  }
+}
+// One term that appears nowhere else on the site, deep in the page.
+lines.push(
+  "## Exit codes",
+  "",
+  "Exports count against your daily quota. Past it, every command exits with " +
+    "\`ACME_QUOTA_EXCEEDED\` until the quota resets at midnight UTC.",
+  ""
+);
+
+mkdirSync("docs/reference", { recursive: true });
+writeFileSync("docs/reference/cli.mdx", lines.join("\\n"));`}
+    lang="js"
+    title="scripts/cli-reference.mjs"
+  />
+  <CodeBlock code="node scripts/cli-reference.mjs" lang="bash" />
+  <p>
+    The page comes out at about 6,000 words. It and the guide each mention
+    "quota" once, which shows how Pagefind ranks a long page against a short
+    one.
+  </p>
+
+  <h2>Switch search to Pagefind</h2>
+  <p>
+    Replace the config with one that adds the Japanese locale and switches the
+    search adapter:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { pagefind } from "blume/search";
+
+export default defineConfig({
+  title: "Acme",
+  description: "Documentation for the Acme Messages API.",
+  i18n: {
+    defaultLocale: "en",
+    locales: [
+      { code: "en", label: "English" },
+      { code: "ja", label: "日本語" },
+    ],
+  },
+  search: pagefind(),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>pagefind()</code> takes no options, and Pagefind ships with Blume,
+    so there's nothing else to install. To set{" "}
+    <a href="/docs/configuration/search#popular-pages">popular pages</a> or
+    indexing options too, use the object form and pass the adapter as{" "}
+    <code>provider: pagefind()</code>.
+  </p>
+
+  <h2>Build and preview the site</h2>
+  <p>
+    Pagefind runs at the end of <code>blume build</code>, so there's no index
+    in <code>blume dev</code>. Open search there and the dialog says "Search is
+    available in the production build." Build instead:
+  </p>
+  <CodeBlock code="npx blume build" lang="bash" />
+  <p>
+    After the pages render, the log prints <code>Building search index</code>{" "}
+    and then <code>Indexed N page(s) for search</code>, the pages in the index
+    across every language: 4 for the Acme site. The counts per language are in
+    the index's entry file:
+  </p>
+  <CodeBlock code="cat dist/pagefind/pagefind-entry.json" lang="bash" />
+  <p>
+    Under <code>languages</code>, <code>en</code> should have a{" "}
+    <code>page_count</code> of 3 (the introduction, the guide, and the CLI
+    reference) and <code>ja</code> a count of 1. Beside it are{" "}
+    <code>pagefind.js</code>, per-language metadata and Wasm files, and the{" "}
+    <code>index/</code> and <code>fragment/</code> chunks. Pagefind's own UI
+    files, like <code>pagefind-ui.js</code>, are there too; Blume's dialog
+    doesn't use them.
+  </p>
+  <p>Now serve the build:</p>
+  <CodeBlock code="npx blume preview" lang="bash" />
+  <p>
+    Open <code>http://localhost:4321</code>, press <kbd>⌘K</kbd> (or{" "}
+    <kbd>Ctrl K</kbd>), and type <code>retries</code>. You get up to 12
+    results, each with the page title and Pagefind's excerpt, matches
+    highlighted. Select one and the page opens at its slashless URL, like{" "}
+    <code>/guides/send-a-message</code>. Keep the preview running.
+  </p>
+
+  <h2>Run the query checklist</h2>
+  <p>
+    To repeat checks after every content change, script them. Each check is a
+    query and the page that should rank first, or no page at all:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Query</th>
+        <th scope="col">Expected first result</th>
+        <th scope="col">What it checks</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>retries</code></td>
+        <td>Send a message</td>
+        <td>Heading text is indexed</td>
+      </tr>
+      <tr>
+        <td><code>idempotency</code></td>
+        <td>Send a message</td>
+        <td>Code blocks are indexed</td>
+      </tr>
+      <tr>
+        <td><code>segments</code></td>
+        <td>Send a message</td>
+        <td>Content in a tab that isn't open is indexed</td>
+      </tr>
+      <tr>
+        <td><code>ACME_QUOTA_EXCEEDED</code></td>
+        <td>CLI reference</td>
+        <td>A term deep in a long page is found</td>
+      </tr>
+      <tr>
+        <td><code>quota</code></td>
+        <td>Send a message</td>
+        <td>A short page outranks a long one for the same single mention</td>
+      </tr>
+      <tr>
+        <td><code>backlog</code></td>
+        <td>None</td>
+        <td>The hidden page is left out</td>
+      </tr>
+      <tr>
+        <td><code>signing</code></td>
+        <td>None</td>
+        <td>The excluded page is left out</td>
+      </tr>
+      <tr>
+        <td><code>送信</code> (on English pages)</td>
+        <td>None</td>
+        <td>Japanese pages stay in their own index</td>
+      </tr>
+      <tr>
+        <td><code>送信</code> (on Japanese pages)</td>
+        <td>メッセージを送信する</td>
+        <td>The Japanese index works</td>
+      </tr>
+      <tr>
+        <td><code>quota</code> (on Japanese pages)</td>
+        <td>None</td>
+        <td>Untranslated fallback pages are left out</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The script runs those queries through the same <code>pagefind.js</code>{" "}
+    the dialog loads, read from <code>dist/</code>, against the index the
+    preview server serves. <code>pagefind.js</code> expects a browser page and
+    picks its language index from the page's <code>&lt;html lang&gt;</code>,
+    so the script stands in a minimal <code>document</code> for it:
+  </p>
+  <CodeBlock
+    code={`// Runs each query through the Pagefind bundle in dist/, against the site that
+// \`blume preview\` serves, and fails when a page ranks in the wrong place.
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const site = process.env.SITE ?? "http://localhost:4321";
+const lang = process.argv[2] ?? "en";
+
+// pagefind.js picks its language index from the page's <html lang>.
+globalThis.document = {
+  currentScript: null,
+  querySelector: () => ({ getAttribute: () => lang }),
+};
+
+// \`first\` is the page that should rank first; null means no results at all.
+const checks = {
+  en: [
+    { query: "retries", first: "/guides/send-a-message/" },
+    { query: "idempotency", first: "/guides/send-a-message/" },
+    { query: "segments", first: "/guides/send-a-message/" },
+    { query: "ACME_QUOTA_EXCEEDED", first: "/reference/cli/" },
+    { query: "quota", first: "/guides/send-a-message/" },
+    { query: "backlog", first: null },
+    { query: "signing", first: null },
+    { query: "送信", first: null },
+  ],
+  ja: [
+    { query: "送信", first: "/ja/guides/send-a-message/" },
+    { query: "quota", first: null },
+  ],
+};
+
+const pagefind = await import(
+  pathToFileURL(resolve("dist/pagefind/pagefind.js")).href
+);
+await pagefind.options({ basePath: \`\${site}/pagefind/\`, baseUrl: "/" });
+await pagefind.init();
+
+let failures = 0;
+for (const { query, first } of checks[lang]) {
+  const { results } = await pagefind.search(query);
+  const top = results[0] ? (await results[0].data()).url : null;
+  const pass = top === first;
+  if (!pass) failures += 1;
+  console.log(
+    \`\${pass ? "pass" : "FAIL"}  \${query} -> \${top ?? "no results"} (\${results.length} results)\`
+  );
+}
+await pagefind.destroy();
+process.exitCode = failures > 0 ? 1 : 0;`}
+    lang="js"
+    title="search-check.mjs"
+  />
+  <p>
+    Run it once per language from the project root, in a second terminal while{" "}
+    <code>blume preview</code> is still serving:
+  </p>
+  <CodeBlock
+    code={`node search-check.mjs en
+node search-check.mjs ja`}
+    lang="bash"
+  />
+  <p>
+    Every line should start with <code>pass</code>, and the script exits with
+    an error when any check fails. Pagefind's own result URLs end in a slash,
+    because each page is a folder with an <code>index.html</code>, so write
+    your expected URLs the same way. Blume's dialog drops that slash before it
+    links to a result.
+  </p>
+
+  <h3>Headings</h3>
+  <p>
+    <code>retries</code> finds the guide through its <code>## Retries</code>{" "}
+    heading, and Pagefind weights heading text above body text. Pagefind also
+    tracks which heading each match sits under, but Blume's
+    dialog lists one row per page. Selecting a result opens the page at its
+    top, and the excerpt shows the passage that matched.
+  </p>
+
+  <h3>Language selection</h3>
+  <p>
+    Pagefind builds one index per <code>&lt;html lang&gt;</code>, and the
+    browser loads the index for the language of the page the reader is on. On
+    a <code>/ja/</code> page, search covers Japanese pages only; on an English
+    page, English only. Turn on the dialog's "All languages" toggle and Blume
+    merges every other language's index into the search, which then runs with
+    the page language's word stemming: <code>送信</code> on an English page
+    finds the Japanese guide. Blume keeps a Pagefind client for each language,
+    started on that language's first search, so after a reader switches
+    language from the language menu, search follows the new page's language
+    without a reload.
+    Pagefind's npm package ships its extended build, which splits Chinese,
+    Japanese, and Korean text into words, and{" "}
+    <a href="/guides/cjk-documentation-search">
+      Make docs search work in Chinese, Japanese and Korean
+    </a>{" "}
+    goes deeper on those languages.
+  </p>
+
+  <h3>Long pages</h3>
+  <p>
+    Pagefind compares each page's length with the average on your site, so a
+    term mentioned once on a 6,000-word page counts for less than the same
+    term once on a 100-word page. That's the <code>quota</code> check. The
+    long page is still found for terms only it contains, and its excerpt comes
+    from the passage with the most matches, but the reader lands at the top
+    and has to find the passage on the page.
+  </p>
+  <p>
+    If a long page should win for its own terms, give it{" "}
+    <a href="/docs/configuration/search#ranking">search.boost or search.keywords</a>{" "}
+    in its frontmatter. Blume turns a boost into a Pagefind weight, capped at
+    10, and Pagefind damps repeated matches, so the lift is smaller than the
+    number suggests. Rerun the checklist after either change. A page that
+    covers many unrelated topics is often better split.
+  </p>
+
+  <h2>Inspect what's excluded</h2>
+  <p>
+    Blume marks up every docs page for Pagefind. The page's article carries{" "}
+    <code>data-pagefind-body</code>, so Pagefind indexes only the article,
+    never the header, sidebar, table of contents, or footer. Once any page has
+    that attribute, Pagefind skips every page that doesn't. A page that
+    shouldn't be searched gets{" "}
+    <code>data-pagefind-ignore="all"</code> on its <code>&lt;html&gt;</code>{" "}
+    element instead. List both kinds in your build:
+  </p>
+  <CodeBlock
+    code={`# Every HTML page Pagefind leaves out
+grep -rL "data-pagefind-body" dist --include='*.html'
+
+# The ones Blume excluded on purpose
+grep -rl 'data-pagefind-ignore="all"' dist --include='*.html'`}
+    lang="bash"
+  />
+  <p>
+    For the Acme site, the first list includes <code>404.html</code>, the
+    runbook, the v1 webhooks page, and every untranslated page under{" "}
+    <code>/ja/</code>. What's left out, and what brings it back:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Left out</th>
+        <th scope="col">Why</th>
+        <th scope="col">To include it</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>A page with <code>search.exclude: true</code></td>
+        <td>Its frontmatter says so</td>
+        <td>Remove the setting</td>
+      </tr>
+      <tr>
+        <td>A page with <code>sidebar.hidden: true</code></td>
+        <td>Hidden pages are excluded by default</td>
+        <td>
+          Set <code>indexing: {"{ includeHiddenPages: true }"}</code> in the{" "}
+          <code>search</code> object
+        </td>
+      </tr>
+      <tr>
+        <td>An untranslated page under a locale</td>
+        <td>It repeats the default language's content</td>
+        <td>Translate the page</td>
+      </tr>
+      <tr>
+        <td>Custom pages built on <code>PageLayout</code>, the 404 page, and the generated changelog index</td>
+        <td>Blume doesn't mark them as docs content</td>
+        <td>Move content you want found into a docs page</td>
+      </tr>
+      <tr>
+        <td>An API reference embedded with <code>scalar()</code></td>
+        <td>It draws in the browser, so the built page has no text to index</td>
+        <td>
+          Use <code>openapi()</code> or <code>asyncapi()</code>, which build a
+          page per operation
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Inside an article, Pagefind indexes everything in the HTML, including tab
+    panels that aren't open, except the elements it skips by default,
+    like <code>&lt;nav&gt;</code>, <code>&lt;footer&gt;</code>,{" "}
+    <code>&lt;script&gt;</code>, and <code>&lt;form&gt;</code>. The{" "}
+    <a href="/docs/discoverability/mcp">MCP server</a> and the{" "}
+    <a href="/docs/configuration/assistant">assistant</a> keep their own
+    indexes, so Pagefind doesn't change what they find.
+  </p>
+
+  <h2>Deploy and check production</h2>
+  <p>
+    <code>dist/pagefind/</code> deploys with the rest of <code>dist/</code> to
+    any static host, with nothing else to run. Once it's live, run the
+    checklist against your domain. The script still loads{" "}
+    <code>pagefind.js</code> from your local <code>dist/</code>, so build the
+    same commit first, and include any base path in <code>SITE</code>:
+  </p>
+  <CodeBlock
+    code={`SITE=https://docs.acme.example node search-check.mjs en
+SITE=https://docs.acme.example node search-check.mjs ja`}
+    lang="bash"
+  />
+  <p>
+    Then select a result on the live site, to confirm your host serves the page
+    at the URL the dialog links to.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>Search says it's available in the production build</h3>
+  <p>
+    You're in <code>blume dev</code>, which has no Pagefind index. Test search
+    with <code>blume build</code> and <code>blume preview</code>, or keep Orama
+    if you need search while writing.
+  </p>
+
+  <h3>Search says something went wrong</h3>
+  <p>
+    "Something went wrong. Please try again." in a production build means the
+    dialog couldn't load Pagefind's files. Check that the build log has the{" "}
+    <code>Building search index</code> line, that{" "}
+    <code>dist/pagefind/pagefind.js</code> exists, and that the same path loads
+    on your site, under any base path. After an upgrade that
+    changes Pagefind's version, a browser can pair a cached{" "}
+    <code>pagefind.js</code> with the new index, and the console warns
+    "Pagefind JS version doesn't match the version in your search index."
+    Reloading without the cache fixes it.
+  </p>
+
+  <h3>Results come from an old docs version</h3>
+  <p>
+    Pagefind doesn't scope results by version, so on a{" "}
+    <a href="/docs/content/versioning#search">versioned site</a> a search
+    covers every snapshot, and the dialog hides the "All versions" toggle. If
+    readers need results from the version they're reading, stay on Orama, which
+    scopes them.
+  </p>
+
+  <h3>An exclusion check fails on a page without the word</h3>
+  <p>
+    Pagefind matches the start of words, so <code>retr</code> finds "Retries",
+    and it can match part of a longer word you type: in testing,{" "}
+    <code>runbook</code> matched a page containing "Runs". For checks that
+    expect no results, pick a word that doesn't start with, or contain, any
+    other word on your site.
+  </p>
+</GuidePage>

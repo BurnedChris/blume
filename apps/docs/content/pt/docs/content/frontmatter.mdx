@@ -6,6 +6,8 @@ description: >-
 
 Toda página aceita o frontmatter a seguir. Todos os campos são opcionais.
 
+O frontmatter é YAML, então coloque entre aspas um valor que contenha dois-pontos seguidos de espaço, como `description: "Setup: the easy way"`. Sem aspas, o YAML interpreta o segundo sinal de dois-pontos como o início de uma chave aninhada, e o Blume aponta o arquivo e a linha com o erro `BLUME_FRONTMATTER_INVALID`.
+
 <TypeTable
   type={{
     title: { type: "string", description: "Page title." },
@@ -22,7 +24,7 @@ Toda página aceita o frontmatter a seguir. Todos os campos são opcionais.
     authors: {
       type: "string | string[] | object[]",
       description:
-        "Post author(s) for blog/changelog content — a name, or objects with a name plus optional avatar/url and any extra fields. Preserved as-is.",
+        "Post author(s) for blog/changelog content — a name, or objects with a name plus optional avatar/url and any extra fields. Credited as Person nodes in the page's JSON-LD; other fields are preserved as-is.",
     },
     slug: {
       type: "string",
@@ -50,6 +52,23 @@ Toda página aceita o frontmatter a seguir. Todos os campos são opcionais.
       default: "false",
       description: "Shorthand for seo.noindex.",
     },
+    narration: {
+      type: "boolean",
+      default: "true",
+      description:
+        "Set to false to leave this page without the Listen to this page player when narration is on.",
+    },
+    related: {
+      type: "(string | { [title]: string })[] | false",
+      description:
+        "Pages to suggest at the foot of this one, up to ten: root-relative paths, absolute URLs, or { Title: link } to name a link. See Related pages below.",
+    },
+    pagination: {
+      type: "boolean",
+      default: "true",
+      description:
+        "Set to false to drop the previous and next links at the foot of the page. The page stays in the order, so its neighbors still link to it.",
+    },
     icon: {
       type: "string",
       description:
@@ -60,8 +79,63 @@ Toda página aceita o frontmatter a seguir. Todos os campos são opcionais.
       description:
         'Pin the page\'s "last updated" date (ISO or YAML date); overrides the git-derived date.',
     },
+    mode: {
+      type: '"default" | "wide" | "center" | "custom" | "frame"',
+      default: '"default"',
+      description: "What the page shows around its content. See Layout below.",
+    },
+    api: {
+      type: "string",
+      description:
+        "An endpoint this page documents by hand, as an HTTP method and a path or URL (POST /v1/users). See Hand-written API pages.",
+    },
+    authMethod: {
+      type: '"bearer" | "basic" | "key" | "none"',
+      description:
+        "How an api page's endpoint authenticates, over the site's api.auth.",
+    },
+    playground: {
+      type: '"interactive" | "simple" | "none"',
+      default: '"interactive"',
+      description:
+        "What an api page shows: the Try it panel and samples, the samples only, or neither.",
+    },
   }}
 />
+
+## Layout
+
+`mode` define o que uma página mostra ao redor do conteúdo:
+
+| Modo | Barra lateral | Título e sumário | Links de fim de página e rodapé | Largura do conteúdo |
+| --- | --- | --- | --- | --- |
+| `default` | Sim | Sim | Sim | A largura padrão do texto |
+| `wide` | Sim | Só o título | Sim | A coluna inteira |
+| `center` | Não | Só o título | Sim | Uma coluna mais larga, centralizada |
+| `frame` | Sim | Não | Não | A coluna inteira |
+| `custom` | Não | Não | Não | A página inteira |
+
+`wide` combina com uma página de tabelas largas ou diagramas, e `center`, com notas de versão ou um anúncio lido de cima a baixo. `custom` mantém só o cabeçalho, para uma landing page escrita em MDX, e `frame` mantém também a barra lateral, para uma ferramenta ou dashboard que fica dentro da navegação da documentação. Nenhum dos dois renderiza o título ou a descrição da página, então escreva seu próprio título. Todos os modos continuam na busca e mantêm sua cópia em Markdown.
+
+```yaml lineNumbers
+title: Welcome
+mode: custom
+```
+
+Os valores são os mesmos do Mintlify. O modo `assistant` dele, um chat de página inteira, não tem equivalente.
+
+## Páginas relacionadas [#related-pages]
+
+`related` lista páginas para sugerir no fim desta, como cards sob o título **Páginas relacionadas**:
+
+```yaml lineNumbers
+related:
+  - /guides/deployment
+  - Search setup: /configuration/search
+  - https://astro.build
+```
+
+Um caminho relativo à raiz aponta para outra página, que o card mostra com o título e a descrição dela. Em uma página traduzida, o link vai para a tradução, quando ela existir. Uma entrada `Title: link` define o título do próprio card, e uma URL absoluta leva para fora do site, exibida com o nome do host. Os caminhos são verificados como qualquer link da página, então o [`blume validate`](/docs/cli/validate) aponta um caminho que não corresponda a nenhuma página. A chave é a mesma do Mintlify, então páginas migradas a mantêm como está.
 
 ## Barra lateral [#sidebar]
 
@@ -75,7 +149,7 @@ sidebar:
   display: page
 ```
 
-`hidden` remove a página da barra lateral e da paginação anterior/próxima. Na página `index` de uma pasta, ele remove só a linha da própria página: a linha do grupo continua apontando para a página, e os links de anterior/próxima ainda passam por ela.
+`hidden` remove a página da barra lateral e da paginação anterior/próxima e, com isso, também do sitemap, da busca e do `llms.txt` (veja [Páginas ocultas](/docs/content/navigation#hidden-pages)). Na página `index` de uma pasta, ele remove só a linha da própria página: a linha do grupo continua apontando para a página, então os links de anterior/próxima ainda passam por ela e a página continua no sitemap, na busca e no `llms.txt`. Na página inicial, a página `index` da raiz, ele também remove só a linha: a página continua no sitemap, na busca e no `llms.txt`.
 
 `display` define o modo de renderização do grupo da pasta da página ([substituições por grupo](/docs/content/navigation#per-group-overrides)) e só faz sentido na página `index` de uma pasta dentro da barra lateral gerada. Em qualquer outro lugar (uma página que não é index, a própria página `index` da raiz do conteúdo ou qualquer página sob um `navigation.sidebar` explícito), não existe grupo para configurar, e o Blume emite o aviso `BLUME_SIDEBAR_DISPLAY_IGNORED`.
 
@@ -92,7 +166,7 @@ seo:
     creator: "@jane"
 ```
 
-`noindex` emite um `noindex` para robôs, tira a página do sitemap e omite os dados estruturados dela. `x.creator` atribui a página a uma conta do X (`twitter:creator`), como o autor de um post convidado, por exemplo. Veja [Metadados](/docs/discoverability/metadata#per-page-overrides) para conhecer todos os campos.
+`noindex` emite um `noindex` para robôs, tira a página do sitemap e omite os dados estruturados dela. Um `canonical` que aponte para outra URL também tira a página do sitemap, já que o sitemap lista só URLs canônicas. `x.creator` atribui a página a uma conta do X (`twitter:creator`), como o autor de um post convidado, por exemplo. Veja [Metadados](/docs/discoverability/metadata#per-page-overrides) para conhecer todos os campos.
 
 ## Busca [#search]
 
@@ -100,7 +174,11 @@ seo:
 search:
   exclude: false
   tags: [api]
+  keywords: [install, setup]
+  boost: 3
 ```
+
+`exclude` deixa a página fora da busca, e `tags` rotula o registro dela para que um adaptador de busca hospedada possa filtrar por ele (veja [Tags](/docs/configuration/search#tags)). `keywords` são termos extras pelos quais a página pode ser encontrada, além do próprio texto dela. `boost` multiplica a relevância da página: acima de 1, ela sobe no ranking; abaixo de 1, desce. Veja [Classificação](/docs/configuration/search#ranking).
 
 ## IA [#ai]
 
@@ -109,7 +187,7 @@ ai:
   exclude: true
 ```
 
-`ai.exclude` deixa a página fora do [`llms.txt` e do `llms-full.txt`](/docs/discoverability/llms-txt#excluding-a-page). A página continua sendo renderizada, aparece na busca e mantém seu lugar no sitemap.
+`ai.exclude` deixa a página fora do [`llms.txt` e do `llms-full.txt`](/docs/discoverability/llms-txt#excluding-a-page) e do mapa de páginas da [skill do seu site](/docs/discoverability/agent-discovery#your-sites-skill). A página continua sendo renderizada, segue disponível na busca, no [servidor MCP](/docs/discoverability/mcp) e na [API JSON](/docs/discoverability/json-api) e mantém seu lugar no sitemap.
 
 ## Changelog
 

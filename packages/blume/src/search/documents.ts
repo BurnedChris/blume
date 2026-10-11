@@ -11,6 +11,8 @@ import type {
   DownlevelWalk,
   MdastNode as DownlevelNode,
 } from "../ai/component-markdown.ts";
+import { relativeLinkRewriter } from "../ai/relative-links.ts";
+import type { RelativeLinkRewriter } from "../ai/relative-links.ts";
 import { projectComponentSerializers } from "../ai/serializers.ts";
 import { applyAudienceVisibility } from "../ai/visibility.ts";
 import type { VisibilityAudience } from "../ai/visibility.ts";
@@ -29,6 +31,7 @@ import {
   MARKDOWN_BODY_FEATURES,
   MDX_BODY_FEATURES,
 } from "../markdown/features.ts";
+import { normalizeFence } from "../markdown/fence-language.ts";
 import { pageFacets } from "./facets.ts";
 
 /** A document indexed by the client-side search providers (Orama, FlexSearch). */
@@ -54,6 +57,10 @@ export interface SearchDocument {
    * Filterable through the MCP tools' `filters` input.
    */
   facets?: Record<string, string>;
+  /** Frontmatter `search.boost`: the page's relevance multiplier, when set. */
+  boost?: number;
+  /** Frontmatter `search.keywords`: extra terms the page is found by. */
+  keywords?: string[];
 }
 
 /**
@@ -77,6 +84,13 @@ export interface SearchRecord {
   version: string;
   /** Single faceting tag (the first frontmatter tag, when present). */
   tag?: string;
+  /**
+   * The page's relevance multiplier, 1 unless `search.boost` sets it: a
+   * ranking attribute every record carries, so the backend can sort by it.
+   */
+  boost: number;
+  /** Extra terms the page is found by (`search.keywords`). */
+  keywords?: string[];
 }
 
 // Tag-shaped only: a name (or closing slash/fragment) right after `<`, and no
@@ -166,7 +180,13 @@ const collectCode = (
   if (!walk.includeCodeBlocks) {
     return;
   }
-  const title = parseCodeTitle(node.meta ?? undefined);
+  // The fence as the page renders it (`[file.ts]{2}` splits, `JSON`
+  // lowercases), so the indexed title is the one the page shows.
+  const fence = normalizeFence(node.lang, node.meta) ?? node;
+  const title = parseCodeTitle(
+    fence.meta ?? undefined,
+    fence.lang ?? undefined
+  );
   if (title) {
     out.push(title, " ");
   }
@@ -381,17 +401,20 @@ interface BuildOptions {
 
 /**
  * Read a page's body and reduce it per the extraction options. The
- * `"markdown"` body is agent-facing, so its components are downleveled in the
- * source with the serializers every agent surface uses (front matter in scope
- * for prop expressions). The plain body is parsed as written and walked, with
- * the same serializers applied per component on the way, so the index reads a
- * `<Card>` or `<TypeTable>` as the text it shows.
+ * `"markdown"` body, the one `rewriteLinks` comes with, is agent-facing: its
+ * page links are rewritten, then its components downleveled in the source
+ * with the serializers every agent surface uses (front matter in scope for
+ * prop expressions), in the order llms-full.txt takes. The plain body is
+ * parsed as written and walked, with the same serializers applied per
+ * component on the way, so the index reads a `<Card>` or `<TypeTable>` as
+ * the text it shows.
  */
 const pageBody = async (
   project: BlumeProject,
   page: PageRecord | undefined,
-  options: Pick<BuildOptions, "audience" | "content"> | undefined,
-  components: Record<string, ComponentMarkdown>
+  options: Pick<BuildOptions, "audience"> | undefined,
+  components: Record<string, ComponentMarkdown>,
+  rewriteLinks: RelativeLinkRewriter | undefined
 ): Promise<string> => {
   if (!page) {
     return "";
@@ -401,8 +424,12 @@ const pageBody = async (
     parsed.content,
     options?.audience ?? "web"
   );
-  if (options?.content === "markdown") {
-    return downlevelComponents(visible.trim(), components, parsed.data);
+  if (rewriteLinks) {
+    return downlevelComponents(
+      rewriteLinks(visible, page).trim(),
+      components,
+      parsed.data
+    );
   }
   return toPlainText(visible, page.format, {
     downlevel: {
@@ -412,6 +439,17 @@ const pageBody = async (
     },
     includeCodeBlocks: project.config.search.indexing.includeCodeBlocks,
   });
+};
+
+/** The ranking a page asks for: its `search.boost` and `search.keywords`. */
+const rankingFields = (
+  search: PageRecord["meta"]["search"] | undefined
+): Pick<SearchDocument, "boost" | "keywords"> => {
+  const { boost, keywords } = search ?? {};
+  return {
+    ...(boost !== undefined && boost !== 1 && { boost }),
+    ...(keywords && keywords.length > 0 && { keywords }),
+  };
 };
 
 /**
@@ -431,7 +469,9 @@ const pageBody = async (
  * same serializers the `.md` mirror, llms-full.txt and MCP `get_page` use: a
  * page whose body is a `<CardGroup>` of `<Card>`s is prose to a reader and bare
  * JSX to anything reading the source, and section landing pages are exactly
- * that shape.
+ * that shape. Its page links point at the pages they mean, as they do there
+ * too, as the routes the assistant's snapshot keys those pages by (see
+ * `relativeLinkRewriter`'s `assistant`): the model cites the links it reads.
  *
  * `audience` resolves `<Visibility>` blocks before extraction: `"web"`
  * (default) keeps web-only content and drops agents-only blocks — the site
@@ -482,12 +522,19 @@ export const buildSearchDocuments = async (
       return false;
     }
     const page = pageById.get(route.id);
-    return page ? contentIndexable(page, project.config) : false;
+    const { config, graph } = project;
+    return page ? contentIndexable(page, config, graph) : false;
   });
 
   // Built once — `downlevelComponents` rebuilds its registry per call
   // otherwise.
   const components = projectComponentSerializers(project);
+  // The `"markdown"` body is the assistant's: the model cites the links it
+  // reads, so a page link points at the page the snapshot holds.
+  const rewriteLinks =
+    options?.content === "markdown"
+      ? relativeLinkRewriter(project, { assistant: true })
+      : undefined;
 
   // A page in no sidebar group falls under the "Docs" section, in its own
   // language: the label is a UI string, resolved once per locale.
@@ -512,7 +559,13 @@ export const buildSearchDocuments = async (
   return await Promise.all(
     indexable.map(async (route) => {
       const page = pageById.get(route.id);
-      const body = await pageBody(project, page, options, components);
+      const body = await pageBody(
+        project,
+        page,
+        options,
+        components,
+        rewriteLinks
+      );
       const tags = page?.meta?.search?.tags;
       const crumb = crumbs.get(route.path);
       const facets = page ? pageFacets(page, project.config) : undefined;
@@ -531,7 +584,7 @@ export const buildSearchDocuments = async (
       if (facets) {
         document.facets = facets;
       }
-      return document;
+      return { ...document, ...rankingFields(page?.meta?.search) };
     })
   );
 };
@@ -539,13 +592,15 @@ export const buildSearchDocuments = async (
 /**
  * Map per-page search documents to the flat record shape hosted backends
  * ingest. One record per page, keyed by route; the first tag becomes the
- * faceting `tag`.
+ * faceting `tag`, and every record carries a `boost` (1 by default).
  */
 export const toSearchRecords = (documents: SearchDocument[]): SearchRecord[] =>
   documents.map((doc) => ({
     _id: doc.route,
+    boost: doc.boost ?? 1,
     content: doc.content,
     description: doc.description,
+    ...(doc.keywords && { keywords: doc.keywords }),
     locale: doc.locale,
     tag: doc.tags?.[0],
     title: doc.title,

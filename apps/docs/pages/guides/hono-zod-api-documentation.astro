@@ -1,0 +1,766 @@
+---
+// Generate docs from Hono and Zod schemas: checked against the OpenAPI
+// reference and navigation docs, the openapi() adapter (reference/openapi.ts),
+// the spec loader and route builder (openapi/parse.ts, openapi/model.ts,
+// openapi/source.ts), the responses renderer, and `blume init` on main, and
+// against the @hono/zod-openapi 1.6.3 README and dist. Ran the whole Hono side
+// in a scratch project (hono 4.13.9, @hono/zod-openapi 1.6.3, zod 4.6.5,
+// @hono/node-server 2.1.1, tsx 4.23.15, typescript 7.0.2, Node 24): tsc
+// passes, the curl requests return the responses shown, the export writes the
+// spec, and Blume's own parser reads it into /api/messages/send-message and
+// /api/messages/get-message. Also probed: no hook gives the raw ZodError body,
+// an optional body arrives as {}, a missing Content-Type is a 415, a response
+// without content stops tsc checking c.json(), and a CORS preflight is a 401
+// unless cors() runs before bearerAuth. The Blume side (init, dev, build) was
+// not run. Not yet run end to end.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const serverTsCode = `import { serve } from "@hono/node-server";
+import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { app } from "./app.ts";
+
+const server = new Hono()
+  // Lets the docs site's Try it panel call the API from the browser.
+  .use("*", cors({ origin: "https://docs.acme.example" }))
+  .route("/v1", app);
+
+serve({ fetch: server.fetch, port: 3000 }, (info) => {
+  console.log(\`Acme Messages API on http://localhost:\${info.port}/v1\`);
+});`;
+---
+
+<GuidePage guide={guideById("hono-zod-api-documentation")}>
+  <p>
+    To generate documentation from Hono and Zod schemas, declare each route
+    once with <code>@hono/zod-openapi</code>, Hono's official OpenAPI
+    middleware. The same Zod schemas validate every request at runtime and
+    generate the OpenAPI document, so the request rules in your docs are the
+    rules your API enforces. Export
+    that document to a file, point Blume at it, and each route becomes a docs
+    page. The docs stay in sync as long as the file is regenerated when a
+    route changes, and a CI check can make sure it is.
+  </p>
+  <p>
+    By the end, you have a small Acme Messages API in Hono with two routes,
+    validation errors in a documented shape, a script that writes{" "}
+    <code>openapi.json</code>, and a Blume site with a page per route beside a
+    hand-written errors guide. Every file is here in full.
+  </p>
+  <p>
+    If all you need is an interactive reference served by the API itself,
+    Hono's <code>@hono/swagger-ui</code> middleware can render the same spec at
+    a route in your app, with no docs site to run. Blume is for when the
+    reference belongs next to written guides, with site search, a page per
+    operation, and static hosting.
+  </p>
+
+  <h2>Choose one Hono OpenAPI integration</h2>
+  <p>
+    Two libraries generate OpenAPI from Hono routes, and they have different
+    APIs:
+  </p>
+  <ul>
+    <li>
+      <strong><code>@hono/zod-openapi</code></strong> is maintained in Hono's
+      middleware repository. You define a route with{" "}
+      <code>createRoute()</code>, register it with <code>app.openapi()</code>,
+      and it validates with Zod. This guide uses it.
+    </li>
+    <li>
+      <strong><code>hono-openapi</code></strong> is a separate community
+      library. It adds <code>describeRoute()</code> and its own{" "}
+      <code>validator()</code> to regular Hono routes, and supports several
+      schema libraries.
+    </li>
+  </ul>
+  <p>
+    Each one builds the spec from its own route declarations, so pick one per
+    app and follow its docs. When you look for help online, check which
+    library an example uses before you copy it.
+  </p>
+
+  <h2>Set up the project</h2>
+  <p>
+    The API and its docs live in one repository: the Hono app at the root, and
+    the Blume site in <code>docs-site/</code>. Start with a{" "}
+    <code>package.json</code> that pins every version:
+  </p>
+  <CodeBlock
+    code={`{
+  "name": "acme-messages",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "openapi": "tsx scripts/export-openapi.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.1",
+    "@hono/zod-openapi": "1.6.3",
+    "hono": "4.13.9",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <CodeBlock
+    code={`{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["src", "scripts"]
+}`}
+    lang="json"
+    title="tsconfig.json"
+  />
+  <p>Install the dependencies:</p>
+  <CodeBlock code="npm install" lang="bash" />
+  <p>By the end of the guide, the repository looks like this:</p>
+  <CodeBlock
+    code={`acme-messages/
+├── package.json
+├── tsconfig.json
+├── scripts/
+│   └── export-openapi.ts
+├── src/
+│   ├── app.ts
+│   ├── schemas.ts
+│   └── server.ts
+└── docs-site/          the Blume site
+    ├── blume.config.ts
+    ├── openapi.json    written by npm run openapi
+    └── docs/`}
+    lang="text"
+  />
+
+  <h2>Describe requests and responses with Zod</h2>
+  <p>
+    Import <code>z</code> from <code>@hono/zod-openapi</code> rather than from{" "}
+    <code>zod</code>: it's the same Zod, with an <code>.openapi()</code> method
+    added for documentation. Put the schemas in their own file:
+  </p>
+  <CodeBlock
+    code={`import { z } from "@hono/zod-openapi";
+
+export const MessageIdParams = z.object({
+  id: z
+    .string()
+    .regex(/^msg_[a-z0-9]+$/)
+    .openapi({
+      description: "The message ID, from the response to Send a message.",
+      example: "msg_8f2k",
+    }),
+});
+
+export const SendMessageRequest = z
+  .object({
+    channel: z.enum(["email", "sms"]).openapi({
+      description: "How to deliver the message.",
+    }),
+    to: z.string().min(3).openapi({
+      description:
+        "An email address for email, or a phone number in E.164 format for SMS.",
+      example: "ada@example.com",
+    }),
+    template: z.string().min(1).openapi({
+      description: "The ID of the template to send.",
+      example: "welcome",
+    }),
+    variables: z
+      .record(z.string(), z.string())
+      .optional()
+      .openapi({
+        description: "Values for the template's variables.",
+        example: { name: "Ada" },
+      }),
+  })
+  .refine((body) => body.channel !== "email" || body.to.includes("@"), {
+    message: "An email message needs an email address.",
+    path: ["to"],
+  })
+  .openapi("SendMessageRequest");
+
+export const Message = z
+  .object({
+    id: z.string().openapi({ example: "msg_8f2k" }),
+    status: z.enum(["queued", "sent", "delivered", "failed"]),
+    channel: z.enum(["email", "sms"]),
+  })
+  .openapi("Message");
+
+export const ErrorResponse = z
+  .object({
+    code: z.string().openapi({ example: "validation_failed" }),
+    message: z.string().openapi({ example: "The request is invalid." }),
+    issues: z
+      .array(
+        z.object({
+          path: z.string().openapi({ example: "to" }),
+          message: z.string(),
+        })
+      )
+      .optional()
+      .openapi({ description: "One entry per field that failed validation." }),
+  })
+  .openapi("Error");`}
+    lang="ts"
+    title="src/schemas.ts"
+  />
+  <p>
+    <code>.openapi("Message")</code> registers a schema as a named component,
+    so the spec refers to it by name instead of repeating it on every route.
+  </p>
+  <p>
+    Not everything in a route definition does the same job. Some of it is
+    enforced on every request, some of it only describes the API, and one
+    kind of rule is enforced but never documented:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">What you write</th>
+        <th scope="col">Checked at runtime</th>
+        <th scope="col">In the spec</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>
+          Types, <code>z.enum()</code>, <code>.min()</code>,{" "}
+          <code>.regex()</code>, <code>.optional()</code>
+        </td>
+        <td>Yes, a failure is a 400</td>
+        <td>
+          Yes, as <code>enum</code>, <code>minLength</code>,{" "}
+          <code>pattern</code>, <code>required</code>
+        </td>
+      </tr>
+      <tr>
+        <td><code>.refine()</code></td>
+        <td>Yes</td>
+        <td>No</td>
+      </tr>
+      <tr>
+        <td><code>.openapi()</code> descriptions, examples, and names</td>
+        <td>No</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>
+          A route's <code>summary</code>, <code>description</code>,{" "}
+          <code>tags</code>, <code>operationId</code>
+        </td>
+        <td>No</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>responses</code> schemas</td>
+        <td>No, but TypeScript checks your handlers against them</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>Security schemes</td>
+        <td>No, auth middleware enforces them</td>
+        <td>Yes</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The <code>.refine()</code> rule, that an email needs an email address,
+    can't be expressed in OpenAPI, so it never reaches the spec. Say it in a
+    field's description instead, as the <code>to</code> description does.
+  </p>
+
+  <h2>Define the routes</h2>
+  <p>
+    Each route declares its request schemas and every response it can send,
+    errors included. The app's <code>defaultHook</code> formats validation
+    failures so they match the <code>Error</code> schema the routes document:
+  </p>
+  <CodeBlock
+    code={`import { OpenAPIHono, createRoute, type z } from "@hono/zod-openapi";
+import { bearerAuth } from "hono/bearer-auth";
+import {
+  ErrorResponse,
+  Message,
+  MessageIdParams,
+  SendMessageRequest,
+} from "./schemas.ts";
+
+export const app = new OpenAPIHono({
+  // Runs whenever a request fails a route's Zod schema, so every validation
+  // error has the shape the spec documents as a 400.
+  defaultHook: (result, c) => {
+    if (!result.success) {
+      return c.json(
+        {
+          code: "validation_failed",
+          message: "The request is invalid.",
+          issues: result.error.issues.map((issue) => ({
+            path: issue.path.join("."),
+            message: issue.message,
+          })),
+        },
+        400
+      );
+    }
+  },
+});
+
+// Documents the scheme. The middleware below is what enforces it.
+app.openAPIRegistry.registerComponent("securitySchemes", "bearerAuth", {
+  type: "http",
+  scheme: "bearer",
+  description: "An API key, sent as a bearer token.",
+});
+app.use(
+  "/messages/*",
+  bearerAuth({ verifyToken: (token) => token === process.env.ACME_API_KEY })
+);
+
+const json = <T extends z.ZodType>(schema: T) => ({
+  "application/json": { schema },
+});
+
+const sendMessage = createRoute({
+  method: "post",
+  path: "/messages",
+  operationId: "sendMessage",
+  tags: ["Messages"],
+  summary: "Send a message",
+  description:
+    "Queues an email or SMS for delivery and returns its ID right away.",
+  request: {
+    body: { required: true, content: json(SendMessageRequest) },
+  },
+  responses: {
+    202: { description: "The message is queued.", content: json(Message) },
+    400: {
+      description: "The body failed validation.",
+      content: json(ErrorResponse),
+    },
+  },
+});
+
+const getMessage = createRoute({
+  method: "get",
+  path: "/messages/{id}",
+  operationId: "getMessage",
+  tags: ["Messages"],
+  summary: "Get a message",
+  description: "Returns a message and its delivery status.",
+  request: { params: MessageIdParams },
+  responses: {
+    200: { description: "The message.", content: json(Message) },
+    400: {
+      description: "The ID isn't a message ID.",
+      content: json(ErrorResponse),
+    },
+    404: { description: "No message has that ID.", content: json(ErrorResponse) },
+  },
+});
+
+// Stands in for your database.
+const messages = new Map<string, z.infer<typeof Message>>();
+
+app.openapi(sendMessage, (c) => {
+  const body = c.req.valid("json");
+  const message = {
+    id: \`msg_\${crypto.randomUUID().slice(0, 8)}\`,
+    status: "queued" as const,
+    channel: body.channel,
+  };
+  messages.set(message.id, message);
+  return c.json(message, 202);
+});
+
+app.openapi(getMessage, (c) => {
+  const { id } = c.req.valid("param");
+  const message = messages.get(id);
+  if (!message) {
+    return c.json(
+      { code: "not_found", message: \`No message has the ID \${id}.\` },
+      404
+    );
+  }
+  return c.json(message, 200);
+});
+
+export const openapiConfig = {
+  openapi: "3.1.0",
+  info: {
+    title: "Acme Messages API",
+    version: "1.0.0",
+    description: "Send transactional email and SMS.",
+  },
+  servers: [{ url: "https://api.acme.example/v1" }],
+  security: [{ bearerAuth: [] }],
+  tags: [
+    {
+      name: "Messages",
+      description: "Send a message and check whether it arrived.",
+    },
+  ],
+};
+
+app.doc31("/openapi.json", openapiConfig);`}
+    lang="ts"
+    title="src/app.ts"
+  />
+  <p>A few of these fields decide how the docs turn out:</p>
+  <ul>
+    <li>
+      <strong><code>operationId</code> and <code>tags</code></strong> set each
+      page's URL. Blume files an operation under its first tag and turns a
+      camelCase ID into a slug, so <code>sendMessage</code> becomes{" "}
+      <code>/api/messages/send-message</code>.
+    </li>
+    <li>
+      <strong><code>summary</code></strong> is the page title and sidebar
+      label, and <code>description</code> is the page's introduction.
+    </li>
+    <li>
+      <strong><code>required: true</code></strong> on the body makes a
+      missing body a 400. Without it, a request with no body reaches your
+      handler.
+    </li>
+    <li>
+      <strong><code>security</code></strong> in <code>openapiConfig</code>{" "}
+      applies the bearer scheme to every operation, so each page shows an
+      Authorization section. The <code>bearerAuth</code> middleware is what
+      rejects a request without the key.
+    </li>
+  </ul>
+  <p>
+    <code>@hono/zod-openapi</code> doesn't check responses at runtime, but
+    TypeScript does check each handler's <code>c.json()</code> against the
+    route's{" "}
+    <code>responses</code>. Return <code>status: "sending"</code>, or a 200
+    where the route documents a 202, and <code>npm run typecheck</code> fails.
+    Run it in CI so the documented success and error shapes can't drift from
+    what the handlers return.
+  </p>
+
+  <h2>Run the API and trigger validation errors</h2>
+  <p>
+    Mount the app under <code>/v1</code>, matching the server URL in the spec,
+    and allow the docs origin with CORS so the docs site's Try it panel can
+    call the API from a browser:
+  </p>
+  <CodeBlock
+    code={serverTsCode}
+    lang="ts"
+    title="src/server.ts"
+  />
+  <p>Start it with an API key:</p>
+  <CodeBlock code="ACME_API_KEY=sk_test_123 npm run dev" lang="bash" />
+  <p>
+    In another terminal, send a message with an unknown channel and a{" "}
+    <code>to</code> that's too short:
+  </p>
+  <CodeBlock
+    code={`curl http://localhost:3000/v1/messages \\
+  -H "Authorization: Bearer sk_test_123" \\
+  -H "Content-Type: application/json" \\
+  -d '{"channel":"fax","to":"a","template":"welcome"}'`}
+    lang="bash"
+  />
+  <p>
+    Zod rejects both fields before your handler runs, and the hook answers
+    with a 400 in the documented shape:
+  </p>
+  <CodeBlock
+    code={`{"code":"validation_failed","message":"The request is invalid.","issues":[{"path":"channel","message":"Invalid option: expected one of \\"email\\"|\\"sms\\""},{"path":"to","message":"Too small: expected string to have >=3 characters"}]}`}
+    lang="json"
+  />
+  <p>
+    Send <code>{`{"channel":"email","to":"+15550100","template":"welcome"}`}</code>{" "}
+    and the <code>.refine()</code> rule fails instead: one issue on{" "}
+    <code>to</code>, with the message from your schema. A valid request returns a 202 with the message, and a
+    request without the <code>Authorization</code> header gets a 401 from{" "}
+    <code>bearerAuth</code>.
+  </p>
+
+  <h2>Export the OpenAPI document</h2>
+  <p>
+    Create the Blume site first, since the export script writes into it. From
+    the repository root:
+  </p>
+  <CodeBlock
+    code="npx blume init docs-site --template docs --yes"
+    lang="bash"
+  />
+  <p>
+    That scaffolds <code>docs-site/</code> with its own{" "}
+    <code>package.json</code>, a <code>blume.config.ts</code>, and a{" "}
+    <code>docs/index.mdx</code> home page, then installs Blume. Next, add the
+    export script:
+  </p>
+  <CodeBlock
+    code={`import { writeFile } from "node:fs/promises";
+import { app, openapiConfig } from "../src/app.ts";
+
+const document = app.getOpenAPI31Document(openapiConfig);
+await writeFile(
+  "docs-site/openapi.json",
+  \`\${JSON.stringify(document, null, 2)}\\n\`
+);
+console.log("Wrote docs-site/openapi.json");`}
+    lang="ts"
+    title="scripts/export-openapi.ts"
+  />
+  <CodeBlock code="npm run openapi" lang="bash" />
+  <p>
+    <code>getOpenAPI31Document()</code> builds the document from the registered
+    routes without starting a server. It's the same document{" "}
+    <code>app.doc31()</code> serves at <code>/v1/openapi.json</code>. Commit
+    the file. Blume can read a spec from a URL, but a committed file shows
+    every API change as a diff in review, and the docs build never needs the
+    API running or its dependencies installed.
+  </p>
+
+  <h2>Build the docs site</h2>
+  <p>
+    Replace the scaffolded config. It mounts the reference at{" "}
+    <code>/api</code> and adds a header tab for it, since a reference never
+    adds a tab on its own:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  navigation: {
+    tabs: [
+      { label: "Docs", path: "/" },
+      { label: "API reference", path: "/api" },
+    ],
+  },
+  reference: [openapi({ route: "/api", spec: "./openapi.json" })],
+});`}
+    lang="ts"
+    title="docs-site/blume.config.ts"
+  />
+  <p>
+    The generated pages cover each route. The error format deserves a page of
+    its own, written by hand. Put it in a folder named after the reference
+    route and it joins the API reference tab's sidebar:
+  </p>
+  <CodeBlock
+    code={`---
+title: Errors
+description: How the Acme Messages API reports validation failures and missing messages.
+---
+
+Every error is JSON with a \`code\` and a \`message\`. A request that fails
+validation gets a \`400\` with the code \`validation_failed\`, and one entry
+in \`issues\` for each field that failed:
+
+\`\`\`json
+{
+  "code": "validation_failed",
+  "message": "The request is invalid.",
+  "issues": [
+    { "path": "to", "message": "An email message needs an email address." }
+  ]
+}
+\`\`\`
+
+Fix the fields the issues name and send the request again. Each field's
+rules are on its operation's page, like [Send a message](/api/messages/send-message).
+
+A message ID that doesn't exist gets a \`404\` with the code \`not_found\`.
+A request without a valid API key gets a \`401\` with a plain-text body.`}
+    lang="mdx"
+    title="docs-site/docs/api/errors.mdx"
+  />
+  <p>Start the docs dev server:</p>
+  <CodeBlock
+    code={`cd docs-site
+npm run dev`}
+    lang="bash"
+  />
+  <p>The API reference tab now holds three pages:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Page</th>
+        <th scope="col">Built from</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>/api/messages/send-message</code></td>
+        <td>The <code>sendMessage</code> route</td>
+      </tr>
+      <tr>
+        <td><code>/api/messages/get-message</code></td>
+        <td>The <code>getMessage</code> route</td>
+      </tr>
+      <tr>
+        <td><code>/api/errors</code></td>
+        <td>Your <code>errors.mdx</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    <code>/api</code> itself is an overview with the API's version, server
+    URL, and the Messages tag. Each operation page shows the Authorization
+    section, the parameters and body with their enums, lengths, and patterns,
+    and a Responses section with a schema table for every status you declared,
+    the 400 and 404 included. The Try it panel starts from your{" "}
+    <code>example</code> values. It sends requests to{" "}
+    <code>https://api.acme.example/v1</code>, which doesn't exist, so point{" "}
+    <code>servers</code> at your real API.
+  </p>
+  <p>
+    The <a href="/guides/openapi-documentation-website">OpenAPI guide</a>{" "}
+    covers the rest of the reference: code sample languages, the CORS proxy,
+    and deploying.
+  </p>
+
+  <h2>Keep the docs in sync</h2>
+  <p>
+    The spec is regenerated from code, so a change to the docs starts with a
+    change to a route or schema. Then run the checks and commit the spec with
+    the code:
+  </p>
+  <CodeBlock
+    code={`npm run typecheck
+npm run openapi
+git add src docs-site/openapi.json`}
+    lang="bash"
+  />
+  <p>
+    The docs dev server watches the spec file, so it shows the change as soon
+    as the export writes it. To catch a route change that was committed
+    without a fresh export, regenerate the spec in CI and fail when it differs
+    from the committed file:
+  </p>
+  <CodeBlock
+    code={`name: API spec
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  openapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run openapi
+      - run: git diff --exit-code docs-site/openapi.json`}
+    lang="yaml"
+    title=".github/workflows/api-spec.yml"
+  />
+  <p>
+    <code>git diff --exit-code</code> fails the job when the export changed
+    the file, and prints the difference. For deeper checks, like flagging a
+    breaking change, see{" "}
+    <a href="/guides/openapi-documentation-ci">Keep API documentation in sync with backend changes in CI</a>.
+  </p>
+  <p>
+    Renaming an <code>operationId</code> or a route's first tag moves its
+    page. Add a redirect from the old URL, as{" "}
+    <a href="/guides/openapi-documentation-website#when-the-spec-changes">the OpenAPI guide shows</a>.
+  </p>
+
+  <Callout type="note">
+    To leave a route out of the docs, such as a health check, give its{" "}
+    <code>createRoute()</code> config <code>hide: true</code>. It still runs
+    and validates, but the export skips it.
+  </Callout>
+
+  <h2>Troubleshooting</h2>
+  <h3>Validation errors don't match the documented 400</h3>
+  <p>
+    Without a <code>defaultHook</code> or a per-route hook, a failed request
+    gets the validator's default body,{" "}
+    <code>{`{"success":false,"error":{"name":"ZodError","message":"..."}}`}</code>,
+    where <code>message</code> is the list of issues as a JSON string. Your
+    spec still documents whatever schema you declared for the 400, so the docs
+    are wrong. Add the hook shown above. A hook passed as the third argument
+    to <code>app.openapi()</code> overrides it for that route.
+  </p>
+  <h3>A POST with no body reaches the handler</h3>
+  <p>
+    A request body is optional unless it sets <code>required: true</code>.
+    When it's optional and absent, <code>c.req.valid("json")</code> returns{" "}
+    <code>{"{}"}</code>, even if the schema has required fields.
+  </p>
+  <h3>Requests fail with 415 Unsupported Media Type</h3>
+  <p>
+    A route that validates a JSON body rejects a body sent without a matching{" "}
+    <code>Content-Type</code> header. Send{" "}
+    <code>Content-Type: application/json</code>. A body declared with a media
+    type other than JSON or form data isn't validated at all.
+  </p>
+  <h3>TypeScript doesn't catch a wrong response</h3>
+  <p>
+    Declaring a response with only a <code>description</code> and no{" "}
+    <code>content</code>, like a bare <code>401</code>, stops TypeScript from
+    checking the handler's <code>c.json()</code> calls against the route. Give
+    every declared response a <code>content</code> schema, or document that
+    status on a hand-written page, as the errors page does for the 401.
+  </p>
+  <h3>A route is missing from the docs</h3>
+  <p>
+    Only routes registered with <code>app.openapi()</code> reach the spec. A
+    route added with <code>app.get()</code> or <code>app.post()</code> works
+    but isn't documented. The same goes for routes on a plain{" "}
+    <code>Hono</code> sub-app: <code>OpenAPIHono</code> only collects routes
+    from <code>OpenAPIHono</code> apps mounted directly on it. Also check the
+    route doesn't set <code>hide: true</code>.
+  </p>
+  <h3>Pages land under Operations with URLs like post-messages</h3>
+  <p>
+    The route has no <code>tags</code> or <code>operationId</code>. Blume
+    files untagged operations under an Operations group and builds the slug
+    from the method and path, like <code>/api/operations/post-messages</code>.
+    Set both on every <code>createRoute()</code>.
+  </p>
+  <h3>The docs show an old schema</h3>
+  <p>
+    Run <code>npm run openapi</code> again. The docs dev server picks up the
+    new file on its own. If{" "}
+    <code>blume build</code> fails with <code>BLUME_OPENAPI_UNAVAILABLE</code>,
+    the spec file is missing or invalid: check that{" "}
+    <code>docs-site/openapi.json</code> exists and that <code>spec</code> is{" "}
+    <code>./openapi.json</code>, relative to <code>docs-site/</code>.
+  </p>
+  <h3>Try it fails in the browser but curl works</h3>
+  <p>
+    The API has to allow the docs origin with CORS. Register{" "}
+    <code>cors()</code> before <code>bearerAuth</code>, as{" "}
+    <code>server.ts</code> does: the browser's preflight request carries no{" "}
+    <code>Authorization</code> header, so if auth runs first the preflight
+    gets a 401 and the real request is never sent. See{" "}
+    <a href="/guides/api-documentation-cors-errors">Fix CORS errors in an API documentation playground</a>{" "}
+    for the proxy alternative.
+  </p>
+</GuidePage>

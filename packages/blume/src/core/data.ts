@@ -77,6 +77,8 @@ export interface BlumeDataI18n {
   fallbackLocale: string | null;
   hideDefaultLocalePrefix: boolean;
   locales: BlumeDataLocale[];
+  /** Send visitors from the default home page to their browser's language. */
+  routeByBrowserLanguage: boolean;
 }
 
 /** A single content route, with the metadata custom pages can read. */
@@ -98,6 +100,12 @@ export interface BlumeRoute {
   /** True when this route renders fallback content for a missing translation. */
   fallback: boolean;
   hidden: boolean;
+  /**
+   * The translations the page head links as hreflang alternates: the
+   * indexable ones, so a `noindex` or hidden translation is left out (see
+   * `hreflangAlternates`).
+   */
+  hreflang: RouteAlternate[];
   id: string;
   /** Whether the page is part of the search index. */
   indexable: boolean;
@@ -111,6 +119,12 @@ export interface BlumeRoute {
    */
   monolingual: boolean;
   path: string;
+  /**
+   * The git commit that added the page's source, as an ISO date, when
+   * `seo.datePublished` is `"git"` and front matter carries no date; else
+   * `null`.
+   */
+  published: string | null;
   title: string;
   /** Resolved docs version (`""` for the current docs). */
   version: string;
@@ -185,7 +199,7 @@ export interface BlumeDataConfig {
   feedback: boolean;
   /** Whether the rating asks for a written comment after it (`feedback.comments`). */
   feedbackComments: boolean;
-  /** `footer`: social profile icons and link columns, or `null` when unset. */
+  /** `footer`: the copyright line, links, and social profile icons, or `null` when unset. */
   footer: ResolvedConfig["footer"] | null;
   /**
    * Repo coordinates for content components that address the API or build
@@ -204,8 +218,17 @@ export interface BlumeDataConfig {
   /** `markdown.imageZoom`: click-to-zoom content images. */
   imageZoom: boolean;
   logo: BlumeLogo | null;
-  /** Hosted MCP server, or `null` when MCP is off. */
-  mcp: { name: string; route: string } | null;
+  /**
+   * Hosted MCP server, or `null` when MCP is off, with the clients its
+   * "Connect to MCP" page action lists (`agents.mcp.clients`), in order.
+   */
+  mcp: {
+    clients: ResolvedConfig["agents"]["mcp"]["clients"];
+    name: string;
+    route: string;
+  } | null;
+  /** `seo.metatags`: the site's own tags for every page's head, or `null`. */
+  metatags: Record<string, string> | null;
   /**
    * "Listen to this page": `generated` when a `narration.provider` makes
    * `blume build` write audio clips the player should look for, else the
@@ -218,6 +241,7 @@ export interface BlumeDataConfig {
    * kept out of this snapshot, which pages serialize into HTML.
    */
   og: {
+    image?: string | Record<string, string>;
     /**
      * Site-wide card subtitle: `seo.og.description` (`false` omits it) over
      * the site description. A page with its own description shows that
@@ -244,6 +268,8 @@ export interface BlumeDataConfig {
   /** Repository URL for header/edit links, or `null`. */
   repoUrl: string | null;
   search: {
+    /** `search.analytics`: whether the dialog's events carry each query's text. */
+    analytics: { queries: boolean };
     enabled: boolean;
     /** Resolved empty-state links; empty when unset (Search falls back to sidebar). */
     popular: { icon?: string; label: string; route: string }[];
@@ -252,6 +278,7 @@ export interface BlumeDataConfig {
   };
   /** Deployment site URL, or `null` when none is configured/detected. */
   site: string | null;
+  jsonLd: ResolvedConfig["seo"]["jsonLd"];
   structuredData: boolean;
   theme: ResolvedConfig["theme"];
   title: string;

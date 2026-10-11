@@ -1,6 +1,6 @@
 ---
 title: 設定ファイル
-description: サイトのメタデータやコンテンツソースから、各機能の設定ガイドへのリンクまで、blume.config.ts のすべてのオプション。
+description: サイトのメタデータやコンテンツソースから、個々の機能の設定ガイドへと続くリンクまで、blume.config.ts のすべてのオプション。
 sidebar:
   label: blume.config.ts
 ---
@@ -68,6 +68,8 @@ export default defineConfig({
     llmsTxt: true,
     // AI Catalog / ARD manifest at /.well-known/ai-catalog.json (needs deployment.site)
     catalog: true,
+    // Your site's agent skill at /skill.md (needs deployment.site)
+    skillMd: true,
     // MCP server (needs server output)
     mcp: {
       enabled: false,
@@ -99,6 +101,7 @@ export default defineConfig({
 | `description` | — | デフォルトの meta description。SEO と OG に使用されます。 |
 | `logo` | — | ヘッダーに表示されるブランドマークやワードマーク。 |
 | `banner` | — | ヘッダー上部に表示されるサイト全体のお知らせバー。 |
+| `footer` | — | コンテンツの下に表示される、著作権表示、リンクの行、ソーシャルプロフィールアイコン。 |
 
 ### ロゴ [#logo]
 
@@ -185,6 +188,43 @@ banner: {
 
 `dismissible` を有効にすると、バーに閉じるボタンが表示され、それ以降その訪問者には非表示のままになります。閉じた状態を記録するキーはデフォルトで本文テキストになるため、メッセージを編集するとバナーが再び表示されます。編集後も閉じたままにするには、安定した `id` を設定してください。
 
+[多言語](/docs/content/i18n) サイトでは、`content` とリンクの `text` に、ロケールコードからテキストへのマップを指定することもできます。各ページには自身のロケールのエントリが表示され、ない場合はデフォルトロケールのエントリにフォールバックします。また、読者のロケールがそのページを提供している場合、リンクはそのロケールに移動します:
+
+```ts blume.config.ts lineNumbers
+banner: {
+  content: { en: "Version 2.0 is here!", fr: "La version 2.0 est là !" },
+  link: {
+    text: { en: "Read the release notes", fr: "Lire les notes de version" },
+    href: "/changelog",
+  },
+},
+```
+
+翻訳されたバナーでは、閉じた状態を記録するキーにデフォルトロケールのテキストが使われるため、一度閉じればすべての言語で非表示になります。
+
+### フッター [#footer]
+
+すべてのページの末尾にはフッターが表示されます。ヘッダーと同じ高さの 1 行で、片側にリンク、もう片側にソーシャルプロフィールのアイコンが並び、その間の中央に著作権表示が置かれます。Blume がソーシャルプロフィールとリポジトリへのリンクを置くのはフッターだけなので、[`github`](#github) のリポジトリが設定されている場合は、常にアイコンの先頭に表示されます。残りは `footer` で追加します:
+
+```ts blume.config.ts lineNumbers
+footer: {
+  copyright: "© 2026 Acme, Inc.",
+  links: [
+    { label: "Pricing", href: "https://acme.dev/pricing" },
+    { label: "Changelog", href: "/changelog" },
+    { label: "Blog", href: "https://acme.dev/blog" },
+  ],
+  socials: {
+    x: "https://x.com/acme",
+    discord: "https://discord.gg/acme",
+  },
+},
+```
+
+`copyright` はプレーンテキストなので、`&copy;` ではなく `©` そのものを記述してください。年を常に最新に保つには、テンプレートリテラルを使います: `` `© ${new Date().getFullYear()} Acme, Inc.` ``。`links` は記述した順に表示されます。内部リンクはルートにマウントされているものとして記述してください。外部リンクは新しいタブで開きます。[多言語](/docs/content/i18n#per-locale-navigation) サイトでは、`copyright` と `label` にそれぞれロケールコードからテキストへのマップを指定でき、読者のロケールがそのページを提供している場合、内部リンクはそのロケールに移動します。`socials` はプラットフォームをそのプロフィール URL に対応付けるもので、アイコンは記述した順に表示されます。使用できるプラットフォームは `bluesky`、`discord`、`facebook`、`github`、`hacker-news`、`instagram`、`linkedin`、`medium`、`podcast`、`reddit`、`slack`、`telegram`、`threads`、`website`、`x`、`youtube` です。`github` のソーシャルを指定すると、リポジトリリンクが置き換えられます。そのリンクを非表示にするには [`navigation.repo`](/docs/content/navigation#repository-link) を使ってください。
+
+著作権表示、リンク、プロフィール、リポジトリのいずれもないサイトには、フッターは表示されません。`PageLayout` 上に構築したカスタムページでも、レイアウト自身の `footer` スロットを埋めない限りフッターが表示されます。フッターを完全に置き換えるには、[`Footer` レイアウトスロット](/docs/configuration/customization#layout-slots) を上書きしてください。
+
 ## コンテンツ [#content]
 
 コンテンツの置き場所と、Blume がそれをどう検出するかです。ファイルがどのようにルートになるかは [ページ](/docs/content) を参照してください。
@@ -199,7 +239,7 @@ content: {
 | --- | --- | --- |
 | `root` | `"docs"` | Blume がコンテンツを走査するフォルダ。単一の `filesystem()` ソースの省略形で、`sources` と併用することはできません。 |
 | `include` | `["**/*.{md,mdx}"]` | コンテンツファイルにマッチする glob。`root` と同様に省略形です。 |
-| `exclude` | `["**/_*", "**/.*"]` | 無視する glob（アンダースコアおよびドットで始まるファイル）。`root` と同様に省略形です。 |
+| `exclude` | `["**/_*", "**/.*"]` | 無視する glob。指定した値はデフォルトに追加されます。デフォルトではアンダースコアおよびドットで始まるファイルをスキップします。`!` で始まるエントリはそのパターンを除外するため、`"!**/_*"` を指定すると `_` で始まるファイルが公開されます。`root` と同様に省略形です。 |
 | `sources` | `filesystem()` 1 つ | `blume/sources` のコンテンツソースアダプター。省略形の代わりに使います。[コンテンツソース](/docs/content/sources) を参照してください。 |
 | `pages` | `"pages"` | カスタム `.astro` ページ用のフォルダ。 |
 | `defaultType` | `"doc"` | フロントマターで指定がない場合に使われるページの `type`。 |
@@ -272,7 +312,7 @@ export default defineConfig({
 
 ## GitHub
 
-`github` で Blume にリポジトリを指定します。これはヘッダーの [リポジトリリンク](/docs/content/navigation#repository-link) と、**Edit on GitHub** の [ページアクション](/docs/content/navigation#page-actions) を有効にします:
+`github` で Blume にリポジトリを指定します。これはフッターの [リポジトリリンク](/docs/content/navigation#repository-link) と、**Edit on GitHub** の [ページアクション](/docs/content/navigation#page-actions) を有効にします:
 
 ```ts blume.config.ts lineNumbers
 github: {
@@ -326,7 +366,7 @@ lastModified: "git",
 | `"git"` | git 履歴（コミット日時）から日付を読み取ります。 |
 | `"frontmatter"` | git を実行せず、フロントマターの `lastModified` フィールドのみを使用します。 |
 
-git ソースは各ファイルに触れた最新のコミットを読み取るため、モノレポを含むあらゆる git リポジトリで機能し、ビルド時にリポジトリの履歴が必要です。CI プラットフォームは通常シャロークローンでチェックアウトするため、ほとんどの日付が黙って失われます（その場合、ビルドは `BLUME_SHALLOW_GIT_HISTORY` で警告します）。Vercel では `VERCEL_DEEP_CLONE=true` 環境変数を設定し、`actions/checkout` では `fetch-depth: 0` を設定してください。ページ自身の `lastModified` フロントマターが常に優先されるので、日付を固定したい場合や、まだコミットされていないファイルに便利です:
+git ソースは各ファイルに触れた最新のコミットを読み取るため、モノレポを含むあらゆる git リポジトリで機能し、ビルド時にリポジトリの履歴が必要です。`git log --follow` と同様にリネームも追跡します。`page.md` を `page.mdx` にリネームしたり、同じコンテンツルート配下の別のフォルダにファイルを移動したりしても、そのコミットで内容が変わっていなければページの日付は維持されます。リネームと同時にファイルを編集した場合は、そのコミットの日時がページの日付になります。コンテンツルートの外からファイルを移動してきた場合も同様です。CI プラットフォームは通常シャロークローンでチェックアウトするため、ほとんどの日付が黙って失われます（その場合、ビルドは `BLUME_SHALLOW_GIT_HISTORY` で警告します）。Vercel では `VERCEL_DEEP_CLONE=true` 環境変数を設定し、`actions/checkout` では `fetch-depth: 0` を設定してください。ページ自身の `lastModified` フロントマターが常に優先されるので、日付を固定したい場合や、まだコミットされていないファイルに便利です:
 
 ```mdx page.mdx
 ---
@@ -420,7 +460,21 @@ export default defineConfig({
 });
 ```
 
-読者の回答は、`helpful`（`"yes"` または `"no"`）、`path`、`title` を含む `feedback` の [カスタムイベント](/docs/configuration/analytics#custom-events) として、イベント API を持つ設定済みのすべてのアナリティクスアダプターを通じて送信されます。あわせて `window` 上の `blume:track` イベントとしても送出されます。アナリティクスアダプターがない場合、回答はどこにも記録されません。質問文とお礼のテキストは UI 文字列なので、[`i18n.ui`](/docs/content/i18n#translated-ui) で翻訳できます。
+読者の回答は、`helpful`（`"yes"` または `"no"`）、`path`、`title` を含む `feedback` の [カスタムイベント](/docs/configuration/analytics#custom-events) として、イベント API を持つ設定済みのすべてのアナリティクスアダプターを通じて送信されます。あわせて `window` 上の `blume:track` イベントとしても送出されます。Fathom、Microsoft Clarity、Hotjar はイベント名だけを受け取り、プロパティは受け取らないため、評価の件数は数えられますが、「はい」と「いいえ」を区別できません。アナリティクスアダプターがない場合、回答はどこにも記録されません。また、[Cookie の同意](/docs/configuration/consent) が有効な場合、評価はアナリティクスを許可した読者にのみ表示されます。それ以外の読者から回答を受け取っても、送信先がないためです。質問文とお礼のテキストは UI 文字列なので、[`i18n.ui`](/docs/content/i18n#translated-ui) で翻訳できます。
+
+### 記述式のフィードバック [#written-feedback]
+
+「はい」か「いいえ」以上の声を聞くには、コメントを有効にします。読者がページを評価すると、良かった点や不足している点を書き込める入力欄が表示されます:
+
+```ts blume.config.ts
+export default defineConfig({
+  feedback: { comments: true },
+});
+```
+
+コメントは `feedback_comment` イベントとして送信され、評価と同じ `helpful`、`path`、`title` に加えて、読者の `comment`（最大 1,000 文字）を含みます。評価と同じアダプターを通じて送信されるため、コメントはイベントを確認している場所で読めます。プロバイダーはプロパティ値の長さに上限を設けているため、長いコメントは途中で切り詰められて届くことがあります。Google Analytics は 100 文字、Mixpanel は 255 バイト（日本語のように 1 文字に複数バイトを使う文字体系では、文字数はそれより少なくなります）まで保持し、Vercel Web Analytics は 255 文字までの値を受け付けます。一方、PostHog と Segment はコメントを全文そのまま渡します。Fathom、Clarity、Hotjar にはコメントのテキストがまったく届きません。Plausible は個々のコメントを一覧表示せず、同一の値をグループ化するため、コメントよりも評価に向いています。読者は入力欄に何でも書き込めるため、コメントには個人情報が含まれている可能性があるものとして扱ってください。
+
+入力欄のラベルとボタンも UI 文字列です（`feedback.comment` と `feedback.send`）。
 
 ## 機能ごとのオプション [#feature-options]
 
@@ -432,13 +486,18 @@ export default defineConfig({
 | `navigation` | サイドバーとヘッダータブの明示的な指定 | [ナビゲーション](/docs/content/navigation) |
 | `search` | プロバイダー（Orama、Pagefind、Algolia など）とインデックス作成 | [検索](/docs/configuration/search) |
 | `markdown` | Markdown のレンダリングオプション — コードブロック、見出しアンカー、画像ズーム | [構文](/docs/content/syntax) |
-| `agents` | `llms.txt`、Markdown ミラー、JSON API、ホスト型 MCP サーバー、スキル、そしてコーディングエージェント向けのディスカバリーマニフェスト | [SEO と AEO](/docs/discoverability) |
+| `agents` | `llms.txt`、Markdown ミラー、JSON API、ホスト型 MCP サーバー、スキル、そしてコーディングエージェント向けのディスカバリーマニフェスト | [SEO と GEO](/docs/discoverability) |
 | `ai` | ページ内のアシスタントと Open in chat アクション | [アシスタント](/docs/configuration/assistant) |
+| `rateLimit` | 1 人の読者がアシスタント、プレイグラウンドのプロキシ、サーバーサイド検索を呼び出せる頻度。`blume/ratelimit` のアダプターで設定します（デフォルトで有効） | [レート制限](/docs/configuration/rate-limiting) |
+| `narration` | ブラウザの音声、またはビルド時に生成した音声を使う「Listen to this page」プレーヤー | [ナレーション](/docs/configuration/narration) |
 | `reference` | API リファレンス: `blume/reference` の `openapi()`、`asyncapi()`、`graphql()`、`scalar()` アダプター | [OpenAPI](/docs/references/openapi)、[AsyncAPI](/docs/references/asyncapi)、[GraphQL](/docs/references/graphql)、[Scalar](/docs/references/scalar) |
+| `api` | 手書きのエンドポイントページのサーバー、認証、Try it パネル | [手書きの API ページ](/docs/references/api-pages) |
 | `analytics` | `blume/analytics` のアダプター — PostHog、Google Analytics、Plausible、Mixpanel、Segment など — とカスタムスクリプト | [アナリティクス](/docs/configuration/analytics) |
-| `seo` | メタデータ、OG 画像、フィード、構造化データ、サイトマップ、robots | [SEO と AEO](/docs/discoverability) |
+| `consent` | `blume/consent` の Cookie 同意アダプター — Blume 独自のバナー、Osano、Ethyca — 読者が許可するまでアナリティクスを保留します | [Cookie の同意](/docs/configuration/consent) |
+| `seo` | メタデータ、OG 画像、フィード、構造化データ、サイトマップ、robots | [SEO と GEO](/docs/discoverability) |
 | `deployment` | `blume/deploy` のホストアダプター、または静的ビルド用の `{ site, base }` | [デプロイ](/docs/deployment) |
 | `redirects` | 恒久的および一時的なリダイレクト | [デプロイ](/docs/deployment#redirects) |
+| `poweredBy` | `X-Powered-By: Blume` レスポンスヘッダー（デフォルトは `true`） | [デプロイ](/docs/deployment#powered-by-header) |
 | `integrations` | Blume の組み込み機能の後に追加される Astro インテグレーション | [カスタマイズ](/docs/configuration/customization#astro-integrations) |
 | `basePath` | 生成されるすべてのルートをマウントするパス（例: `/docs`）。サイドバーには表示されません | [デプロイ](/docs/deployment#mount-the-docs-under-a-path) |
 | `i18n` | ロケール、デフォルトロケール、翻訳済みの UI 文字列 | [国際化](/docs/content/i18n) |
@@ -446,7 +505,9 @@ export default defineConfig({
 | `export` | 読者向けの PDF および EPUB ダウンロード | [エクスポート](/docs/configuration/export) |
 | `examples` | `<Component path>` のサンプルプレビューの置き場所と、そのフレームに挿入される CSS | [Component](/docs/content/components#component) |
 | `react` | React アイランドの挙動 — React Compiler による自動メモ化 | [アイランド](/docs/content/islands#frameworks) |
-| `feedback` | 各ページ末尾の「Was this page helpful?」評価（デフォルトは `true`） | [ページのフィードバック](#page-feedback) |
+| `variables` | 任意のページで `{{name}}` が読み取る値 | [変数](/docs/content/variables) |
+| `feedback` | 各ページ末尾の「Was this page helpful?」評価（デフォルトは `true`）と、その後に続く任意の記述式コメント | [ページのフィードバック](#page-feedback) |
+| `changelog` | 生成される `/changelog` インデックスのタイトルと説明。それぞれ文字列またはロケールごとのマップで指定します | [チェンジログ](/docs/advanced/changelog#the-index-page) |
 
 ## 優先順位 [#precedence]
 

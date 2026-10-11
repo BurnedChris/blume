@@ -8,6 +8,7 @@ import { extractLinks } from "../src/core/content.ts";
 import {
   isIndexFileName,
   resolveRelativeHref,
+  resolveRootFileHref,
   validateLinks,
 } from "../src/core/links.ts";
 import { pageMetaSchema } from "../src/core/schema.ts";
@@ -27,6 +28,20 @@ const image = (target: string, line = 1): PageLink => ({
   image: true,
   line,
   target,
+});
+
+// A lowercase `<a href>`, which ships as written.
+const raw = (target: string, line: number): PageLink => ({
+  column: 1,
+  line,
+  raw: true,
+  target,
+});
+
+// A media element's `src` (`<img src>`), raw like an `<a href>`.
+const src = (target: string, line: number, tag = "img"): PageLink => ({
+  ...raw(target, line),
+  src: tag,
 });
 
 const heading = (text: string, slug: string): Heading => ({
@@ -92,7 +107,7 @@ describe(extractLinks, () => {
 
   it("reads a component's string href, even wrapped onto its own line", () => {
     const body = [
-      'Inline <Card title="x" href="./install" /> and <a href="./raw">a</a>.',
+      'Inline <Card title="x" href="./install" /> and <abbr href="./no">a</abbr>.',
       "<Card",
       '  title="Wrapped"',
       "  href='../setup.mdx#run'",
@@ -106,6 +121,49 @@ describe(extractLinks, () => {
     expect(extractLinks(body, 4)).toStrictEqual([
       { column: 30, line: 5, target: "./install" },
       { column: 9, line: 8, target: "../setup.mdx#run" },
+    ]);
+  });
+
+  it("reads a lowercase <a href> as a raw link", () => {
+    // Raw HTML in `.md` (plain JSX in `.mdx`) ships as written, so its
+    // target is marked raw: checked the way the browser reads it.
+    const body = [
+      'An <a href="./raw">inline</a> tag and',
+      '<a class="x"',
+      "  href='/wrapped#top'>a wrapped one</a>.",
+    ].join("\n");
+    expect(extractLinks(body)).toStrictEqual([
+      { column: 13, line: 1, raw: true, target: "./raw" },
+      { column: 9, line: 3, raw: true, target: "/wrapped#top" },
+    ]);
+  });
+
+  it("reads a media element's string src as a raw link", () => {
+    const body = [
+      '<img alt="x" src="./diagram.png"> and <source src=\'/clip.webm\'>',
+      "<video",
+      '  controls src="./demo.mp4"',
+      "/>",
+      '<audio src={track} /> <img data-src="./lazy.png"> <img src="">',
+      String.raw`\<img src="./escaped.png"> \`<img src="./code.png">\``,
+      "```html",
+      '<img src="./fenced.png">',
+      "```",
+    ].join("\n");
+    expect(extractLinks(body)).toStrictEqual([
+      { column: 19, line: 1, raw: true, src: "img", target: "./diagram.png" },
+      { column: 52, line: 1, raw: true, src: "source", target: "/clip.webm" },
+      { column: 17, line: 3, raw: true, src: "video", target: "./demo.mp4" },
+    ]);
+  });
+
+  it("skips an escaped \\<a href> or \\<Card href>, which renders as text", () => {
+    const body = [
+      String.raw`Write \<a href="/escaped">x\</a> or \<Card href="./card" />.`,
+      String.raw`\\<a href="/after-backslash">real</a>`,
+    ].join("\n");
+    expect(extractLinks(body)).toStrictEqual([
+      { column: 12, line: 2, raw: true, target: "/after-backslash" },
     ]);
   });
 
@@ -177,6 +235,57 @@ describe(extractLinks, () => {
       { column: 5, line: 6, target: "/a" },
     ]);
   });
+
+  it("reads a reference-style link's definition", () => {
+    // `[text][guide]` renders with the definition's destination, so that's
+    // the target to check. A footnote definition isn't a link, and neither
+    // is a label with no destination.
+    const body = [
+      "See [the guide][guide] and [Setup].",
+      "",
+      '[guide]: /guides/intro "Intro"',
+      "  [setup]: <./setup page>",
+      "> [quoted]: /quoted",
+      "[^1]: A footnote, not a link.",
+      "[empty]: <>",
+      "```md",
+      "[fenced]: /nope",
+      "```",
+    ].join("\n");
+    expect(extractLinks(body)).toStrictEqual([
+      { column: 10, line: 3, target: "/guides/intro" },
+      { column: 13, line: 4, target: "./setup page" },
+      { column: 13, line: 5, target: "/quoted" },
+    ]);
+  });
+
+  it("reads an autolink's URL", () => {
+    // Only http(s) targets are ever checked, so a `mailto:` autolink isn't
+    // recorded; one shown as inline code isn't a link at all.
+    const body =
+      "Visit <https://example.com/docs>, <mailto:a@b.dev>, or `<https://code.dev>`.";
+    expect(extractLinks(body)).toStrictEqual([
+      { column: 8, line: 1, target: "https://example.com/docs" },
+    ]);
+  });
+
+  it("reads a link whose label wraps onto the next line", () => {
+    // A formatter wraps long labels; the link still renders. A blank line
+    // ends the paragraph, so brackets on either side of one are no link.
+    const body = [
+      "See [a long",
+      "label](/wrapped) and ![an",
+      "alt](./img.png).",
+      "",
+      "[not a link",
+      "",
+      "](/across-paragraphs)",
+    ].join("\n");
+    expect(extractLinks(body, 2)).toStrictEqual([
+      { column: 8, line: 4, target: "/wrapped" },
+      { column: 6, image: true, line: 5, target: "./img.png" },
+    ]);
+  });
 });
 
 describe(validateLinks, () => {
@@ -205,7 +314,10 @@ describe(validateLinks, () => {
         makePage({ id: "a.mdx", links: [link("/providers")], route: "/a" }),
         makePage({ id: "openai.mdx", route: "/providers/openai" }),
       ]),
-      { publicDir: null, redirects: [{ from: "/providers" }] }
+      {
+        publicDir: null,
+        redirects: [{ from: "/providers", to: "/providers/openai" }],
+      }
     );
     expect(diagnostics).toHaveLength(0);
   });
@@ -215,7 +327,10 @@ describe(validateLinks, () => {
       makeGraph([
         makePage({ id: "a.mdx", links: [link("/nope")], route: "/a" }),
       ]),
-      { publicDir: null, redirects: [{ from: "/providers" }] }
+      {
+        publicDir: null,
+        redirects: [{ from: "/providers", to: "/providers/openai" }],
+      }
     );
     expect(diagnostics[0]?.code).toBe("BLUME_BROKEN_LINK");
   });
@@ -245,6 +360,29 @@ describe(validateLinks, () => {
       makePage({ id: "guides/setup.mdx", route: "/guides/setup" }),
     ]);
     expect(diagnostics).toHaveLength(0);
+  });
+
+  it("reads a raw <a href> the way the browser does", async () => {
+    // A raw `./setup` on `/docs/guides` (an index page) isn't rewritten, so
+    // the browser lands on `/docs/setup`; a raw `/guides/setup` isn't based,
+    // so it lands outside `/docs` and is broken.
+    const diagnostics = await validateLinks(
+      makeGraph([
+        makePage({
+          id: "guides/index.mdx",
+          links: [raw("./setup", 1), raw("/guides/setup", 2), link("./setup")],
+          route: "/docs/guides",
+        }),
+        makePage({ id: "setup.mdx", route: "/docs/setup" }),
+      ]),
+      { basePath: "/docs", publicDir: null }
+    );
+    expect(
+      diagnostics.map((diagnostic) => [diagnostic.line, diagnostic.message])
+    ).toStrictEqual([
+      [2, "Broken link to /guides/setup: no page resolves to /guides/setup."],
+      [1, "Broken link to ./setup: no page resolves to /docs/guides/setup."],
+    ]);
   });
 
   it("treats a numeric-prefixed index (01-index) as an index for relative links", async () => {
@@ -477,14 +615,44 @@ describe(validateLinks, () => {
     expect(diagnostics.map((d) => d.code)).toStrictEqual(["BLUME_BROKEN_LINK"]);
   });
 
-  it("reports an info note for asset links when no public dir exists", async () => {
+  it("reports an asset link as missing when there's no public dir", async () => {
+    // No `public/` folder means the site ships no public files, so the link
+    // 404s: it's reported, not skipped.
     const diagnostics = await validate([
       makePage({ id: "a.mdx", links: [link("/logo.png")], route: "/a" }),
     ]);
     expect(diagnostics.map((d) => d.code)).toStrictEqual([
-      "BLUME_ASSETS_UNCHECKED",
+      "BLUME_BROKEN_ASSET",
     ]);
-    expect(diagnostics[0]?.severity).toBe("info");
+    expect(diagnostics[0]?.severity).toBe("warning");
+  });
+
+  it("accepts links to the files the build generates, and only those", async () => {
+    const page = makePage({
+      id: "a.mdx",
+      links: [
+        link("/llms.txt"),
+        link("/.well-known/agent-skills/index.json"),
+        link("/docs/sitemap.xml"),
+        link("/robots.txt"),
+      ],
+      route: "/docs/a",
+    });
+    const diagnostics = await validateLinks(makeGraph([page]), {
+      // Generated files sit at the site root like `public/` ones, outside
+      // `basePath`.
+      basePath: "/docs",
+      generatedFiles: [
+        "/llms.txt",
+        "/.well-known/agent-skills/index.json",
+        "/sitemap.xml",
+      ],
+      publicDir: null,
+    });
+    // `robots.txt` is off in this config, so a link to it is broken.
+    expect(diagnostics.map((d) => d.message)).toStrictEqual([
+      "Asset /robots.txt was not found in the public directory.",
+    ]);
   });
 
   it("skips external, mailto, and tel links by default", async () => {
@@ -569,9 +737,18 @@ describe("validateLinks — assets against a public dir", () => {
     await mkdir(join(contentDir, "images"), { recursive: true });
     await mkdir(publicDir, { recursive: true });
     await writeFile(join(publicDir, "logo.png"), "binary");
+    // A static demo app: `/demo` and `/demo/` serve its `index.html`.
+    await mkdir(join(publicDir, "demo"), { recursive: true });
+    await writeFile(join(publicDir, "demo", "index.html"), "<p>demo</p>");
+    await mkdir(join(publicDir, "empty"), { recursive: true });
     await writeFile(join(contentDir, "guides", "screenshot.png"), "binary");
     await writeFile(join(contentDir, "guides", "my photo.png"), "binary");
+    await writeFile(join(contentDir, "guides", "spec.pdf"), "pdf");
     await writeFile(join(contentDir, "images", "diagram.png"), "binary");
+    // Partials: published as no page, so a link to one is broken.
+    await writeFile(join(contentDir, "guides", "_draft.md"), "# Draft\n");
+    await mkdir(join(contentDir, "_snippets"), { recursive: true });
+    await writeFile(join(contentDir, "_snippets", "setup.mdx"), "# Setup\n");
   });
 
   afterAll(async () => {
@@ -586,6 +763,77 @@ describe("validateLinks — assets against a public dir", () => {
       makePage({ id: "a.mdx", links: [link("/logo.png")], route: "/a" }),
     ]);
     expect(diagnostics).toHaveLength(0);
+  });
+
+  it("accepts a public folder that has an index.html, with or without the slash", async () => {
+    const diagnostics = await validateWithPublic([
+      makePage({
+        id: "a.mdx",
+        links: [
+          link("/demo/"),
+          link("/demo"),
+          link("./demo/"),
+          link("/empty"),
+          link("/logo.png/"),
+        ],
+        route: "/a",
+      }),
+    ]);
+    // A folder with no `index.html` serves nothing, and a host answers a
+    // file's path with a trailing slash with a 404.
+    expect(diagnostics.map((d) => d.message)).toStrictEqual([
+      "Broken link to /empty: no page resolves to /empty.",
+      "Broken link to /logo.png/: no page resolves to /logo.png.",
+    ]);
+  });
+
+  it("reports .html links to pages with the route to link instead", async () => {
+    const diagnostics = await validateWithPublic([
+      makePage({
+        id: "guides/a.mdx",
+        links: [
+          link("./setup.html#run"),
+          link("/guides/setup.html"),
+          link("/guides/index.htm"),
+          raw("setup.html", 4),
+          link("/nope.html"),
+          // A real file in `public/` is served at its `.html` path.
+          link("/demo/index.html"),
+        ],
+        route: "/guides/a",
+      }),
+      makePage({ id: "guides/index.mdx", route: "/guides" }),
+      makePage({ id: "guides/setup.mdx", route: "/guides/setup" }),
+    ]);
+    expect(
+      diagnostics.map((d) => [d.code, d.message, d.suggestion])
+    ).toStrictEqual([
+      [
+        "BLUME_BROKEN_ASSET",
+        "Link ./setup.html#run points at /guides/setup.html, which public/ doesn't have, and pages aren't served at .html URLs.",
+        "Link the page at /guides/setup instead.",
+      ],
+      [
+        "BLUME_BROKEN_ASSET",
+        "Link /guides/setup.html points at /guides/setup.html, which public/ doesn't have, and pages aren't served at .html URLs.",
+        "Link the page at /guides/setup instead.",
+      ],
+      [
+        "BLUME_BROKEN_ASSET",
+        "Link /guides/index.htm points at /guides/index.htm, which public/ doesn't have, and pages aren't served at .html URLs.",
+        "Link the page at /guides instead.",
+      ],
+      [
+        "BLUME_BROKEN_ASSET",
+        "Link setup.html points at /guides/setup.html, which public/ doesn't have, and pages aren't served at .html URLs.",
+        "Link the page at /guides/setup instead.",
+      ],
+      [
+        "BLUME_BROKEN_ASSET",
+        "Asset /nope.html was not found in the public directory.",
+        "Add the file at public/nope.html or fix the link.",
+      ],
+    ]);
   });
 
   it("warns when a referenced asset is missing", async () => {
@@ -644,19 +892,38 @@ describe("validateLinks — assets against a public dir", () => {
     expect(diagnostics).toHaveLength(0);
   });
 
-  it("still flags a plain link to a colocated image", async () => {
-    // Only `![]()` embeds go through the image pipeline; a plain
-    // `[text](./x.png)` href resolves as a site route and 404s on the built
-    // site, so the public-dir diagnostic (and its suggestion) stays correct.
+  it("accepts a link to a file beside the page, which is published with it", async () => {
+    // A plain `[text](./x.pdf)` (or a raw `<a href>`) is pointed at the
+    // file's served copy, so it resolves beside the page; one naming no file
+    // there is still looked for in public/.
     const diagnostics = await validateWithPublic([
-      guidePage([link("./screenshot.png")]),
+      guidePage([
+        link("./screenshot.png"),
+        { ...link("./spec.pdf#page=2"), line: 2 },
+        raw("../images/diagram.png", 3),
+        { ...link("./missing.pdf"), line: 4 },
+      ]),
+    ]);
+    expect(
+      diagnostics.map((d) => [d.line, d.code, d.suggestion])
+    ).toStrictEqual([
+      [
+        4,
+        "BLUME_BROKEN_ASSET",
+        "Add the file at public/guides/missing.pdf or fix the link.",
+      ],
+    ]);
+  });
+
+  it("flags an image embed of a file that isn't an image", async () => {
+    // Only images go through the image pipeline; nothing publishes a `.pdf`
+    // embedded as one.
+    const diagnostics = await validateWithPublic([
+      guidePage([image("./spec.pdf")]),
     ]);
     expect(diagnostics.map((d) => d.code)).toStrictEqual([
       "BLUME_BROKEN_ASSET",
     ]);
-    expect(diagnostics[0]?.suggestion).toContain(
-      "public/guides/screenshot.png"
-    );
   });
 
   it("flags an image embed whose target carries a query or fragment suffix", async () => {
@@ -675,7 +942,7 @@ describe("validateLinks — assets against a public dir", () => {
   });
 
   it("resolves an encoded colocated reference exactly like the rewriter", async () => {
-    // One decode, same as `rewriteRelativeImages`: `%20` finds `my photo.png`,
+    // One decode, same as `rewriteRelativeAssets`: `%20` finds `my photo.png`,
     // a double-encoded `%2520` does not — validation must not vouch for a
     // reference the rewriter leaves verbatim.
     const diagnostics = await validateWithPublic([
@@ -685,6 +952,26 @@ describe("validateLinks — assets against a public dir", () => {
       "BLUME_BROKEN_ASSET",
     ]);
     expect(diagnostics[0]?.message).toContain("./my%2520photo.png");
+  });
+
+  it("says why a link to an existing partial is broken", async () => {
+    const diagnostics = await validateWithPublic([
+      guidePage([
+        link("./_draft.md"),
+        { ...link("../_snippets/setup.mdx#steps"), line: 2 },
+        { ...link("./_missing.md"), line: 3 },
+        { ...link("./draft.md"), line: 4 },
+      ]),
+    ]);
+    expect(
+      diagnostics.map((d) => [d.code, d.suggestion?.split(",")[0]])
+    ).toStrictEqual([
+      ["BLUME_BROKEN_LINK", "./_draft.md exists"],
+      ["BLUME_BROKEN_LINK", "../_snippets/setup.mdx exists"],
+      ["BLUME_BROKEN_LINK", "Check the path"],
+      ["BLUME_BROKEN_LINK", "Check the path"],
+    ]);
+    expect(diagnostics[0]?.suggestion).toContain('"!**/_*"');
   });
 
   it("rejects a case-mismatched or directory-shaped colocated reference", async () => {
@@ -711,15 +998,123 @@ describe("validateLinks — assets against a public dir", () => {
     expect(diagnostics[0]?.suggestion).not.toContain("public");
   });
 
-  it("warns on a missing colocated image even without a public directory", async () => {
-    // The page source dir was checked and missed — that is enough to report,
-    // not to demote to the unchecked-assets info aggregate.
+  it("checks colocated images without a public directory", async () => {
+    // No `public/` only means no public files: images beside the page are
+    // still resolved there, found or reported.
     const diagnostics = await validateLinks(
-      makeGraph([guidePage([image("./missing.png")])]),
+      makeGraph([
+        guidePage([image("./screenshot.png"), image("./missing.png", 2)]),
+      ]),
       { publicDir: null }
     );
-    expect(diagnostics.map((d) => d.code)).toStrictEqual([
-      "BLUME_BROKEN_ASSET",
+    expect(diagnostics.map((d) => d.message)).toStrictEqual([
+      "Image ./missing.png was not found next to a.mdx.",
+    ]);
+  });
+
+  it("checks a media src in public/, or beside the page, which publishes it", async () => {
+    const partial = join(contentDir, "_snippets", "media.mdx");
+    const diagnostics = await validateWithPublic([
+      guidePage([
+        // `/guides/a` requests `../logo.png` at `/logo.png`, in public/.
+        src("../logo.png", 1),
+        src("/logo.png?v=2", 2),
+        // Beside the page: the build publishes it and points the src there.
+        src("./screenshot.png", 3),
+        src("./screenshot.png#t=1", 4, "video"),
+        src("./nothing.png", 5),
+        src("/missing.png", 6),
+        // A partial's, rebased onto the page by the include expander.
+        { ...src("../images/diagram.png", 7), file: partial },
+      ]),
+      makePage({
+        id: "remote.mdx",
+        links: [src("./remote.png", 1)],
+        route: "/remote",
+        sourcePath: undefined,
+      }),
+    ]);
+    expect(
+      diagnostics.map((d) => [d.line, d.message, d.suggestion])
+    ).toStrictEqual([
+      [
+        5,
+        "<img src=\"./nothing.png\"> points at /guides/nothing.png, which isn't in the public directory, and there's no ./nothing.png next to a.mdx either.",
+        "Fix the path, or add the file.",
+      ],
+      [
+        6,
+        '<img src="/missing.png"> points at /missing.png, which isn\'t in the public directory.',
+        "Add the file at public/missing.png or fix the src.",
+      ],
+      [
+        1,
+        '<img src="./remote.png"> points at /remote.png, which isn\'t in the public directory.',
+        "Add the file at public/remote.png or fix the src.",
+      ],
+    ]);
+  });
+
+  it("warns about a redirect whose target nothing serves, at its `to`", async () => {
+    const redirects = [
+      { from: "/old", to: "/guides/a#intro" },
+      { from: "/logo", to: "/logo.png" },
+      { from: "/feed", to: "/llms.txt" },
+      { from: "/hop", to: "/old" },
+      { from: "/self", to: "/self" },
+      { from: "/gone", to: "/nowhere?ref=old" },
+      { from: "/elsewhere", to: "https://example.com/missing" },
+      { from: "/beta/:slug*", to: "/guides/:slug*" },
+      { from: "/media/*", to: "/demo/*" },
+      { from: "/alpha/:slug*", to: "/missing/:slug*" },
+    ];
+    const configFile = join(root, "blume.config.ts");
+    await writeFile(
+      configFile,
+      `export default {\n  redirects: ${JSON.stringify(redirects, null, 2)},\n};\n`
+    );
+    const diagnostics = await validateLinks(
+      makeGraph([guidePage([]), makePage({ id: "docs.mdx", route: "/docs" })]),
+      { configFile, generatedFiles: ["/llms.txt"], publicDir, redirects }
+    );
+    expect(diagnostics.map((d) => [d.code, d.line, d.message])).toStrictEqual([
+      [
+        "BLUME_BROKEN_REDIRECT",
+        21,
+        "The redirect from /self sends readers to /self, which no page, file, or other redirect serves.",
+      ],
+      [
+        "BLUME_BROKEN_REDIRECT",
+        25,
+        "The redirect from /gone sends readers to /nowhere?ref=old, which no page, file, or other redirect serves.",
+      ],
+      [
+        "BLUME_BROKEN_REDIRECT",
+        41,
+        "The redirect from /alpha/:slug* sends readers to /missing/:slug*, but nothing is served under /missing/.",
+      ],
+    ]);
+    expect(diagnostics[0]?.file).toBe(configFile);
+  });
+
+  it("checks redirect targets under the base path, with no config file to locate them in", async () => {
+    const diagnostics = await validateLinks(
+      makeGraph([makePage({ id: "a.mdx", route: "/docs/a" })]),
+      {
+        basePath: "/docs",
+        publicDir: null,
+        redirects: [
+          { from: "/old", to: "/a" },
+          { from: "/older", to: "/b" },
+          { from: "/v1/:path*", to: "/:path*" },
+        ],
+      }
+    );
+    expect(diagnostics.map((d) => [d.message, d.line])).toStrictEqual([
+      [
+        "The redirect from /older sends readers to /b, which no page, file, or other redirect serves.",
+        undefined,
+      ],
     ]);
   });
 });
@@ -928,6 +1323,38 @@ describe("validateLinks — relative file links", () => {
     expect(diagnostics).toHaveLength(0);
   });
 
+  it("finds a file renamed between .md and .mdx under its other extension", async () => {
+    // The link predates the rename; the route fallback alone would miss the
+    // file's own slug and ordering prefix.
+    const diagnostics = await validate([
+      makePage({
+        id: "guides/index.mdx",
+        links: [link("./renamed.md"), link("./02-prefixed.md#run")],
+        route: "/guides",
+      }),
+      makePage({ id: "guides/renamed.mdx", route: "/guides/new-name" }),
+      makePage({
+        headings: [heading("Run", "run")],
+        id: "guides/02-prefixed.mdx",
+        route: "/guides/prefixed",
+      }),
+    ]);
+    expect(diagnostics).toHaveLength(0);
+    const routes = new Map([
+      ["/abs/guides/old.md", "/guides/kept"],
+      ["/abs/guides/renamed.mdx", "/guides/new-name"],
+    ]);
+    const from = { isIndex: true, route: "/guides" };
+    const resolveFile = (path: string): string | undefined =>
+      routes.get(`/abs/guides/${path.slice(2)}`);
+    expect(resolveRelativeHref("./renamed.md#x", from, resolveFile)).toBe(
+      "/guides/new-name#x"
+    );
+    expect(resolveRelativeHref("./old.mdx", from, resolveFile)).toBe(
+      "/guides/kept"
+    );
+  });
+
   it("falls back to the route-relative reading for a file it doesn't know", async () => {
     const diagnostics = await validate([
       makePage({
@@ -1050,5 +1477,62 @@ describe("validateLinks — relative file links", () => {
         (diagnostic) => diagnostic.code === "BLUME_BROKEN_LINK"
       )
     ).toHaveLength(0);
+  });
+});
+
+/** A guides index with `links`, beside a prefixed setup page and an about page. */
+const rootLinkPages = (links: PageLink[]) => [
+  makePage({ id: "guides/index.mdx", links, route: "/guides" }),
+  makePage({
+    headings: [heading("Run", "run")],
+    id: "guides/01-setup.md",
+    route: "/getting-started",
+  }),
+  makePage({ id: "about.mdx", route: "/about" }),
+];
+
+describe("validateLinks — root-relative file links", () => {
+  it("checks a link naming a content file at that file's page", async () => {
+    const diagnostics = await validateLinks(
+      makeGraph(
+        rootLinkPages([
+          link("/guides/01-setup.md#run"),
+          { ...link("/base/about.mdx"), line: 2 },
+          { ...link("/about.md"), line: 3 },
+          { ...link("/guides/01-setup.md"), line: 4, raw: true },
+          { ...link("/guides/gone.md"), line: 5 },
+        ])
+      ),
+      { contentRoot: "/abs", deployBase: "/base", publicDir: null }
+    );
+    // `/about.md` names no file: a page's Markdown copy, served as the page
+    // is. A raw `<a href>` ships as written, onto a copy that isn't served.
+    expect(diagnostics.map((d) => [d.line, d.message])).toStrictEqual([
+      [
+        4,
+        "Broken link to /guides/01-setup.md: no page resolves to /guides/01-setup.",
+      ],
+      [5, "Broken link to /guides/gone.md: no page resolves to /guides/gone."],
+    ]);
+  });
+
+  it("resolves only a root-relative link to a Markdown file", () => {
+    const options = {
+      contentRoot: "/abs",
+      deployBase: "",
+      routeOfFile: (file: string) =>
+        file === "/abs/a b.md" ? "/a-b" : undefined,
+    };
+    expect(resolveRootFileHref("/a%20b.md?x#y", options)).toBe("/a-b?x#y");
+    expect(resolveRootFileHref("//cdn.dev/a b.md", options)).toBeUndefined();
+    expect(resolveRootFileHref("./a b.md", options)).toBeUndefined();
+    expect(resolveRootFileHref("/a b", options)).toBeUndefined();
+  });
+
+  it("reads such a link as a route without a content root", async () => {
+    const diagnostics = await validate(
+      rootLinkPages([link("/guides/01-setup.md")])
+    );
+    expect(diagnostics.map((d) => d.code)).toStrictEqual(["BLUME_BROKEN_LINK"]);
   });
 });

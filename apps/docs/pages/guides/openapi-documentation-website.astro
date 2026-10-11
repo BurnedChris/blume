@@ -1,0 +1,528 @@
+---
+// Generate API docs from an OpenAPI spec: checked against the OpenAPI,
+// hand-written API pages, Markdown, and deployment docs, the init starters
+// (cli/init/scaffold.ts), and the OpenAPI source and page builders
+// (openapi/source.ts, openapi/render-mdx.ts) on main. Not yet run end to end
+// on a clean project.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("openapi-documentation-website")}>
+  <p>
+    By the end of this guide, you have a docs site built from an OpenAPI spec.
+    It has an overview page for the API, one page per operation with its
+    parameters, schemas, and code samples, a Try it panel that sends real
+    requests, and a hand-written authentication page in the same sidebar.
+    Every page is static HTML you can host anywhere, with its own URL, search
+    entry, and Markdown copy for agents.
+  </p>
+  <p>
+    The example is a fictional Acme Messages API that sends email and SMS. Swap
+    in your own spec as you go: every step works the same way.
+  </p>
+
+  <h2>Create the project</h2>
+  <p>Scaffold a new Blume project:</p>
+  <CodeBlock code="npx blume init acme-docs" lang="bash" />
+  <p>
+    Pick the <code>docs</code> template when it asks, and keep the default{" "}
+    <code>docs</code> content folder. You get a <code>docs/index.mdx</code>{" "}
+    home page, a <code>blume.config.ts</code>, and a <code>package.json</code>{" "}
+    with <code>dev</code> and <code>build</code> scripts. There's also an{" "}
+    <code>api</code> template that starts you on a sample pet store spec at{" "}
+    <code>/api</code>, but starting from <code>docs</code> shows each piece as
+    you add it.
+  </p>
+
+  <h2>Add your spec</h2>
+  <p>
+    Save the spec as <code>openapi.yaml</code> at the project root, beside{" "}
+    <code>blume.config.ts</code>. A local file is the safer choice: Blume reads
+    it at build time, so a build never depends on fetching the spec from
+    somewhere else. JSON works too. Swagger 2.0 and OpenAPI 3.0 specs are
+    upgraded to 3.1 as Blume reads them, and 3.1 and 3.2 specs are read as
+    written.
+  </p>
+  <CodeBlock
+    code={`openapi: 3.1.0
+info:
+  title: Acme Messages API
+  version: 1.0.0
+  description: Send transactional email and SMS, and manage the templates they use.
+servers:
+  - url: https://api.acme.example/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: Messages
+    description: Send a message and check whether it arrived.
+  - name: Templates
+    description: Reusable message bodies with variables.
+paths:
+  /messages:
+    post:
+      operationId: sendMessage
+      tags: [Messages]
+      summary: Send a message
+      description: Queues an email or SMS for delivery and returns its ID right away.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageRequest"
+            example:
+              channel: email
+              to: ada@example.com
+              template: welcome
+      responses:
+        "202":
+          description: The message is queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+  /messages/{id}:
+    get:
+      operationId: getMessage
+      tags: [Messages]
+      summary: Get a message
+      description: Returns a message and its delivery status.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The message ID, from the response to Send a message.
+          schema:
+            type: string
+          example: msg_8f2k
+      responses:
+        "200":
+          description: The message.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "404":
+          description: No message has that ID.
+  /templates:
+    get:
+      operationId: listTemplates
+      tags: [Templates]
+      summary: List templates
+      description: Returns every template in the workspace.
+      responses:
+        "200":
+          description: The templates.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Template"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: An API key, sent as a bearer token.
+  schemas:
+    SendMessageRequest:
+      type: object
+      required: [channel, to, template]
+      properties:
+        channel:
+          type: string
+          enum: [email, sms]
+          description: How to deliver the message.
+        to:
+          type: string
+          description: An email address, or a phone number in E.164 format.
+        template:
+          type: string
+          description: The ID of the template to send.
+        variables:
+          type: object
+          additionalProperties:
+            type: string
+          description: Values for the template's variables.
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+          example: msg_8f2k
+        status:
+          type: string
+          enum: [queued, sent, delivered, failed]
+        channel:
+          type: string
+          enum: [email, sms]
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+          example: welcome
+        name:
+          type: string
+          example: Welcome email`}
+    lang="yaml"
+    title="openapi.yaml"
+  />
+  <p>
+    The <code>api.acme.example</code> server doesn't exist. When you use your
+    own spec, its <code>servers</code> list is where the Try it panel sends
+    requests, so point it at your real API.
+  </p>
+
+  <h2>Mount the reference</h2>
+  <p>
+    Import the <code>openapi()</code> adapter from <code>blume/reference</code>{" "}
+    and list it under <code>reference</code>. Then add header tabs, one for
+    your guides and one for the reference, so readers can reach it:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  navigation: {
+    tabs: [
+      { label: "Docs", path: "/" },
+      { label: "API reference", path: "/api" },
+    ],
+  },
+  reference: [openapi({ route: "/api", spec: "./openapi.yaml" })],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>route</code> sets where the reference lives. Without it, the
+    reference mounts at <code>/reference</code>. The reference never adds a
+    header tab on its own, so the tab pointing at the same route is what makes
+    it reachable, and it also scopes the sidebar to the reference's pages.
+  </p>
+  <p>Start the dev server and open the site:</p>
+  <CodeBlock code="npm run dev" lang="bash" />
+  <p>
+    The API reference tab opens an overview at <code>/api</code> with the API's
+    version, its server URL, and a section per tag listing its operations. Each
+    operation has its own page, at a URL built from its tag and operation ID:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Operation</th>
+        <th scope="col">Page</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>POST /messages</code></td>
+        <td><code>/api/messages/send-message</code></td>
+      </tr>
+      <tr>
+        <td><code>GET /messages/&#123;id&#125;</code></td>
+        <td><code>/api/messages/get-message</code></td>
+      </tr>
+      <tr>
+        <td><code>GET /templates</code></td>
+        <td><code>/api/templates/list-templates</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    A camelCase operation ID like <code>sendMessage</code> is split into{" "}
+    <code>send-message</code>. An operation with no ID takes its method and path
+    instead, so give every operation an ID if you want URLs that read well.
+  </p>
+
+  <h2>Make the spec read well</h2>
+  <p>
+    Blume builds every page from what the spec says, so most improvements to
+    your reference are improvements to the spec. Here's where each field shows
+    up:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In the spec</th>
+        <th scope="col">On the site</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>info.title</code>, <code>info.description</code></td>
+        <td>The overview page's title and introduction</td>
+      </tr>
+      <tr>
+        <td>A tag's <code>description</code></td>
+        <td>The paragraph under that tag's section on the overview</td>
+      </tr>
+      <tr>
+        <td>An operation's <code>summary</code></td>
+        <td>
+          The page title and sidebar label. Without one, the page is titled{" "}
+          <code>POST /messages</code>.
+        </td>
+      </tr>
+      <tr>
+        <td>An operation's <code>description</code></td>
+        <td>The page's introduction and its search result description</td>
+      </tr>
+      <tr>
+        <td>Parameter and schema descriptions</td>
+        <td>The parameter and schema tables</td>
+      </tr>
+      <tr>
+        <td><code>example</code> values</td>
+        <td>The examples, and the values the Try it form starts with</td>
+      </tr>
+      <tr>
+        <td><code>security</code></td>
+        <td>
+          An Authorization section, and a placeholder credential in every code
+          sample
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Because the example spec sets <code>security</code> at the root, every
+    operation shows an Authorization section, and its curl sample sends{" "}
+    <code>Authorization: Bearer YOUR_TOKEN</code>. To mark one operation as
+    public, give it <code>security: []</code>.
+  </p>
+
+  <h2>Add an authentication guide</h2>
+  <p>
+    A reference answers "what does this endpoint take?" Readers also need "how
+    do I make my first call?", and that belongs in a page you write. Put it in
+    a folder named after the reference route, and it joins the API reference
+    tab's sidebar beside the generated pages:
+  </p>
+  <CodeBlock
+    code={`---
+title: Authentication
+description: Send an API key as a bearer token with every request to the Acme Messages API.
+---
+
+Every request needs an API key, sent in the \`Authorization\` header as a
+bearer token.
+
+## Send your first message
+
+\`\`\`bash
+curl https://api.acme.example/v1/messages \\
+  -H "Authorization: Bearer $ACME_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"channel":"email","to":"ada@example.com","template":"welcome"}'
+\`\`\`
+
+The response holds the message ID. Pass it to
+[Get a message](/api/messages/get-message) to check whether it arrived.`}
+    lang="mdx"
+    title="docs/api/authentication.mdx"
+  />
+  <p>
+    The page lives at <code>/api/authentication</code>, and it links to an
+    operation page by its URL like any other page. That's the whole trick for
+    mixing guides and reference: they're all pages, so they share the sidebar,
+    search, and links.
+  </p>
+
+  <h2>Try a request</h2>
+  <p>
+    Every operation page has a Try it panel, collapsed until a reader opens it.
+    Its form comes from the operation: a field per parameter, a body editor
+    built from the request schema, and an input for the bearer token. The code
+    samples beside it update as the form changes, so a copied curl command
+    always matches what Send would do.
+  </p>
+  <p>
+    Credentials typed into the panel stay in memory and are gone on reload,
+    unless the reader checks Remember on this device. Code samples keep showing{" "}
+    <code>YOUR_TOKEN</code> unless the reader turns on Include my values in
+    samples, so a screenshot or copied snippet doesn't leak a key.
+  </p>
+
+  <h3>Why Try it fails in the browser</h3>
+  <p>
+    The panel sends requests straight from the reader's browser to your API.
+    Browsers only allow that when the API answers with CORS headers that permit
+    the docs site's origin. If your API doesn't, Send fails even though the same
+    request works from curl.
+  </p>
+  <p>
+    You have two ways out. Add your docs origin to the API's CORS allowlist, or
+    route requests through a proxy. Blume ships one: set{" "}
+    <code>playground.proxy</code> to <code>true</code>. It runs as a server
+    route, so it needs a host adapter from <code>blume/deploy</code>:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { vercel } from "blume/deploy";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  deployment: vercel(),
+  reference: [
+    openapi({
+      playground: { proxy: true },
+      route: "/api",
+      spec: "./openapi.yaml",
+    }),
+  ],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The proxy only forwards requests to the servers your spec declares, and
+    only the headers the panel sets, so it can't be aimed at other hosts. If
+    your API already allows the docs origin, skip it and keep a static build.
+  </p>
+
+  <h2>Choose your code samples</h2>
+  <p>
+    Each operation shows samples in curl, JavaScript, and Python by default.
+    Pick your own languages, in the order you want them:
+  </p>
+  <CodeBlock
+    code={`openapi({
+  codeSamples: ["curl", "typescript", "python", "go"],
+  route: "/api",
+  spec: "./openapi.yaml",
+}),`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    If you publish an SDK, show it instead of raw HTTP: add{" "}
+    <code>x-codeSamples</code> to an operation in the spec, each with a{" "}
+    <code>lang</code>, a <code>source</code>, and an optional{" "}
+    <code>label</code>. Those tabs come first, ahead of the generated ones, and
+    they're part of the page's Markdown copy, so agents see your SDK calls too.
+  </p>
+
+  <h2>Build and check</h2>
+  <p>Build the site and serve the production build locally:</p>
+  <CodeBlock
+    code={`npm run build
+npx blume preview`}
+    lang="bash"
+  />
+  <p>Open the URL it prints and check three things:</p>
+  <ul>
+    <li>
+      <strong>The operation URL.</strong> <code>/api/messages/send-message</code>{" "}
+      loads on its own, not only from the sidebar.
+    </li>
+    <li>
+      <strong>Search.</strong> Searching for "send a message" or{" "}
+      <code>POST /messages</code> finds the operation.
+    </li>
+    <li>
+      <strong>The Markdown copy.</strong>{" "}
+      <code>/api/messages/send-message.md</code> returns the page as Markdown,
+      with the endpoint written out as <code>POST /messages</code>. That's what
+      agents read, and it's listed in your site's <code>llms.txt</code> too.
+    </li>
+  </ul>
+  <p>
+    Search matches an operation's summary, description, tag, and endpoint. It
+    doesn't index every field in the schema tables or the generated code
+    samples, so if
+    readers search for a field name, mention it in the operation's description.
+  </p>
+  <p>
+    Run <code>npx blume validate</code> as well. It checks every internal link,
+    including the links from your guides to operation pages.
+  </p>
+
+  <h2>Deploy</h2>
+  <p>
+    Without the proxy, the whole site is static files in <code>dist/</code>,
+    so any static host works. On Vercel and Netlify, Blume detects the site's
+    production URL. Cloudflare Pages only exposes each deploy's own URL, which
+    changes every time, and other hosts expose none, so there, set{" "}
+    <code>deployment.site</code> to your docs URL so the sitemap, canonical
+    links, and Open Graph images are correct. For a step-by-step static deploy, see{" "}
+    <a href="/guides/markdown-docs-github-pages">Deploy Markdown docs to GitHub Pages</a>.
+    With the proxy on, deploy to the host your adapter names; the{" "}
+    <a href="/docs/deployment">deployment docs</a> cover each one.
+  </p>
+
+  <h2>When the spec changes</h2>
+  <p>
+    The reference is rebuilt from the spec on every build, so publishing an
+    updated spec is a matter of committing it and deploying. The dev server
+    watches a local spec file along with your content folder and{" "}
+    <code>blume.config.ts</code>, so saving the spec updates the reference
+    without a restart.
+  </p>
+  <p>
+    One change needs care. An operation's URL comes from its tag and operation
+    ID, so renaming either one moves the page. Add a redirect for the old URL so
+    links and search results keep working:
+  </p>
+  <CodeBlock
+    code={`redirects: [
+  { from: "/api/messages/send-message", to: "/api/messages/create-message" },
+],`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    If the spec comes from your code or another team, and you want to trim or
+    reword it for the docs without editing it,{" "}
+    <a href="/guides/openapi-overlays-public-docs">remove internal endpoints with an overlay</a>{" "}
+    instead.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The build fails with BLUME_OPENAPI_UNAVAILABLE</h3>
+  <p>
+    Blume couldn't read or parse the spec. The message says why: a wrong path,
+    a failed download, or invalid YAML. In <code>blume dev</code> it's a warning
+    and the reference is skipped, so a working dev server can still hide it.
+    Check the path is relative to the project root, like{" "}
+    <code>./openapi.yaml</code>.
+  </p>
+  <h3>The reference is empty</h3>
+  <p>
+    <code>BLUME_OPENAPI_EMPTY</code> means the file parsed but declares no
+    operations under <code>paths</code>. Check that <code>spec</code> points at
+    the OpenAPI document itself, not another YAML file.
+  </p>
+  <h3>There's no API tab</h3>
+  <p>
+    The reference doesn't add a tab. Add one to <code>navigation.tabs</code>{" "}
+    whose <code>path</code> matches the adapter's <code>route</code> exactly.
+  </p>
+  <h3>Send fails but curl works</h3>
+  <p>
+    That's CORS. Allow the docs origin in your API, or turn on the proxy as
+    shown above. With the proxy on, a Custom base URL typed into the panel is
+    refused with a 403, because it isn't one of the spec's servers.{" "}
+    <a href="/guides/api-documentation-cors-errors">Fix CORS errors in an API documentation playground</a>{" "}
+    walks through reading the failed preflight.
+  </p>
+  <h3>A page's URL changed</h3>
+  <p>
+    You renamed an operation ID or moved an operation to another tag. Add a
+    redirect from the old URL, and run <code>npx blume validate</code> to find
+    internal links that still point at it.
+  </p>
+
+  <Callout type="tip">
+    Next, give coding agents direct access to your reference with{" "}
+    <a href="/guides/mcp-server-for-documentation">an MCP server for your docs</a>.
+  </Callout>
+</GuidePage>

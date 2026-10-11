@@ -9,6 +9,8 @@ import type { UIStrings } from "../../core/i18n-ui.ts";
 import { resolveDateFormatOptions } from "../../core/date-format.ts";
 import type { ResolvedDateFormat } from "../../core/schema.ts";
 import type { OpenInChatProvider } from "../../core/open-in-chat.ts";
+import { mcpMenuEntries } from "../../core/mcp-clients.ts";
+import type { McpClientEntry } from "../../core/mcp-clients.ts";
 import type {
   BlumeBanner,
   BlumeClientData,
@@ -41,8 +43,18 @@ import {
   OG_IMAGE_WIDTH,
 } from "../../og/dimensions.ts";
 import { buildStructuredData, toIso } from "../../seo/jsonld.ts";
+import type { AuthorInput } from "../../seo/jsonld.ts";
 import { normalizeXHandle } from "../../seo/x-handle.ts";
 import { withBase, withMountedBase } from "../islands/base-path.ts";
+import { routeSetFor } from "../../core/locale-links.ts";
+import {
+  KEYWORDS_ATTRIBUTE,
+  pagefindRanking,
+} from "../../search/pagefind-ranking.ts";
+import {
+  browserLanguageTargets,
+  LOCALE_REDIRECT_SCRIPT,
+} from "./locale-redirect.ts";
 import { isExternalUrl } from "../../core/base-path.ts";
 import { NEW_TAB_HINT_ID, newTabAttrs } from "../../core/new-tab.ts";
 import Analytics from "./Analytics.astro";
@@ -85,6 +97,7 @@ import { searchLocaleFor } from "./search-locale.ts";
 import PageActions from "./PageActions.astro";
 import PageFeedback from "./PageFeedback.astro";
 import SiteFooter from "./SiteFooter.astro";
+import SiteMetatags from "./SiteMetatags.astro";
 import Pagination from "./Pagination.astro";
 import TableOfContents from "./TableOfContents.astro";
 import VersionBanner from "./VersionBanner.astro";
@@ -104,7 +117,15 @@ interface Props {
   banner?: BlumeBanner | null;
   analytics?: BlumeDataConfig["analytics"] | null;
   navigation: Navigation;
-  mcp?: { name: string; route: string } | null;
+  /**
+   * The hosted MCP server. `clients` lists the "Connect to MCP" menu's
+   * clients in order, and defaults to every built-in one.
+   */
+  mcp?: {
+    clients?: readonly McpClientEntry[];
+    name: string;
+    route: string;
+  } | null;
   page: { title: string; description?: string; route: string };
   headings: Heading[];
   imageZoom?: boolean;
@@ -142,6 +163,11 @@ interface Props {
   pagination?: boolean;
   /** The page's `related` frontmatter: pages to suggest at its foot. */
   related?: RelatedEntry[] | false;
+  /**
+   * The page's `search.boost` and `search.keywords`, for Pagefind, which
+   * reads them from the built page (see search/pagefind-ranking.ts).
+   */
+  search?: { boost?: number; keywords?: string[] };
   exportPdf?: boolean;
   exportEpub?: boolean;
   /**
@@ -171,6 +197,8 @@ interface Props {
   /** The page's `mode` frontmatter: what it shows around its content (see `core/page-modes.ts`). */
   pageMode?: PageMode;
   published?: string | Date | null;
+  /** The page's front matter `authors`, credited in its JSON-LD. */
+  authors?: AuthorInput | AuthorInput[];
   lastModified?: string | null;
   noindex?: boolean;
   structuredDataEnabled?: boolean;
@@ -276,6 +304,7 @@ const {
   feedbackComments = false,
   pagination = true,
   related,
+  search,
   exportPdf,
   exportEpub,
   openInChat,
@@ -286,6 +315,7 @@ const {
   apiRail = false,
   pageMode,
   published,
+  authors,
   lastModified,
   noindex,
   structuredDataEnabled,
@@ -416,10 +446,13 @@ const description = page.description ?? site.description;
 // pages (and the changelog index, which has no `type`) stay `website`.
 const ogType =
   pageType === "blog" || pageType === "changelog" ? "article" : "website";
+// The last-modified date as ISO 8601, parsed once for every surface that
+// carries it; undefined when absent or unparseable.
+const lastModifiedIso = toIso(lastModified);
 // `article:*` timestamps only belong on an article; a docs page carrying them
 // would be declaring properties its `og:type` doesn't define.
 const articlePublished = ogType === "article" ? toIso(published) : undefined;
-const articleModified = ogType === "article" ? toIso(lastModified) : undefined;
+const articleModified = ogType === "article" ? lastModifiedIso : undefined;
 // X sizes the card from `twitter:card`: a large image needs the wide variant,
 // and a page with no image still gets a card (the compact `summary`) rather
 // than rendering as a bare link.
@@ -432,14 +465,12 @@ const xCreator = normalizeXHandle(x?.creator);
 
 // "Last updated on <date>" — the configured `dateFormat`, in UTC (unless the
 // config names a zone) so it matches the changelog timeline.
-const lastModifiedDate = lastModified ? new Date(lastModified) : null;
-const formattedLastModified =
-  lastModifiedDate && !Number.isNaN(lastModifiedDate.getTime())
-    ? new Intl.DateTimeFormat(
-        locale || "en",
-        resolveDateFormatOptions(dateFormat)
-      ).format(lastModifiedDate)
-    : null;
+const formattedLastModified = lastModifiedIso
+  ? new Intl.DateTimeFormat(
+      locale || "en",
+      resolveDateFormatOptions(dateFormat)
+    ).format(new Date(lastModifiedIso))
+  : null;
 
 // This page's raw-Markdown mirror, advertised as a `text/markdown` alternate
 // in the head. Content routes always have one (see `markdownRoutePaths`, which
@@ -454,6 +485,11 @@ const markdownMirror = isBare
 // Needs a configured site to be useful, so the menu is hidden without one.
 const mcpUrl =
   mcp && siteUrl ? new URL(withMountedBase(mcp.route), siteUrl).href : null;
+// Custom clients' labels resolve to the page's locale. Without a list,
+// PageActions shows every built-in client.
+const mcpMenu = mcp?.clients
+  ? mcpMenuEntries(mcp.clients, locale, data.config.i18n?.defaultLocale)
+  : undefined;
 
 // Scope the sidebar (and the breadcrumbs/pagination derived from it) to the
 // active tab's section, so a multi-section site drills each tab into its own
@@ -502,10 +538,14 @@ const structuredData =
   structuredDataEnabled === false || noindex
     ? null
     : buildStructuredData({
+      authors,
       base: import.meta.env.BASE_URL,
       breadcrumbs: crumbs,
       description,
+      homeRoute: navigation.root,
       identity: data.config.identity,
+      jsonLd: data.config.jsonLd,
+      image: ogImage,
       locale,
       modified: lastModified,
       pageType,
@@ -524,6 +564,27 @@ const bannerKey = banner?.dismissible ? banner.key : null;
 // Start the page's icon sprite before anything renders an icon (see
 // icon-sprite.ts); <IconSprite /> at the end of the body emits it.
 createIconSprite(Astro.locals);
+
+const pagefind = pagefindRanking(search ?? {});
+
+// A visitor landing on the default language's home page goes to their
+// browser's language (`i18n.routeByBrowserLanguage`, see locale-redirect.ts).
+const localeTargets = browserLanguageTargets({
+  basePath: data.config.basePath,
+  i18n: data.config.i18n,
+  route: page.route,
+  routes: routeSetFor(data.routes),
+});
+const localeRedirect = localeTargets
+  ? JSON.stringify(
+      Object.fromEntries(
+        Object.entries(localeTargets).map(([code, path]) => [
+          code,
+          withMountedBase(path),
+        ])
+      )
+    )
+  : null;
 ---
 
 <!doctype html>
@@ -531,6 +592,16 @@ createIconSprite(Astro.locals);
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    {
+      localeRedirect && (
+        <script
+          data-default={data.config.i18n?.defaultLocale}
+          data-targets={localeRedirect}
+          is:inline
+          set:html={LOCALE_REDIRECT_SCRIPT}
+        />
+      )
+    }
     {/* Client-side navigation: same-origin link clicks swap the DOM in place
         instead of tearing the document down, so no browser ever paints a blank
         frame between pages (Firefox has no cross-document paint holding and
@@ -595,6 +666,7 @@ createIconSprite(Astro.locals);
     {description && <meta name="twitter:description" content={description} />}
     {xSite && <meta name="twitter:site" content={xSite} />}
     {xCreator && <meta name="twitter:creator" content={xCreator} />}
+    <SiteMetatags tags={data.config.metatags} />
     {
       feeds?.map((feed) => (
         <link
@@ -820,13 +892,20 @@ createIconSprite(Astro.locals);
             />
           )
         }
+        {/* Below `xl`, where the rail is hidden, the page actions ride in
+            the "On this page" dropdown, so it renders wherever the rail
+            would, with or without headings. They render once, in the rail:
+            the dropdown gets an empty mount the actions script moves them
+            into (see PageActions.astro). */}
         {
-          hasToc && (
+          showToc && (
             <TableOfContentsSlot
               headings={tocHeadings}
               title={strings.toc.title}
               variant="mobile"
-            />
+            >
+              <div data-blume-page-actions-mount />
+            </TableOfContentsSlot>
           )
         }
         <PageHeaderSlot headings={tocHeadings} page={page} route={page.route} />
@@ -839,22 +918,33 @@ createIconSprite(Astro.locals);
         <article
           class:list={[articleClass]}
           data-pagefind-body={indexable && !isBare ? "" : undefined}
+          data-pagefind-weight={pagefind.weight}
           dir={contentDir}
           lang={articleLang}
         >
+          {pagefind.keywords && (
+            <span
+              data-pagefind-index-attrs={KEYWORDS_ATTRIBUTE}
+              {...{ [KEYWORDS_ATTRIBUTE]: pagefind.keywords }}
+              hidden
+            />
+          )}
           <slot />
         </article>
         {
-          !isApiOperation && showChrome && (
+          showChrome && (
             <div
               class:list={[
                 // Aligned with the content column, not centered under the
-                // prose measure: a rail page's, a wide page's, or a center
-                // page's wider one.
-                apiRail && "xl:pe-[30.5rem]",
-                (apiRail || modeLayout.width === "full") && "[&>*]:max-w-none",
+                // prose measure: an API page's (beside its example or
+                // request column), a wide page's, or a center page's wider
+                // one.
+                isApiLayout && "xl:pe-[30.5rem]",
+                (isApiLayout || modeLayout.width === "full") &&
+                  "[&>*]:max-w-none",
                 modeLayout.width === "center" && "[&>*]:max-w-[54rem]",
               ]}
+              data-blume-page-end
             >
               {directoryGroup && <Directory group={directoryGroup} />}
               <RelatedPages links={relatedItems} title={strings.page.related} />
@@ -865,7 +955,7 @@ createIconSprite(Astro.locals);
               />
               {formattedLastModified && (
                 <p class="mx-auto mt-10 max-w-content text-muted-foreground text-sm">
-                  {strings.page.lastUpdated} {formattedLastModified}
+                  {strings.page.lastUpdated} <time datetime={lastModifiedIso}>{formattedLastModified}</time>
                 </p>
               )}
               {feedback && (
@@ -885,7 +975,7 @@ createIconSprite(Astro.locals);
         showToc && (
           <aside
             aria-label={strings.toc.title}
-            class="sticky top-16 hidden h-[calc(100dvh-4rem)] scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent overflow-y-auto px-4 pt-6 pb-10 text-sm xl:block"
+            class="sticky top-16 hidden h-[calc(100dvh-4rem)] scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent overflow-y-auto [--blume-rail-inset:1rem] px-(--blume-rail-inset) pt-6 pb-10 text-sm xl:block"
             data-blume-toc
           >
             {hasToc && (
@@ -900,6 +990,7 @@ createIconSprite(Astro.locals);
               editUrl={editUrl}
               exportEpub={exportEpub}
               exportPdf={exportPdf}
+              mcpMenu={mcpMenu}
               mcpName={mcp?.name}
               mcpUrl={mcpUrl}
               openInChat={openInChat}
@@ -939,6 +1030,8 @@ createIconSprite(Astro.locals);
     ></button>
     <script>
       import type { Zoom } from "medium-zoom";
+      import { copyableCode } from "../code-copy.ts";
+      import { languageLabel } from "../code-language.ts";
       import { copyText, createCopyFlash } from "../copy-feedback.ts";
       import { syncDrawerInert } from "./drawer-inert.ts";
       import { chromeIcons as icons } from "../../theme/chrome-icons.ts";
@@ -1015,27 +1108,6 @@ createIconSprite(Astro.locals);
         return panel.matches("pre") ? panel : panel.querySelector("pre");
       };
 
-      const languageLabels: Record<string, string> = {
-        astro: "Astro",
-        bash: "Bash",
-        css: "CSS",
-        html: "HTML",
-        js: "JavaScript",
-        json: "JSON",
-        jsx: "JSX",
-        md: "Markdown",
-        mdx: "MDX",
-        plaintext: "Text",
-        sh: "Shell",
-        shell: "Shell",
-        ts: "TypeScript",
-        tsx: "TSX",
-        txt: "Text",
-        yaml: "YAML",
-        yml: "YAML",
-        zsh: "Zsh",
-      };
-
       // Per-page setup, run on the initial load and again after every
       // client-router swap (which replaces the body with server-rendered
       // markup that has none of this applied). Everything in here binds to
@@ -1110,7 +1182,14 @@ createIconSprite(Astro.locals);
           };
           const flash = createCopyFlash(setChecked, copiedLabel);
           button.addEventListener("click", async () => {
-            if (await copyText(codeText(readPre()))) {
+            // A terminal session copies its commands alone (see
+            // code-copy.ts), keyed off the fence's own language id.
+            const pre = readPre();
+            const language =
+              pre instanceof HTMLElement
+                ? (pre.dataset.blumeLanguage ?? pre.dataset.language)
+                : undefined;
+            if (await copyText(copyableCode(codeText(pre), language))) {
               flash();
             }
           });
@@ -1211,10 +1290,7 @@ createIconSprite(Astro.locals);
             if (pre instanceof HTMLElement) {
               pre.dataset.blumeLanguage = language;
             }
-            pre.setAttribute(
-              "data-language",
-              languageLabels[language.toLowerCase()] ?? language
-            );
+            pre.setAttribute("data-language", languageLabel(language));
           }
           pre.classList.add("group", "relative");
           // The code element is the scroll container (see the theme entry), but
@@ -1314,10 +1390,13 @@ createIconSprite(Astro.locals);
       }
       @media (prefers-reduced-motion: reduce) {
         /* html prefix outranks the library's rules regardless of sheet
-           order; its transition declarations carry !important. */
+           order; its transition declarations carry !important. Near-instant,
+           never `none`: medium-zoom only finishes opening and closing on the
+           image's `transitionend`, so with no transition a zoomed image
+           ignores Escape, clicks, and scrolls forever. */
         html .medium-zoom-image,
         html .medium-zoom-overlay {
-          transition: none !important;
+          transition-duration: 1ms !important;
         }
       }
     </style>

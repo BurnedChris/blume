@@ -9,6 +9,7 @@ import {
   pollingWatch,
   snapshotCache,
 } from "./cache.ts";
+import { extractHeadings } from "./normalize.ts";
 import { REMOTE_TIMEOUT_MS } from "./remote.ts";
 import type {
   ContentSource,
@@ -39,6 +40,26 @@ export interface MdxRemoteSourceOptions {
 // thing on every source type: negation, character classes, nested braces, and
 // extglobs included. Compiled once per enumeration, not per ref.
 
+/**
+ * Whether a ref is included, read the way tinyglobby reads an `include`
+ * array: a `!` pattern excludes what it matches, and the rest include. One
+ * picomatch matcher over the whole array would OR a negation in, and
+ * `!drafts/**` would include every other path, `.txt` files and all.
+ */
+const includeMatcher = (include: string[]): ((ref: string) => boolean) => {
+  // An empty pattern list matches nothing, so an array of only negations
+  // includes nothing, as in tinyglobby.
+  const included = picomatch(
+    include.filter((pattern) => !pattern.startsWith("!"))
+  );
+  const excluded = picomatch(
+    include
+      .filter((pattern) => pattern.startsWith("!"))
+      .map((pattern) => pattern.slice(1))
+  );
+  return (ref) => included(ref) && !excluded(ref);
+};
+
 /** A file to fetch: its source-local ref plus where to read it from. */
 interface RemoteRef {
   ref: string;
@@ -51,19 +72,28 @@ interface RemoteRef {
 // arbitrary third party.
 const GITHUB_HOSTS = new Set(["api.github.com", "raw.githubusercontent.com"]);
 
+const isGithubUrl = (url: string): boolean =>
+  URL.canParse(url) && GITHUB_HOSTS.has(new URL(url).hostname);
+
 const githubHeaders = (url: string): Record<string, string> => {
   const token = process.env.GITHUB_TOKEN;
-  if (!token) {
-    return {};
-  }
-  let host = "";
-  try {
-    host = new URL(url).hostname;
-  } catch {
-    return {};
-  }
-  return GITHUB_HOSTS.has(host) ? { authorization: `Bearer ${token}` } : {};
+  return token && isGithubUrl(url) ? { authorization: `Bearer ${token}` } : {};
 };
+
+// What GitHub answers a request for a private repository's file without a
+// token (404, so it never confirms the repository exists), a token it rejects
+// (401), and a client past the unauthenticated rate limit (403).
+const TOKEN_STATUSES = new Set([401, 403, 404]);
+
+/**
+ * Why a request failed, naming GITHUB_TOKEN when it's unset and a token could
+ * fix the status. A public repository needs no token, so a raw `url` source
+ * declares none up front and only says so here, once a request fails.
+ */
+const statusReason = (url: string, status: number): string =>
+  TOKEN_STATUSES.has(status) && !process.env.GITHUB_TOKEN && isGithubUrl(url)
+    ? `${url} -> ${status}; GITHUB_TOKEN is not set, which a private repository needs`
+    : `${url} -> ${status}`;
 
 /**
  * GET `url`'s body, giving up after {@link REMOTE_TIMEOUT_MS}: a server that
@@ -83,7 +113,7 @@ const fetchText = async (
       signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS),
     });
     if (!res.ok) {
-      throw new Error(`${url} -> ${res.status}`);
+      throw new Error(statusReason(url, res.status));
     }
     return await res.text();
   } catch (error) {
@@ -102,12 +132,23 @@ interface GithubTreeEntry {
   type: string;
 }
 
+/** The files a source reads, and what the listing said about them. */
+interface Enumeration {
+  /**
+   * The configured `path`, described, when the repository at the ref has no
+   * folder there, so the source read nothing.
+   */
+  missing?: string;
+  refs: RemoteRef[];
+  truncated: boolean;
+}
+
 /** Enumerate a GitHub repo subtree, mapping blobs to remote refs. */
 const enumerateGithub = async (
   github: { owner: string; repo: string; ref: string; path: string },
   include: string[],
   doFetch: typeof fetch
-): Promise<{ refs: RemoteRef[]; truncated: boolean }> => {
+): Promise<Enumeration> => {
   const { owner, repo, ref } = github;
   const base = github.path.replaceAll(/^\/|\/$/gu, "");
   const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${ref}?recursive=1`;
@@ -119,7 +160,7 @@ const enumerateGithub = async (
     truncated?: boolean;
   };
   const prefix = base ? `${base}/` : "";
-  const included = picomatch(include);
+  const included = includeMatcher(include);
   const refs = (body.tree ?? []).flatMap((node) => {
     if (!(node.type === "blob" && node.path.startsWith(prefix))) {
       return [];
@@ -138,7 +179,62 @@ const enumerateGithub = async (
   });
   // GitHub caps the recursive tree response (~100k entries / 7MB) and flags it
   // with `truncated`; ignoring it would silently import only part of the repo.
-  return { refs, truncated: body.truncated === true };
+  const truncated = body.truncated === true;
+  // Git has no empty folders, so a complete listing with nothing under
+  // `path` means the path is wrong at this ref (a moved docs folder, a typo).
+  const found =
+    prefix === "" ||
+    truncated ||
+    (body.tree ?? []).some((node) => node.path.startsWith(prefix));
+  return {
+    missing: found ? undefined : `"${base}" in ${owner}/${repo} at ${ref}`,
+    refs,
+    truncated,
+  };
+};
+
+// A line an ATX heading opens (`# Title`); any other first line can only open
+// a setext heading, underlined on the line after it.
+const ATX_HEADING = /^ {0,3}#/u;
+
+/** A remote page's body and front matter, as the source hands them on. */
+interface RemotePage {
+  body: string;
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- pre-validation front matter, as `SourceEntry.data` holds it
+  data: Record<string, unknown>;
+}
+
+/**
+ * Drop a remote page's leading h1 when it is the page's title. A file written
+ * to read on GitHub opens with `# Title`, and Blume renders the page's title
+ * as its h1, so the heading would show twice. A local page loses the
+ * duplicate when its author deletes the heading (the fix the multiple-h1
+ * audit names); a remote file can't be edited from the site that reads it.
+ * The heading's text becomes `title` when the front matter sets none, the
+ * title Blume derives from it anyway, and an h1 that differs from a front
+ * matter title stays. The heading's lines are blanked rather than removed, so
+ * every other line keeps the number it has in the remote file.
+ */
+const withoutTitleHeading = (page: RemotePage): RemotePage => {
+  const lines = page.body.split("\n");
+  const start = lines.findIndex((line) => line.trim() !== "");
+  const span = ATX_HEADING.test(lines[start] ?? "") ? 1 : 2;
+  const [heading] =
+    start === -1
+      ? []
+      : extractHeadings(lines.slice(start, start + span).join("\n"));
+  if (
+    heading?.depth !== 1 ||
+    heading.text === "" ||
+    (page.data.title !== undefined && page.data.title !== heading.text)
+  ) {
+    return page;
+  }
+  lines.fill("", start, start + span);
+  return {
+    body: lines.join("\n"),
+    data: { ...page.data, title: heading.text },
+  };
 };
 
 /**
@@ -169,15 +265,12 @@ export const mdxRemoteSource = (
     });
   };
 
-  const enumerate = async (): Promise<{
-    refs: RemoteRef[];
-    truncated: boolean;
-  }> => {
+  const enumerate = async (): Promise<Enumeration> => {
     if (options.github) {
       return await enumerateGithub(options.github, options.include, doFetch);
     }
     const base = (options.url ?? "").replace(/\/$/u, "");
-    const included = picomatch(options.include);
+    const included = includeMatcher(options.include);
     const refs = (options.files ?? []).flatMap((ref) =>
       included(ref)
         ? [{ editUrl: `${base}/${ref}`, fetchUrl: `${base}/${ref}`, ref }]
@@ -190,12 +283,19 @@ export const mdxRemoteSource = (
     const text = await fetchText(item.fetchUrl, doFetch);
     const parsed = matter(text);
     const format = item.ref.toLowerCase().endsWith(".mdx") ? "mdx" : "md";
-    return {
-      body: { format, text: parsed.content },
+    const page = withoutTitleHeading({
+      body: parsed.content,
       data: parsed.data,
+    });
+    return {
+      body: { format, text: page.body },
+      data: page.data,
       editUrl: item.editUrl,
       hash: hashText(text),
-      raw: text,
+      // The body is the text's tail, after the front matter, which stays as
+      // written: a title taken from the dropped heading lives in `data`, as a
+      // title derived from a local page's heading does.
+      raw: text.slice(0, text.length - parsed.content.length) + page.body,
       ref: item.ref,
     };
   };
@@ -209,12 +309,25 @@ export const mdxRemoteSource = (
       options.name,
       cache,
       async () => {
-        const { refs, truncated } = await enumerate();
+        const { missing, refs, truncated } = await enumerate();
+        if (missing) {
+          skipped.push({
+            code: "BLUME_SOURCE_PATH_MISSING",
+            message: `Source "${options.name}" read no files: there is no folder ${missing}.`,
+            severity: "warning",
+            suggestion:
+              "Check github.path and github.ref against the repository.",
+          });
+        }
         if (truncated) {
+          // The listing covers the whole repository at the ref, whatever
+          // `path` is, so narrowing it doesn't help.
           skipped.push({
             code: "BLUME_SOURCE_TRUNCATED",
-            message: `Source "${options.name}" hit GitHub's tree listing limit; some files were not enumerated. Narrow the source path or split the repo.`,
+            message: `Source "${options.name}" hit GitHub's tree listing limit for the whole repository; some files were not enumerated.`,
             severity: "warning",
+            suggestion:
+              "List the files to read with { url, files } instead, or split the repository.",
           });
         }
         const reasons: string[] = [];

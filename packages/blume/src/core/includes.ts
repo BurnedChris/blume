@@ -5,7 +5,17 @@ import { dirname, extname, join, relative, resolve } from "pathe";
 import { nextFenceState } from "./code-fences.ts";
 import type { FenceState } from "./code-fences.ts";
 import matter from "./frontmatter.ts";
-import { INLINE_CODE, MD_IMAGE, targetOffsetIn } from "./sources/normalize.ts";
+import { resolveRelativeFile } from "./relative-files.ts";
+import {
+  INLINE_CODE,
+  isLinkElementUrl,
+  linkDefinitions,
+  rewriteCardImages,
+  rewriteElementUrls,
+  rewriteImageTargets,
+  rewriteLinkTargets,
+} from "./sources/normalize.ts";
+import type { LinkDefinition } from "./sources/normalize.ts";
 import type { Diagnostic } from "./types.ts";
 import { substituteVariables } from "./variables.ts";
 
@@ -242,7 +252,7 @@ export const malformedIncludeDiagnostic = (
     "This <include> isn't a statement Blume can read, so the page shows it as written.",
   severity: "warning",
   suggestion:
-    "Write <include>./path.mdx</include> on a line of its own, or wrap it with the path on its own line and no blank lines; only lang and meta attributes are read.",
+    'Write <include>./path.mdx</include> on a line of its own, or wrap it with the path on its own line and no blank lines. Attributes take lowercase names and quoted values (plan="Pro"): lang and meta shape a code include, and any other is a prop the included file reads as {{name}}.',
 });
 
 /**
@@ -360,46 +370,57 @@ const resolveIncludePath = (
   return { path };
 };
 
-/**
- * Rewrite one line's relative image targets from the included file's
- * directory to the including file's, so a partial's colocated
- * `![](./diagram.png)` still resolves once its markdown lives in the
- * includer. Mirrors `rewriteLine` in `content-assets.ts`: matches run on an
- * inline-code-masked copy while replacements splice into the real line.
- */
-const rebaseImageLine = (
-  line: string,
-  fromDir: string,
-  toDir: string
-): string => {
-  const masked = line.replaceAll(INLINE_CODE, (span) =>
-    " ".repeat(span.length)
-  );
-  let out = "";
-  let cursor = 0;
-  for (const match of masked.matchAll(MD_IMAGE)) {
-    const target = match.groups?.target ?? "";
-    // Only filesystem-relative targets move with the file: URLs, public-dir
-    // absolutes, and anchors mean the same thing from either directory.
-    if (
-      target.startsWith("/") ||
-      target.startsWith("#") ||
-      URL.canParse(target)
-    ) {
-      continue;
-    }
-    const rebased = relative(toDir, resolve(fromDir, target));
-    const url = rebased.startsWith(".") ? rebased : `./${rebased}`;
-    const offset =
-      (match.index ?? 0) +
-      targetOffsetIn(match[0], target, match.groups?.title);
-    out += line.slice(cursor, offset) + url;
-    cursor = offset + target.length;
-  }
-  return out + line.slice(cursor);
+/** A relative path written in `fromDir`, as written from `toDir`. */
+const movePath = (path: string, fromDir: string, toDir: string): string => {
+  const moved = relative(toDir, resolve(fromDir, path));
+  return moved.startsWith(".") ? moved : `./${moved}`;
 };
 
-/** Rebase every relative image target in expanded lines, skipping fences. */
+/**
+ * An image target written in the included file's directory, rebased onto the
+ * including file's, or `null` when it means the same thing from either: only
+ * filesystem-relative targets move with the file, while URLs, public-dir
+ * absolutes, and anchors stay.
+ */
+const rebaseImageTarget = (
+  target: string,
+  fromDir: string,
+  toDir: string
+): string | null =>
+  target.startsWith("/") || target.startsWith("#") || URL.canParse(target)
+    ? null
+    : movePath(target, fromDir, toDir);
+
+/**
+ * A link to a file beside the included file (`./spec.pdf`, see
+ * `resolveRelativeFile`), rebased onto the including file's directory with
+ * its `?query#fragment` kept, or `null` for any other target. A page link
+ * stays as written: it resolves against the including page, wherever the
+ * partial lives.
+ */
+const rebaseFileTarget = (
+  target: string,
+  fromDir: string,
+  toDir: string
+): string | null => {
+  const file = resolveRelativeFile(fromDir, target);
+  if (file === null) {
+    return null;
+  }
+  const path = target.slice(0, target.length - file.suffix.length);
+  return `${movePath(path, fromDir, toDir)}${file.suffix}`;
+};
+
+/**
+ * Rebase every relative image target in expanded lines, skipping fences, from
+ * the included file's directory to the including file's, so a partial's
+ * colocated `![](./diagram.png)` still resolves once its markdown lives in
+ * the includer. Every destination form is read and written back in its own
+ * form (`![](<./a b.png> "Title")`; see `rewriteImageTargets`). A link,
+ * a reference definition, or an element URL naming a file beside the partial
+ * moves with it too, the way the build publishes such a file (see
+ * `core/content-assets.ts`).
+ */
 const rebaseImages = (
   lines: string[],
   fromDir: string,
@@ -409,11 +430,80 @@ const rebaseImages = (
     return lines;
   }
   let fence: FenceState = null;
-  return lines.map((line) => {
+  const rebased = lines.map((line) => {
     const next = nextFenceState(line, fence);
     const inFence = fence !== null || next !== null;
     fence = next;
-    return inFence ? line : rebaseImageLine(line, fromDir, toDir);
+    return inFence
+      ? line
+      : rewriteImageTargets(line, (target) =>
+          rebaseImageTarget(target, fromDir, toDir)
+        );
+  });
+  // A `<Card img>` is an image embed too, and its tag may wrap onto later
+  // lines, so it's rebased over the whole text, as are links and elements.
+  const toFile = (target: string): string | null =>
+    rebaseFileTarget(target, fromDir, toDir);
+  return rewriteElementUrls(
+    rewriteLinkTargets(
+      rewriteCardImages(rebased.join("\n"), (target) =>
+        rebaseImageTarget(target, fromDir, toDir)
+      ),
+      toFile
+    ),
+    (url) => (isLinkElementUrl(url) ? toFile(url.value) : null)
+  ).split("\n");
+};
+
+/**
+ * A `.md` partial's HTML comments (`<!-- … -->`), written as MDX comments
+ * (`{/* … *\/}`), for splicing into an `.mdx` page. The partial is read in
+ * the page's format, and MDX has no HTML comments: it shows one as text, so
+ * a note meant to stay hidden would render. A comment can span lines, and
+ * its text keeps every line (with any `*\/` broken up so it can't end the
+ * comment early), so line origins hold. Fenced code and inline code show a
+ * comment rather than make one, so they're left as written.
+ */
+const htmlCommentsAsMdx = (lines: readonly string[]): string[] => {
+  let fence: FenceState = null;
+  let inComment = false;
+  return lines.map((line) => {
+    if (!inComment) {
+      const next = nextFenceState(line, fence);
+      const inFence = fence !== null || next !== null;
+      fence = next;
+      if (inFence) {
+        return line;
+      }
+    }
+    const masked = line.replaceAll(INLINE_CODE, (span) =>
+      " ".repeat(span.length)
+    );
+    let out = "";
+    let at = 0;
+    while (at < line.length) {
+      if (inComment) {
+        const close = line.indexOf("-->", at);
+        const end = close === -1 ? line.length : close;
+        out += line.slice(at, end).replaceAll("*/", "* /");
+        if (close === -1) {
+          break;
+        }
+        out += "*/}";
+        at = close + "-->".length;
+        inComment = false;
+      } else {
+        const open = masked.indexOf("<!--", at);
+        if (open === -1) {
+          out += line.slice(at);
+          break;
+        }
+        out += `${line.slice(at, open)}{/*`;
+        at = open + "<!--".length;
+        inComment = true;
+      }
+    }
+    return out;
   });
 };
 
@@ -532,12 +622,17 @@ const expandStatement = async (
   // Props replace their `{{name}}` references line by line, so every line
   // keeps its origin; they reach the file's own nested includes too.
   const { props } = statement.attributes;
+  const rebased = rebaseImages(
+    props ? lines.map((text) => substituteVariables(text, props)) : lines,
+    dirname(path),
+    dirname(filePath)
+  );
   return {
-    lines: rebaseImages(
-      props ? lines.map((text) => substituteVariables(text, props)) : lines,
-      dirname(path),
-      dirname(filePath)
-    ),
+    lines:
+      extname(path).toLowerCase() === ".md" &&
+      extname(filePath).toLowerCase() === ".mdx"
+        ? htmlCommentsAsMdx(rebased)
+        : rebased,
     origins,
   };
 };
@@ -704,6 +799,51 @@ export const expandIncludes = async (
     origins,
     text: lines.join("\n"),
   };
+};
+
+/**
+ * `text` with each of `definitions` it doesn't define itself appended, so a
+ * reference in it resolves through a definition written elsewhere in the
+ * page (CommonMark definitions are document-wide). Definitions render
+ * nothing; they're left off a text that ends in an open code fence, where
+ * they'd show as code.
+ */
+export const withDefinitions = (
+  text: string,
+  definitions: readonly LinkDefinition[]
+): string => {
+  const own = new Set(
+    linkDefinitions(text).map((definition) => definition.key)
+  );
+  const missing = definitions.filter((definition) => !own.has(definition.key));
+  let fence: FenceState = null;
+  for (const line of text.split("\n")) {
+    fence = nextFenceState(line, fence);
+  }
+  return missing.length === 0 || fence !== null
+    ? text
+    : `${text}\n\n${missing.map((definition) => definition.text).join("\n")}\n`;
+};
+
+/**
+ * A page's source with the link-reference definitions its included partials
+ * write appended, for the render to parse. Each partial is spliced after the
+ * page is parsed (see `markdown/include.ts`), so a reference in the page
+ * (`[PEP 508]`) to a definition in a partial would otherwise stay text,
+ * though an include reads as if written inline. The definitions come from
+ * the expansion every surface shares, so a partial's definition of a file
+ * beside it is already rebased onto the page. The page's own definition of
+ * a label wins.
+ */
+export const withIncludedDefinitions = async (
+  body: string,
+  options: { sourcePath: string; contentRoot?: string }
+): Promise<string> => {
+  if (!hasIncludeStatements(body)) {
+    return body;
+  }
+  const expanded = await expandIncludes(body, options);
+  return withDefinitions(body, linkDefinitions(expanded.text));
 };
 
 /**

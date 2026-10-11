@@ -1,0 +1,616 @@
+---
+// Fix CORS errors in an API documentation playground: checked against the
+// OpenAPI (Try it, CORS and the proxy), hand-written API pages, GraphQL,
+// Scalar, deployment, rate limiting, and doctor docs, and against the
+// playground client (components/openapi/playground-client.ts), the built-in
+// proxy (openapi/proxy.ts), its allowlist and warnings (astro/generate.ts),
+// and the static-build gate (cli/prepare.ts) on main. Ran api.mjs and
+// cors.mjs below on Node 24 (on other ports), replayed each preflight with
+// curl, and captured every browser error quoted here from headless Chromium
+// and WebKit (Playwright 1.63), sending the Try it panel's request from a
+// second origin. Probed the preflights of Express with cors 2.8.6,
+// @fastify/cors 11.3.0, hono 4.13.9, and FastAPI 0.141.1 the same way. Not
+// yet run end to end with blume dev and the real panel, or with the proxy
+// deployed.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("api-documentation-cors-errors")}>
+  <p>
+    A request that works in curl but fails from your docs site is almost always
+    CORS. curl sends the request and prints the answer. A browser first asks
+    the API whether the docs site's origin may read it, with a separate
+    preflight request whenever the call carries a bearer token or a JSON body.
+    If the API doesn't answer with the right headers, the browser blocks the
+    call, and the page only learns that the fetch failed.
+  </p>
+  <p>
+    By the end of this guide, you've reproduced the failure with two origins on
+    your machine, read the browser's exact errors, and fixed them with a CORS
+    policy you can copy into your API. You'll also know when Blume's built-in
+    proxy is the better fix.
+  </p>
+  <p>
+    It applies to the Try it panel on Blume's OpenAPI, GraphQL, and hand-written
+    API pages, and to other browser playgrounds: Swagger UI reports it as
+    "Failed to fetch". If your spec's server is a path on the docs site, like{" "}
+    <code>/api</code>, requests are same-origin and CORS never applies. To keep
+    browsers off your API entirely, set <code>playground: false</code> and let
+    readers copy the code samples.
+  </p>
+
+  <h2>Why curl works and the browser doesn't</h2>
+  <p>
+    An origin is a scheme, host, and port, so <code>http://localhost:4321</code>{" "}
+    and <code>http://localhost:8787</code> are different origins, as are{" "}
+    <code>https://docs.acme.example</code> and{" "}
+    <code>https://api.acme.example</code>. When a page on one origin calls
+    another, the browser applies CORS (Cross-Origin Resource Sharing): the API
+    has to say, in response headers, that it allows the calling origin.
+  </p>
+  <p>
+    A plain GET, or a POST with a form body, goes straight to the API, and the
+    browser hides the answer if those headers are missing. Anything else is
+    preflighted: the browser first sends an <code>OPTIONS</code> request
+    describing the real one. An <code>Authorization</code> header or a JSON{" "}
+    <code>Content-Type</code> is enough, so nearly every Try it request is
+    preflighted. The preflight asks three things:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">The preflight sends</th>
+        <th scope="col">The API must answer with</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>Origin: http://localhost:4321</code></td>
+        <td>
+          <code>Access-Control-Allow-Origin</code> set to that exact origin, or{" "}
+          <code>*</code>
+        </td>
+      </tr>
+      <tr>
+        <td><code>Access-Control-Request-Method: POST</code></td>
+        <td>
+          <code>Access-Control-Allow-Methods</code> listing it (GET, HEAD, and
+          POST are always allowed)
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <code>Access-Control-Request-Headers: authorization,content-type</code>
+        </td>
+        <td><code>Access-Control-Allow-Headers</code> listing each one</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The preflight must also get a 2xx status with no redirect, and the real
+    response needs <code>Access-Control-Allow-Origin</code> too. curl never
+    sends a preflight or checks these headers, so the same request succeeds
+    there.
+  </p>
+
+  <h2>Reproduce it with two origins</h2>
+  <p>
+    Save this as <code>api.mjs</code> in any folder. It stands in for the Acme
+    Messages API, with no dependencies and no CORS headers, and like many real
+    APIs, it checks the bearer token before it routes anything.
+  </p>
+  <CodeBlock
+    code={`import { createServer } from "node:http";
+
+const messages = new Map();
+
+const send = (res, status, body) => {
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "X-Request-Id": crypto.randomUUID(),
+  });
+  res.end(JSON.stringify(body));
+};
+
+const readJson = async (req) => {
+  let text = "";
+  for await (const chunk of req) {
+    text += chunk;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+};
+
+createServer(async (req, res) => {
+  const { pathname } = new URL(req.url, "http://localhost");
+
+  if (!req.headers.authorization?.startsWith("Bearer ")) {
+    return send(res, 401, { error: "Send an API key as a bearer token." });
+  }
+
+  if (req.method === "POST" && pathname === "/v1/messages") {
+    const body = await readJson(req);
+    if (!body?.to) {
+      return send(res, 400, { error: "Send channel, to, and template." });
+    }
+    const id = \`msg_\${messages.size + 1}\`;
+    messages.set(id, { channel: body.channel, id, status: "queued" });
+    return send(res, 202, messages.get(id));
+  }
+
+  if (req.method === "GET" && pathname.startsWith("/v1/messages/")) {
+    const message = messages.get(pathname.slice("/v1/messages/".length));
+    if (message) {
+      return send(res, 200, message);
+    }
+  }
+
+  send(res, 404, { error: "Not found." });
+}).listen(8787, () => {
+  console.log("Acme Messages API on http://localhost:8787");
+});`}
+    lang="js"
+    title="api.mjs"
+  />
+  <p>Start it with Node.js 22.19 or later:</p>
+  <CodeBlock code="node api.mjs" lang="bash" />
+  <p>In a second terminal, send a message with curl:</p>
+  <CodeBlock
+    code={`curl -i http://localhost:8787/v1/messages \\
+  -H "Authorization: Bearer test_key" \\
+  -H "Content-Type: application/json" \\
+  -d '{"channel":"email","to":"ada@example.com","template":"welcome"}'`}
+    lang="bash"
+  />
+  <p>
+    It answers <code>202 Accepted</code>. Now the second origin: any Blume site
+    with an <code>openapi()</code> reference that documents{" "}
+    <code>POST /messages</code>, like the one from{" "}
+    <a href="/guides/openapi-documentation-website">Generate API docs from an OpenAPI spec</a>.
+    Start it with <code>npm run dev</code>, at{" "}
+    <code>http://localhost:4321</code>, then:
+  </p>
+  <ol>
+    <li>
+      Open the Send a message page at <code>/api/messages/send-message</code>,
+      and open <strong>Try it</strong>.
+    </li>
+    <li>
+      In <strong>Custom base URL</strong>, enter{" "}
+      <code>http://localhost:8787/v1</code>. It overrides the spec's server.
+    </li>
+    <li>
+      Type any value, like <code>test_key</code>, into the token field under
+      Authorization.
+    </li>
+    <li>
+      Open your browser's developer tools on the Console tab, then select{" "}
+      <strong>Send</strong>.
+    </li>
+  </ol>
+  <p>
+    The panel says the browser blocked the request, and tells you to set{" "}
+    <code>{"playground: { proxy: true }"}</code> on the <code>openapi()</code>{" "}
+    reference, and that the proxy needs server output: a host adapter in{" "}
+    <code>deployment</code>. On a GraphQL or hand-written page, it names that
+    page's setting instead;{" "}
+    <a href="#set-the-proxy-for-each-kind-of-page">the proxy section</a> lists
+    each. Before blaming CORS, Blume checks that something answers at that
+    origin; if nothing does, it says "Couldn't reach the API" instead, which
+    means a wrong URL or a stopped server. The console has the real reason. In
+    Chrome:
+  </p>
+  <CodeBlock
+    code={`Access to fetch at 'http://localhost:8787/v1/messages' from origin 'http://localhost:4321' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource.`}
+    lang="txt"
+  />
+  <p>
+    Safari puts it as{" "}
+    <code>Preflight response is not successful. Status code: 401</code>. Both
+    are about the preflight, not your POST. In Chrome's Network tab, the POST
+    shows <code>CORS error</code> in the Status column, and the preflight is
+    its own <code>OPTIONS</code> row; set the filter to All if you can't see
+    it. MDN lists Firefox's wording under{" "}
+    <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS/Errors">CORS errors</a>.
+  </p>
+
+  <h2>Read the preflight</h2>
+  <p>
+    Replay the preflight with curl, sending the headers Chrome sent:
+  </p>
+  <CodeBlock
+    code={`curl -i -X OPTIONS http://localhost:8787/v1/messages \\
+  -H "Origin: http://localhost:4321" \\
+  -H "Access-Control-Request-Method: POST" \\
+  -H "Access-Control-Request-Headers: authorization,content-type"`}
+    lang="bash"
+  />
+  <p>The failing answer:</p>
+  <CodeBlock
+    code={`HTTP/1.1 401 Unauthorized
+Content-Type: application/json
+X-Request-Id: 00176cb4-3453-4750-96e9-3bb677d338ca
+
+{"error":"Send an API key as a bearer token."}`}
+    lang="http"
+  />
+  <p>
+    Two things are wrong. There's no <code>Access-Control-Allow-Origin</code>,
+    and the status is 401, because the preflight ran into the token check. A
+    preflight never carries the <code>Authorization</code> header, so an API
+    that authenticates before it handles CORS turns every preflight away. Keep
+    this command: with your docs origin in <code>Origin</code>, it tests a
+    staging or production API the same way.
+  </p>
+
+  <h2>Fix the API's CORS policy</h2>
+  <p>Save this beside <code>api.mjs</code> as <code>cors.mjs</code>:</p>
+  <CodeBlock
+    code={`// Origins allowed to call the API from a browser: scheme, host, and port,
+// exactly as the browser sends them, with no path or trailing slash.
+const ALLOWED_ORIGINS = new Set([
+  "https://docs.acme.example",
+  "http://localhost:4321",
+]);
+
+// Sets CORS headers on every response, and answers a preflight itself.
+// Returns true when the request is fully handled.
+export const applyCors = (req, res) => {
+  const { origin } = req.headers;
+  res.setHeader("Vary", "Origin");
+  if (!ALLOWED_ORIGINS.has(origin)) {
+    return false;
+  }
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Access-Control-Expose-Headers", "X-Request-Id");
+
+  const preflight =
+    req.method === "OPTIONS" && req.headers["access-control-request-method"];
+  if (!preflight) {
+    return false;
+  }
+  res.writeHead(204, {
+    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    "Access-Control-Allow-Methods": "GET, POST",
+    "Access-Control-Max-Age": "600",
+  });
+  res.end();
+  return true;
+};`}
+    lang="js"
+    title="cors.mjs"
+  />
+  <p>
+    Then wire it into <code>api.mjs</code>. Add the import below the first
+    line:
+  </p>
+  <CodeBlock code={`import { applyCors } from "./cors.mjs";`} lang="js" />
+  <p>
+    And make these the first lines inside the <code>createServer</code>{" "}
+    handler, before the token check:
+  </p>
+  <CodeBlock
+    code={`  if (applyCors(req, res)) {
+    return;
+  }`}
+    lang="js"
+  />
+  <p>Restart the API and replay the preflight. Now it passes:</p>
+  <CodeBlock
+    code={`HTTP/1.1 204 No Content
+Vary: Origin
+Access-Control-Allow-Origin: http://localhost:4321
+Access-Control-Expose-Headers: X-Request-Id
+Access-Control-Allow-Headers: Authorization, Content-Type
+Access-Control-Allow-Methods: GET, POST
+Access-Control-Max-Age: 600`}
+    lang="http"
+  />
+  <p>
+    Select Send in the panel again. It shows <code>202 Accepted</code>, the
+    response headers including <code>x-request-id</code>, and the queued
+    message. What each part of <code>cors.mjs</code> does:
+  </p>
+  <ul>
+    <li>
+      <strong>The origin is echoed from an allowlist</strong>, because{" "}
+      <code>Access-Control-Allow-Origin</code> takes exactly one origin,
+      written as the browser sends it.
+    </li>
+    <li>
+      <strong><code>Vary: Origin</code></strong> stops caches and CDNs serving
+      one origin's answer to another.
+    </li>
+    <li>
+      <strong>The preflight is answered before authentication</strong>, since
+      it never carries the token.
+    </li>
+    <li>
+      <strong>Every response gets the headers, errors included</strong>, so a
+      401 or 404 reaches the panel as that status, not as a CORS error.
+    </li>
+    <li>
+      <strong><code>Access-Control-Allow-Headers</code> names{" "}
+      <code>Authorization</code></strong>. Add any API key header, like{" "}
+      <code>X-API-Key</code>, and your spec's header parameters. MDN says{" "}
+      <code>*</code> never covers <code>Authorization</code>, even though some
+      browsers accept it today, so list it by name.
+    </li>
+    <li>
+      <strong><code>Access-Control-Allow-Methods</code></strong> needs any
+      method beyond GET, HEAD, and POST, like PUT, PATCH, or DELETE.
+    </li>
+    <li>
+      <strong><code>Access-Control-Max-Age</code></strong> lets the browser
+      reuse a preflight answer for that many seconds, up to its own cap.
+    </li>
+    <li>
+      <strong><code>Access-Control-Expose-Headers</code></strong> lets the page
+      read headers beyond a basic few like <code>Content-Type</code>. Without
+      it, the panel never shows <code>X-Request-Id</code> or your rate-limit
+      headers.
+    </li>
+  </ul>
+
+  <h3>Credentials and allowed origins</h3>
+  <p>
+    In CORS, credentials means cookies and HTTP authentication the browser
+    attaches on its own. The token a reader types into Try it isn't one: it's
+    an ordinary header, which is why it belongs in{" "}
+    <code>Access-Control-Allow-Headers</code>. The panel doesn't ask the browser
+    to attach cookies to another origin either, so your API doesn't need{" "}
+    <code>Access-Control-Allow-Credentials</code>. If it only authenticates
+    with tokens in headers, <code>Access-Control-Allow-Origin: *</code> works
+    for the panel too.
+  </p>
+  <p>
+    Keep an allowlist when the same API serves your own web app with cookie
+    sessions. Those requests carry credentials, which rules out <code>*</code>{" "}
+    (Chrome says it "must not be the wildcard '*' when the request's
+    credentials mode is 'include'") and needs{" "}
+    <code>Access-Control-Allow-Credentials: true</code>. Never pair that with
+    an origin echoed back unchecked, or any website can make logged-in requests
+    as your users and read the answers.
+  </p>
+  <p>
+    List every origin your docs are served from: production,{" "}
+    <code>http://localhost:4321</code> for <code>blume dev</code>, and your own
+    preview hostnames, never a whole platform domain. If your API only accepts
+    a cookie, the panel can't send it, since browsers don't let a page set a{" "}
+    <code>Cookie</code> header. Blume tells the reader to run the code sample
+    from a terminal instead.
+  </p>
+
+  <h3>In your framework</h3>
+  <p>
+    Most frameworks have middleware that does what <code>cors.mjs</code> does.
+    Register it before authentication, and set the origins explicitly:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Framework</th>
+        <th scope="col">Middleware</th>
+        <th scope="col">Watch for</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Express</td>
+        <td><code>cors</code>, with <code>origin</code></td>
+        <td>
+          Echoes whatever headers the preflight asks for unless you set{" "}
+          <code>allowedHeaders</code>. Set <code>exposedHeaders</code> for
+          response headers.
+        </td>
+      </tr>
+      <tr>
+        <td>Fastify</td>
+        <td><code>@fastify/cors</code>, with <code>origin</code></td>
+        <td>Allows only GET, HEAD, and POST unless you set <code>methods</code>.</td>
+      </tr>
+      <tr>
+        <td>Hono</td>
+        <td><code>cors</code> from <code>hono/cors</code>, with <code>origin</code></td>
+        <td>
+          Echoes requested headers unless you set <code>allowHeaders</code>.
+          Set <code>exposeHeaders</code> for response headers.
+        </td>
+      </tr>
+      <tr>
+        <td>FastAPI</td>
+        <td><code>CORSMiddleware</code>, with <code>allow_origins</code></td>
+        <td>
+          Allows only GET and the basic headers by default. Set{" "}
+          <code>allow_methods</code> and <code>allow_headers</code>, or the
+          preflight gets a 400: "Disallowed CORS method, headers".
+        </td>
+      </tr>
+      <tr>
+        <td>Django</td>
+        <td>
+          <code>django-cors-headers</code>, with{" "}
+          <code>CORS_ALLOWED_ORIGINS</code>
+        </td>
+        <td>
+          Put <code>CorsMiddleware</code> as high as possible, before middleware
+          that can answer a request itself.
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Use the proxy when you can't change the API</h2>
+  <p>
+    When another team runs the API, or a gateway in front of it won't allow
+    browser calls, send the panel's requests through a server instead. Blume's
+    built-in proxy is a server route, so it needs a host adapter from{" "}
+    <code>blume/deploy</code>:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { vercel } from "blume/deploy";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  deployment: vercel(),
+  reference: [
+    openapi({
+      playground: { proxy: true },
+      route: "/api",
+      spec: "./openapi.yaml",
+    }),
+  ],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Send then goes to <code>/_api-proxy</code> on the docs site's own origin
+    (under your <code>basePath</code>, if you set one), with the target in a{" "}
+    <code>url</code> query parameter, so CORS never applies. The docs server
+    replays the request and relays the answer, marked with an{" "}
+    <code>x-blume-proxy: 1</code> header you can spot in the Network tab. The
+    proxy is deliberately narrow:
+  </p>
+  <ul>
+    <li>
+      <strong>It needs server output.</strong> A static build stops with{" "}
+      <code>BLUME_SERVER_FEATURE_REQUIRED</code>. Name a host adapter, or drop{" "}
+      <code>output: "static"</code> from the one you have. See{" "}
+      <a href="/docs/deployment#server-rendering">server rendering</a>.
+    </li>
+    <li>
+      <strong>It only calls your spec's servers.</strong> Blume builds its
+      allowlist from every absolute <code>servers[].url</code> in your specs,
+      with variables at their defaults, and checks each redirect against it
+      too. A Custom base URL on another origin gets a 403.
+    </li>
+    <li>
+      <strong>It forwards only what the panel sets</strong>: the credential,
+      header parameters, and the body's <code>Content-Type</code>. Cookies, and
+      headers your host adds, never reach the API.
+    </li>
+    <li>
+      <strong>It has limits.</strong> A body over 4 MB gets a 413, the proxy
+      gives up on an API that doesn't answer within 30 seconds, and each reader
+      is{" "}
+      <a href="/docs/configuration/rate-limiting">rate limited</a> to 30
+      requests every 10 minutes by default.
+    </li>
+  </ul>
+  <p>
+    Weigh what else changes: your docs are no longer static, readers' API keys
+    pass through your docs deployment, and the API sees requests from your host
+    instead of from each reader. When you own the API, fixing CORS is usually
+    the smaller change.
+  </p>
+  <p>
+    To stay static, set <code>proxy</code> to the URL of a proxy you run. The
+    panel sends it the real request with the target in the same{" "}
+    <code>url</code> parameter, so that proxy must answer your docs origin with
+    CORS headers itself, and should refuse targets that aren't your API.
+  </p>
+
+  <h3 id="set-the-proxy-for-each-kind-of-page">Set the proxy for each kind of page</h3>
+  <p>
+    The setting lives wherever the page comes from, and the panel's message
+    names the one for the page you're on. Each takes <code>true</code> for the
+    built-in proxy or the URL of your own:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Pages</th>
+        <th scope="col">Setting in blume.config.ts</th>
+        <th scope="col">Origins the built-in proxy allows</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><a href="/docs/references/openapi#cors-and-the-proxy">OpenAPI reference</a></td>
+        <td><code>{"openapi({ playground: { proxy: true } })"}</code></td>
+        <td>Each absolute <code>servers[].url</code> in the spec</td>
+      </tr>
+      <tr>
+        <td><a href="/docs/references/graphql#try-it-playground">GraphQL reference</a></td>
+        <td><code>{"graphql({ endpoint, playground: { proxy: true } })"}</code></td>
+        <td>
+          The absolute <code>endpoint</code>. Without one, every send is
+          refused, and the build warns.
+        </td>
+      </tr>
+      <tr>
+        <td><a href="/docs/references/api-pages#site-defaults">Hand-written API pages</a></td>
+        <td><code>{"api: { playground: { proxy: true } }"}</code></td>
+        <td>
+          <code>api.server</code>, and any full URL in a page's{" "}
+          <code>api</code> frontmatter
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    All of them share the one <code>/_api-proxy</code> route and the limits
+    above. AsyncAPI pages have no proxy: their composer opens a WebSocket
+    straight from the browser. A{" "}
+    <a href="/docs/references/scalar">Scalar embed</a> brings its own request
+    client, which can't use Blume's proxy: fix CORS on the API, or pass
+    Scalar's own <code>proxyUrl</code> option through <code>scalar()</code>.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>"It does not have HTTP ok status"</h3>
+  <p>
+    Chrome's message ends "Response to preflight request doesn't pass access
+    control check: It does not have HTTP ok status." Something answered the{" "}
+    <code>OPTIONS</code> request before your CORS code: an auth check (401), a
+    router with no <code>OPTIONS</code> route (404 or 405), or FastAPI's
+    middleware refusing a method or header it wasn't given (400). Safari names
+    the status. Move CORS first, and replay the preflight until it returns a
+    2xx.
+  </p>
+  <h3>"Request header field authorization is not allowed"</h3>
+  <p>
+    Add the header the message names to{" "}
+    <code>Access-Control-Allow-Headers</code>. It's usually{" "}
+    <code>authorization</code> or an API key header.
+  </p>
+  <h3>The allowed origin doesn't match</h3>
+  <p>
+    Chrome says the header "has a value ... that is not equal to the supplied
+    origin" and quotes it. A trailing slash like{" "}
+    <code>'http://localhost:4321/'</code> fails, and so do http instead of
+    https, a wrong port, or a missing <code>www</code>. Listing several origins
+    fails too ("contains multiple values"). Echo the one that matched.
+  </p>
+  <h3>"No 'Access-Control-Allow-Origin' header" with no mention of the preflight</h3>
+  <p>
+    The preflight passed, but the real response had no CORS headers. It's
+    usually an error from a layer that runs before your CORS code, like auth
+    middleware or a gateway. Safari shows its status, as in{" "}
+    <code>Status code: 401</code>. Repeat the request with curl and an{" "}
+    <code>Origin</code> header, and make the error carry the headers too.
+  </p>
+  <h3>"Redirect is not allowed for a preflight request"</h3>
+  <p>
+    The server URL redirects, often from http to https, to add or drop a
+    trailing slash, or from an old domain. Browsers won't follow a redirect on
+    a preflight, so put the final URL in your spec's <code>servers</code>.
+  </p>
+  <h3>The proxy answers 403</h3>
+  <p>
+    The target isn't an origin the proxy allows, which is expected for a
+    Custom base URL. For a documented server, check that it's an absolute URL:
+    a relative server like <code>/v1</code>, a variable with no default, a
+    GraphQL reference with no <code>endpoint</code>, or a relative{" "}
+    <code>api.server</code> adds no origin, and <code>blume build</code> warns
+    that the proxy will refuse every request.
+  </p>
+
+</GuidePage>

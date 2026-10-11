@@ -1,7 +1,7 @@
 ---
 title: Descoberta de agentes
 description: >-
-  Como os agentes encontram sua superfície legível por máquina sem adivinhar — o manifesto de legibilidade para agentes, cabeçalhos Link, o catálogo de APIs da RFC 9727, WebMCP, skills publicadas, descoberta via DNS e chaves de Web Bot Auth.
+  Como os agentes encontram sua superfície legível por máquina sem adivinhar — o manifesto de legibilidade para agentes, cabeçalhos Link, o catálogo de APIs da RFC 9727, WebMCP, a skill gerada do seu site e as skills publicadas, descoberta via DNS e chaves de Web Bot Auth.
 ---
 
 Publicar `llms.txt`, espelhos em Markdown, uma API JSON e um servidor MCP é só metade do trabalho — um agente ainda precisa encontrar tudo isso. O Blume anuncia a superfície inteira pelas convenções que os agentes de fato sondam: um manifesto na raiz do site, cabeçalhos `Link` e tags `<link>`, arquivos well-known e o próprio model context do navegador. Tudo aqui vem ligado por padrão e é derivado do que você já habilitou.
@@ -229,6 +229,33 @@ agents: {
 }
 ```
 
+## A skill do seu site [#your-sites-skill]
+
+Todo build escreve uma [agent skill](https://agentskills.io) para a sua documentação, um `SKILL.md` que um agente de código pode instalar para trabalhar com o seu produto. Ela é servida em `/skill.md` e listada no [índice de skills](#skills-discovery). O Blume a monta a partir do que já sabe sobre o site, sem chamar um modelo, então ela não custa nada e muda sempre que a sua documentação muda. Ela contém:
+
+- o título e a descrição do site, e quando um agente deve usar a skill
+- como ler qualquer página como Markdown, além do `llms.txt`, do `llms-full.txt`, do [servidor MCP](/docs/discoverability/mcp), da API JSON e do changelog, quando o site os serve
+- suas referências de API
+- um mapa da documentação na ordem da barra lateral, com um link para o Markdown de cada página junto da sua descrição de uma linha (a meta description da página, como no `llms.txt`)
+
+A skill leva o nome do `title` do seu site (`Acme Docs` vira `acme-docs`). Ela cobre a versão atual no idioma padrão, deixa de fora as páginas de operações de API e as entradas do changelog (cada um desses tem uma linha própria acima do mapa), pula as mesmas páginas que o `llms.txt` pula (rascunhos, páginas ocultas e `noindex`, e páginas com [`ai.exclude`](/docs/discoverability/llms-txt#excluding-a-page)) e lista até 200 páginas, apontando para o `llms.txt` para o restante. Os links são absolutos, então a skill precisa de [`deployment.site`](/docs/deployment); um build sem ele a pula.
+
+A skill gerada é um guia da sua documentação, não um resumo do seu produto. Para ter uma que ensine o seu produto a um agente — configuração, conceitos centrais, tarefas comuns e armadilhas —, peça ao seu agente de código que a escreva a partir da documentação:
+
+```bash
+blume skill --claude   # or --codex
+```
+
+O `blume skill` abre o Claude Code ou o Codex na skill [`blume-write-skill`](/docs/advanced/skills#writing-your-sites-skill), que escreve um `SKILL.md` dentro da sua pasta [`agents.skills`](#skills-discovery) (`./skills` quando ela não está definida, adicionando-a à sua configuração), com o nome do seu site para que ela substitua a gerada. Você revisa e faz commit dela como de qualquer outro arquivo; ela gasta tokens do seu agente uma única vez, não a cada build. Rode de novo depois de uma grande mudança na documentação, já que uma skill escrita à mão não se atualiza sozinha. Sem flag, o `blume skill` mostra onde a skill ficaria e como apontar outro agente para ela.
+
+Qualquer skill com o mesmo nome em `agents.skills`, não importa como você a escreva, substitui a gerada no índice, e também em `/skill.md` quando é um `SKILL.md` solitário. Um `public/skill.md` que você publique vence as duas. Para desligar a skill:
+
+```ts blume.config.ts lineNumbers
+agents: {
+  skillMd: false,
+}
+```
+
 ## Descoberta de skills [#skills-discovery]
 
 Se o seu projeto publica [agent skills](https://agentskills.io) — [o próprio repositório do Blume publica](/docs/advanced/skills) —, aponte `agents.skills` para o diretório que as contém, e o build as publica para descoberta conforme a [RFC de Agent Skills Discovery](https://github.com/cloudflare/agent-skills-discovery-rfc):
@@ -241,7 +268,7 @@ agents: {
 
 O caminho é resolvido a partir da raiz do seu projeto, e cada subdiretório com um `SKILL.md` vira uma skill publicada. Uma skill que é apenas um `SKILL.md` solitário é copiada literalmente para `/.well-known/agent-skills/<name>/SKILL.md` (`type: "skill-md"`); uma skill com recursos de apoio (`scripts/`, `references/`, `assets/`) é empacotada em um `.tar.gz` determinístico (`type: "archive"`) para que suas referências relativas resolvam após a extração, com os bits de execução dos scripts preservados. O índice de descoberta em `/.well-known/agent-skills/index.json` traz o `$schema` v0.2.0 e, por skill, seu nome, tipo, descrição (do frontmatter do `SKILL.md`), URL do artefato e o digest SHA-256 que os clientes usam para verificar os downloads.
 
-Skills com `name`/`description` ausentes ou inválidos segundo a spec são ignoradas com um aviso de build, em vez de publicadas quebradas, e um `public/.well-known/agent-skills/index.json` que você mesmo publique assume o controle de toda a superfície. As skills publicadas também são listadas no [`llms.txt`](/docs/discoverability/llms-txt#generated-sections).
+Skills com `name`/`description` ausentes ou inválidos segundo a spec são ignoradas com um aviso de build, em vez de publicadas quebradas, e um `public/.well-known/agent-skills/index.json` que você mesmo publique assume o controle de toda a superfície. As skills publicadas, incluindo [a do seu próprio site](#your-sites-skill), também são listadas no [`llms.txt`](/docs/discoverability/llms-txt#generated-sections).
 
 ## Descoberta via DNS (DNS-AID) [#dns-based-discovery-dns-aid]
 

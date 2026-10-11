@@ -23,6 +23,8 @@ export default defineComponents({
 
 Die Schlüssel sind die Namen, die du in MDX schreibst (`<Callout>`, `<Pricing>`). Verwende den Dateinamen mit `.tsx`, wenn du React-Komponenten importierst.
 
+Ein großgeschriebenes Tag, das weder eine eingebaute Komponente noch ein [Island](/docs/content/islands) noch ein Override ist, lässt die Seite beim Rendern fehlschlagen. Deshalb warnen `blume dev`, `blume build` und `blume check` schon vorher mit `BLUME_UNKNOWN_COMPONENT` davor — einmal pro Tag-Name, und sie nennen dabei jede Seite, die es verwendet.
+
 ### Referenzformen [#reference-form]
 
 Jedes Override — in `mdx` oder `layout` — akzeptiert drei Formen:
@@ -80,12 +82,12 @@ import Logo from "./components/Logo.astro";
 export default defineComponents({
   layout: {
     Logo, // brand mark + title in the header
-    Footer, // site-wide footer (no built-in — renders only when set)
+    Footer, // site-wide footer, in place of the one `footer` configures
   },
 });
 ```
 
-Verdrahtete Slots:
+Verdrahtete Slots (bei den Namen wird zwischen Groß- und Kleinschreibung unterschieden; jeder andere Schlüssel unter `layout` wird nirgends gerendert, und Blume warnt davor):
 
 | Slot | Ersetzt | Props |
 | --- | --- | --- |
@@ -96,14 +98,16 @@ Verdrahtete Slots:
 | `Sidebar` | Der primäre Navigationsbaum | `items`, `currentRoute` |
 | `MobileNav` | Die Navigation in der mobilen Schublade (standardmäßig `Sidebar`) | `items`, `currentRoute` |
 | `Breadcrumbs` | Der Breadcrumb-Pfad | `crumbs` |
-| `TableOfContents` | Die Gliederung „Auf dieser Seite“ | `headings`, `title`, `variant` |
+| `TableOfContents` | Die Gliederung „Auf dieser Seite“, in der rechten Leiste (`variant: "desktop"`) und im Dropdown über dem Inhalt auf schmaleren Bildschirmen (`"mobile"`) | `headings`, `title`, `variant` |
 | `Pagination` | Die Zurück-/Weiter-Links im Fußbereich | `prev`, `next`, `strings` |
-| `Feedback` | Die Bewertung „War diese Seite hilfreich?“ unter dem Artikel (wird nur gerendert, wenn [`feedback`](/docs/configuration#page-feedback) aktiviert ist) | `strings` |
+| `Feedback` | Die Bewertung „War diese Seite hilfreich?“ unter dem Artikel (wird nur gerendert, wenn [`feedback`](/docs/configuration#page-feedback) aktiviert ist) | `strings`, `comments` |
 | `PageHeader` | Ein Einfügepunkt über dem Artikel (keine eingebaute Komponente) | `page`, `headings`, `route` |
 | `PageFooter` | Ein Einfügepunkt unter dem Artikel (keine eingebaute Komponente) | `page`, `headings`, `route` |
-| `Footer` | Ein seitenweiter Footer nach dem Content-Grid (keine eingebaute Komponente) | `site`, `navigation`, `ui` |
+| `Footer` | Der [seitenweite Footer](/docs/configuration#footer) nach dem Content-Grid: Links, Social-Media-Profile, der Repository-Link und die Cookie-Einstellungen | `footer`, `locale`, `site`, `navigation`, `ui` |
 
-`PageHeader`, `PageFooter` und `Footer` haben keine eingebaute Komponente — sie rendern nichts, bis du sie setzt, was sie zu praktischen Einfügepunkten für ein Werbebanner, einen „Zuletzt aktualisiert“-Hinweis oder einen Marketing-Footer macht.
+Die `mobile`-Variante erhält außerdem die [Seitenaktionen](/docs/content/navigation#page-actions) als Children (ein leeres Element, in das die Aktionen unterhalb von 1.280px aus der rechten Leiste verschoben werden), rendere darin also einen `<slot />`, damit sie auf schmaleren Bildschirmen erhalten bleiben. Sie wird auch auf einer Seite ohne Überschriften gerendert, dann mit leerem `headings`, sodass die Aktionen auch dort angezeigt werden.
+
+`PageHeader` und `PageFooter` haben keine eingebaute Komponente — sie rendern nichts, bis du sie setzt, was sie zu praktischen Einfügepunkten für ein Werbebanner oder einen „Zuletzt aktualisiert“-Hinweis macht. `PageFooter` wird am Fuß jeder Seite gerendert, die Blume aus deinem Content baut, API-Operationsseiten eingeschlossen, gefolgt von `Feedback` und `Pagination`. Eine Seite im [`custom`- oder `frame`-Modus](/docs/content/frontmatter#layout) lässt diesen Bereich am Seitenende weg, zusammen mit ihrem Titel und ihren Breadcrumbs. Eine [eigene Seite](/docs/advanced/custom-pages) unter `pages/` rendert das Layout, in das sie sich selbst einbettet: `RootLayout` nimmt Slot-Overrides über seine `layout`-Prop entgegen, und `PageLayout` hat keinen Bereich am Seitenende. Der eingebaute `Footer` enthält die einzigen Links zu deinem Repository und deinen Social-Media-Profilen, daher sollte ein `Footer`-Override (der Ort für einen Marketing-Footer, den die Konfiguration nicht abbilden kann) sie beibehalten. Wenn `consent` gesetzt ist, behalte außerdem eine Möglichkeit bei, die Einwilligungsabfrage erneut zu öffnen: Jedes Element mit `data-blume-consent-open` funktioniert als Link zu den [Cookie-Einstellungen](/docs/configuration/consent#changing-an-answer).
 
 Layout-Slots akzeptieren dieselben [drei Referenzformen](#reference-form) wie MDX-Overrides, sodass ein Slot ein Pfad-String oder ein hydratisierter Descriptor (`{ component, client }`) sein kann, wenn du einen interaktiven Header oder Footer möchtest.
 

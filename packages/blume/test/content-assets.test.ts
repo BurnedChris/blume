@@ -8,8 +8,15 @@ import {
   collectContentAssets,
   CONTENT_ASSETS_PREFIX,
   contentAssetParam,
-  rewriteRelativeImages,
+  contentAssetUrl,
+  rewriteRelativeAssets,
 } from "../src/core/content-assets.ts";
+import { resolveRelativeFile } from "../src/core/relative-files.ts";
+import {
+  isLinkElementUrl,
+  rewriteElementUrls,
+  rewriteLinkTargets,
+} from "../src/core/sources/normalize.ts";
 
 let root: string;
 let pagePath: string;
@@ -35,16 +42,34 @@ afterAll(async () => {
 
 const rewrite = (
   source: string,
-  over: Partial<Parameters<typeof rewriteRelativeImages>[0]> = {}
+  over: Partial<Parameters<typeof rewriteRelativeAssets>[0]> = {}
 ): string =>
-  rewriteRelativeImages({
+  rewriteRelativeAssets({
     projectRoot: root,
     source,
     sourcePath: pagePath,
     ...over,
   });
 
-describe("rewriteRelativeImages", () => {
+/** A link target's served URL, when it names a file beside the page. */
+const fileUrl = (target: string): string | null => {
+  const file = resolveRelativeFile(join(root, "docs"), target);
+  return file === null
+    ? null
+    : `${contentAssetUrl(contentAssetParam(root, file.path))}${file.suffix}`;
+};
+
+/**
+ * The link and element-URL passes run unconditionally: what the rewrite must
+ * match, whether or not a page's text has a destination that could be
+ * relative.
+ */
+const fullPasses = (source: string): string =>
+  rewriteElementUrls(rewriteLinkTargets(source, fileUrl), (url) =>
+    isLinkElementUrl(url) ? fileUrl(url.value) : null
+  );
+
+describe("rewriteRelativeAssets", () => {
   it("rewrites a colocated relative image to its served URL", () => {
     expect(rewrite("![Alt](./photo.png)")).toBe(
       `![Alt](${CONTENT_ASSETS_PREFIX}/docs/photo.png)`
@@ -67,6 +92,22 @@ describe("rewriteRelativeImages", () => {
   it("keeps a title suffix intact", () => {
     expect(rewrite('![Alt](./photo.png "The title")')).toBe(
       `![Alt](${CONTENT_ASSETS_PREFIX}/docs/photo.png "The title")`
+    );
+  });
+
+  it("reads every destination form, writing the URL back in its own", () => {
+    expect(
+      rewrite(
+        [
+          "![a](<./my photo.png>) ![b]( ./photo.png 'T' ) ![c](./photo.png (T))",
+          String.raw`![d](my%20photo.png) ![e](./images/nested.png "q \" q")`,
+        ].join("\n")
+      )
+    ).toBe(
+      [
+        `![a](<${CONTENT_ASSETS_PREFIX}/docs/my%20photo.png>) ![b]( ${CONTENT_ASSETS_PREFIX}/docs/photo.png 'T' ) ![c](${CONTENT_ASSETS_PREFIX}/docs/photo.png (T))`,
+        String.raw`![d](${CONTENT_ASSETS_PREFIX}/docs/my%20photo.png) ![e](${CONTENT_ASSETS_PREFIX}/docs/images/nested.png "q \" q")`,
+      ].join("\n")
     );
   });
 
@@ -140,6 +181,98 @@ describe("rewriteRelativeImages", () => {
       "docs/photo.png": join(root, "docs", "photo.png"),
       "shared.png": join(root, "shared.png"),
     });
+  });
+});
+
+describe("rewriteRelativeAssets — other files beside the page", () => {
+  const served = `${CONTENT_ASSETS_PREFIX}/docs/spec.pdf`;
+
+  it("rewrites a link, a definition, and a wrapped link to a file", () => {
+    expect(
+      rewrite(
+        [
+          "[Spec](./spec.pdf) and [page 2](<spec.pdf#page=2> 'T').",
+          "[a long",
+          "label](./spec.pdf)",
+          "",
+          "[spec]: ./spec.pdf",
+          "[shot]: ./photo.png?v=2",
+        ].join("\n")
+      )
+    ).toBe(
+      [
+        `[Spec](${served}) and [page 2](<${served}#page=2> 'T').`,
+        "[a long",
+        `label](${served})`,
+        "",
+        `[spec]: ${served}`,
+        `[shot]: ${CONTENT_ASSETS_PREFIX}/docs/photo.png?v=2`,
+      ].join("\n")
+    );
+  });
+
+  it("rewrites a media src and an href, in raw HTML or a component", () => {
+    expect(
+      rewrite(
+        [
+          '<img src="./photo.png" alt="x"> <video src=\'./spec.pdf\'></video>',
+          '<a href="./spec.pdf">Spec</a> <Card title="S" href="./spec.pdf" />',
+          "<Card",
+          '  href="./spec.pdf"',
+          "/>",
+        ].join("\n")
+      )
+    ).toBe(
+      [
+        `<img src="${CONTENT_ASSETS_PREFIX}/docs/photo.png" alt="x"> <video src='${served}'></video>`,
+        `<a href="${served}">Spec</a> <Card title="S" href="${served}" />`,
+        "<Card",
+        `  href="${served}"`,
+        "/>",
+      ].join("\n")
+    );
+  });
+
+  it("leaves page links, missing files, non-links, and code alone", () => {
+    const source = [
+      "[page](./page.mdx) [doc](./page.md#x) [up](../) [none](./missing.pdf)",
+      "![embed](./spec.pdf) [dir](./dir.png) [web](https://x.dev/a.pdf)",
+      "[^1]: spec.pdf is a footnote.",
+      '<iframe src="./spec.pdf"></iframe> <a href="./page">Page</a>',
+      '<Frame src="./spec.pdf" /> <a title="./spec.pdf">x</a>',
+      "`[code](./spec.pdf)` and",
+      "```html",
+      '<a href="./spec.pdf">fenced</a>',
+      "```",
+    ].join("\n");
+    expect(rewrite(source)).toBe(source);
+  });
+
+  it("leaves a page that links only to routes and anchors as it is", () => {
+    const source = [
+      "[Guide](/guide) and [usage](#usage), or [top]( /).",
+      "[ref]: /reference",
+      '<Card title="G" href="/guide" /> <img src="/logo.png"> <a href=\'#x\'>x</a>',
+    ].join("\n");
+    expect(rewrite(source)).toBe(source);
+  });
+
+  it("rewrites every link and element URL the full passes rewrite", () => {
+    const sources = [
+      "[Guide](/guide) [usage](#usage) [web](https://x.dev/a.pdf)",
+      // A code span blanks the bracket that ends the label, so the link reads
+      // past it.
+      "[a`]`](./spec.pdf) and [b](`x`./spec.pdf)",
+      "[spaced](  ./spec.pdf) [angled](<./spec.pdf>) [escaped](\\./spec.pdf)",
+      "[spec]:\t ./spec.pdf\n[route]: /spec.pdf",
+      "[a long\nlabel](spec.pdf#page=2)",
+      "<a href='./spec.pdf'>x</a> <video\n  src=\"spec.pdf\"></video>",
+      '<img src="/logo.png"> <Card href="#x" /> <Card href="./spec.pdf" />',
+    ];
+    for (const source of sources) {
+      expect(rewrite(source)).toBe(fullPasses(source));
+    }
+    expect(rewrite("[a`]`](./spec.pdf)")).toBe(`[a\`]\`](${served})`);
   });
 });
 

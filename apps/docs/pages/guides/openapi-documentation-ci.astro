@@ -1,0 +1,688 @@
+---
+// Keep API docs in sync with backend changes in CI: checked against the
+// OpenAPI, validate, audit, and deployment docs, the reference source and
+// parser (openapi/source.ts, openapi/parse.ts, openapi/model.ts), the schema
+// row type labels (components/openapi/helpers.ts), and the validate and build
+// commands on main; the oasdiff-action README and action.yml at v0.1.17; the
+// oasdiff 1.32.1 CLI help; and the @hono/zod-openapi README. Ran in a scratch
+// fixture: the Hono app and export script on Node 24 with hono 4.13.9,
+// @hono/zod-openapi 1.6.3, and zod 4.6.5 (typechecked; two exports wrote
+// identical bytes; the spec diff below is its output), oasdiff 1.32.1
+// validate and breaking against git refs (the output below), and
+// `blume validate --strict` from the local CLI against the fixture docs (the
+// BLUME_BROKEN_LINK output below, and the redirect clearing it). The workflow
+// itself, `blume build`, and `blume audit` were not run. The docs project was
+// renamed from docs/ to docs-site/ in review, to match the framework guides.
+// Not yet run end to end.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("openapi-documentation-ci")}>
+  <p>
+    To keep API docs in sync with your backend, make the OpenAPI spec something
+    CI produces from your code and something your docs build from. On every
+    pull request, the workflow in this guide exports the spec from the backend,
+    fails if the committed copy is out of date, validates it, checks it for
+    breaking changes, and builds the docs from it. Blume regenerates every
+    operation page from the spec on each build, so when the spec is right, the
+    reference is right.
+  </p>
+  <p>
+    You end up with one GitHub Actions workflow, and pull requests that change
+    an API field show the spec diff, a breaking-change verdict, and a docs
+    build from the new spec. The example is the fictional Acme Messages API,
+    written in Hono with Zod. Any framework that can write its spec to a file
+    works the same way.
+  </p>
+  <p>
+    Blume covers the docs end: the build fails when the spec can't be loaded,
+    and <code>blume validate</code> fails when a page links to an operation that
+    no longer exists. Blume doesn't validate the spec against the OpenAPI
+    schema or compare two versions of it, so this guide adds{" "}
+    <a href="https://github.com/oasdiff/oasdiff">oasdiff</a>, an open-source
+    OpenAPI diff tool, for both. If your spec is a hand-written file in the
+    docs repository, skip the export and freshness steps: Blume already
+    rebuilds the reference from it on every build. Only the reference updates
+    itself, though. For the pages you write about the API, see{" "}
+    <a href="/guides/keep-documentation-updated-agent">keeping docs updated from merged code changes</a>.
+  </p>
+
+  <h2>Four checks, not one</h2>
+  <p>
+    "Are the API docs right?" is really four questions, and each one fails for
+    a different reason:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Check</th>
+        <th scope="col">What it answers</th>
+        <th scope="col">What runs it</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Spec freshness</td>
+        <td>Does the committed spec match the code?</td>
+        <td>Your export script, then <code>git status</code></td>
+      </tr>
+      <tr>
+        <td>Schema validation</td>
+        <td>Is the spec a valid OpenAPI document?</td>
+        <td><code>oasdiff validate</code></td>
+      </tr>
+      <tr>
+        <td>Breaking-change detection</td>
+        <td>Would this change break existing clients?</td>
+        <td><code>oasdiff breaking</code></td>
+      </tr>
+      <tr>
+        <td>Docs build</td>
+        <td>Does the reference build, and do links to it still resolve?</td>
+        <td>
+          <code>blume validate</code>, <code>blume build</code>,{" "}
+          <code>blume audit</code>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Keep them as separate steps, so a red check says which question failed.
+    Don't count on the docs build to catch a bad spec. Blume reads the spec
+    with Scalar's parser, and it only rejects a file that isn't a YAML or JSON
+    object. It warns about a few mistakes that would render wrong, but it
+    isn't a validator. A spec whose <code>/messages/&#123;id&#125;</code>{" "}
+    operation never declares its <code>id</code> parameter still builds a
+    reference, with a <code>BLUME_OPENAPI_PATH_PARAMETER_MISSING</code>{" "}
+    warning, while <code>oasdiff validate</code> rejects it outright.
+  </p>
+
+  <h2>Lay out the repository</h2>
+  <p>
+    This guide keeps the backend and the docs in one repository, with the
+    generated spec committed inside the docs project:
+  </p>
+  <CodeBlock
+    code={`acme/
+├── .github/workflows/api-docs.yml
+├── api/
+│   ├── package.json
+│   ├── scripts/export-openapi.ts
+│   └── src/app.ts
+└── docs-site/
+    ├── blume.config.ts
+    ├── docs/index.mdx
+    ├── openapi.json
+    └── package.json`}
+    lang="txt"
+  />
+  <p>
+    <code>docs-site/</code> is a Blume project made with{" "}
+    <code>npx blume init docs-site --template docs</code>, so its pages live
+    in <code>docs-site/docs/</code>. Commit the lockfile in both folders, since
+    CI installs from them.
+  </p>
+  <p>
+    Committing a generated file is deliberate. Reviewers see every API change
+    as a diff in the pull request, the docs build without the backend's
+    toolchain, and oasdiff can read the base branch's copy without running the
+    old code. The alternative, pointing <code>spec</code> at a URL your running
+    API serves, documents whatever is deployed rather than what the pull
+    request changes. And a build that can't fetch it falls back to the last
+    cached copy, if there is one, with only a <code>BLUME_OPENAPI_STALE</code>{" "}
+    warning.
+  </p>
+
+  <h2>Export a deterministic spec</h2>
+  <p>
+    The backend defines its routes with <code>@hono/zod-openapi</code>, so the
+    spec comes from the same Zod schemas that validate requests. The app lives
+    in its own module and never starts a server, so exporting needs no port,
+    database, or secrets:
+  </p>
+  <CodeBlock
+    code={`import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
+
+const Channel = z
+  .enum(["email", "sms"])
+  .openapi({ description: "How to deliver the message." });
+
+const Message = z
+  .object({
+    id: z.string().openapi({ example: "msg_8f2k" }),
+    status: z.enum(["queued", "sent", "delivered", "failed"]),
+    channel: Channel,
+  })
+  .openapi("Message");
+
+const SendMessageRequest = z
+  .object({
+    channel: Channel,
+    to: z.string().openapi({
+      description: "An email address, or a phone number in E.164 format.",
+    }),
+    template: z
+      .string()
+      .openapi({ description: "The ID of the template to send." }),
+  })
+  .openapi("SendMessageRequest");
+
+const sendMessage = createRoute({
+  method: "post",
+  path: "/messages",
+  operationId: "sendMessage",
+  tags: ["Messages"],
+  summary: "Send a message",
+  description:
+    "Queues an email or SMS for delivery and returns its ID right away.",
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: SendMessageRequest } },
+    },
+  },
+  responses: {
+    202: {
+      description: "The message is queued.",
+      content: { "application/json": { schema: Message } },
+    },
+  },
+});
+
+const getMessage = createRoute({
+  method: "get",
+  path: "/messages/{id}",
+  operationId: "getMessage",
+  tags: ["Messages"],
+  summary: "Get a message",
+  description: "Returns a message and its delivery status.",
+  request: {
+    params: z.object({
+      id: z.string().openapi({
+        param: { name: "id", in: "path" },
+        description: "The message ID, from the response to Send a message.",
+        example: "msg_8f2k",
+      }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "The message.",
+      content: { "application/json": { schema: Message } },
+    },
+  },
+});
+
+export const app = new OpenAPIHono();
+
+app.openAPIRegistry.registerComponent("securitySchemes", "bearerAuth", {
+  type: "http",
+  scheme: "bearer",
+  description: "An API key, sent as a bearer token.",
+});
+
+app.openapi(sendMessage, (c) => {
+  const { channel } = c.req.valid("json");
+  return c.json({ id: "msg_8f2k", status: "queued" as const, channel }, 202);
+});
+
+app.openapi(getMessage, (c) => {
+  const { id } = c.req.valid("param");
+  return c.json(
+    { id, status: "delivered" as const, channel: "email" as const },
+    200
+  );
+});`}
+    lang="ts"
+    title="api/src/app.ts"
+  />
+  <p>
+    The export script imports the app, asks it for an OpenAPI 3.1 document,
+    and writes it into the docs project:
+  </p>
+  <CodeBlock
+    code={`import { writeFileSync } from "node:fs";
+import { app } from "../src/app.ts";
+
+const document = app.getOpenAPI31Document({
+  openapi: "3.1.0",
+  info: {
+    title: "Acme Messages API",
+    version: "1.0.0",
+    description: "Send transactional email and SMS.",
+  },
+  servers: [{ url: "https://api.acme.example/v1" }],
+  security: [{ bearerAuth: [] }],
+  tags: [
+    {
+      name: "Messages",
+      description: "Send a message and check whether it arrived.",
+    },
+  ],
+});
+
+const target = new URL("../../docs-site/openapi.json", import.meta.url);
+writeFileSync(target, JSON.stringify(document, null, 2) + "\\n");`}
+    lang="ts"
+    title="api/scripts/export-openapi.ts"
+  />
+  <p>
+    Give it a script name in the backend's <code>package.json</code>. Node.js
+    22.18 and later run a TypeScript file directly, so there's no build step:
+  </p>
+  <CodeBlock
+    code={`{
+  "name": "acme-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "openapi": "node scripts/export-openapi.ts"
+  },
+  "dependencies": {
+    "@hono/zod-openapi": "1.6.3",
+    "hono": "4.13.9",
+    "zod": "4.6.5"
+  }
+}`}
+    lang="json"
+    title="api/package.json"
+  />
+  <p>
+    Run <code>npm install</code> and <code>npm run openapi</code> in{" "}
+    <code>api/</code>, and commit the <code>docs-site/openapi.json</code> it
+    writes.
+    The freshness check compares bytes, so the export must write the same bytes
+    whenever the code is the same:
+  </p>
+  <ul>
+    <li>
+      Keep dates, commit SHAs, and environment variables out of the document. A
+      version string built from the date changes on every run.
+    </li>
+    <li>
+      Write it with fixed formatting and a trailing newline, and keep your
+      formatter away from the file. Otherwise the formatter and the export keep
+      rewriting each other's output.
+    </li>
+    <li>
+      Commit the lockfile. Another version of the generator can order or word
+      the output differently.
+    </li>
+  </ul>
+  <p>
+    Run the export twice. If the second run changes the file, something in it
+    varies. Other frameworks export the same way; the{" "}
+    <a href="/guides/fastapi-documentation-website">FastAPI</a>,{" "}
+    <a href="/guides/nestjs-api-documentation-website">NestJS</a>, and{" "}
+    <a href="/guides/django-rest-framework-api-documentation">Django REST Framework</a>{" "}
+    guides show their export step.
+  </p>
+
+  <h2>Point Blume at the spec</h2>
+  <p>
+    The docs project mounts the committed spec as an API reference at{" "}
+    <code>/api</code>. The{" "}
+    <a href="/guides/openapi-documentation-website">OpenAPI docs guide</a> covers
+    the reference in depth; this is the minimum:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  deployment: { site: "https://docs.acme.example" },
+  navigation: {
+    tabs: [
+      { label: "Docs", path: "/" },
+      { label: "API reference", path: "/api" },
+    ],
+  },
+  reference: [openapi({ route: "/api", spec: "./openapi.json" })],
+});`}
+    lang="ts"
+    title="docs-site/blume.config.ts"
+  />
+  <p>
+    <code>deployment.site</code> gives the build an absolute URL for the
+    sitemap and canonical links, since Blume can't detect one on a GitHub
+    Actions runner. Next, link to operation pages from the pages you write.
+    Those links are how CI notices when an API change moves a page:
+  </p>
+  <CodeBlock
+    code={`---
+title: Acme Messages
+description: Send transactional email and SMS with the Acme Messages API, then check whether each message arrived.
+---
+
+Queue an email or SMS with [Send a message](/api/messages/send-message). The
+response holds the message's ID: pass it to
+[Get a message](/api/messages/get-message) to see whether it arrived.`}
+    lang="mdx"
+    title="docs-site/docs/index.mdx"
+  />
+  <p>
+    An operation's URL comes from its tag and its operation ID, so{" "}
+    <code>sendMessage</code> under the Messages tag lives at{" "}
+    <code>/api/messages/send-message</code>.
+  </p>
+
+  <h2>Add the workflow</h2>
+  <p>
+    One workflow with three jobs runs on every pull request and every push to{" "}
+    <code>main</code>:
+  </p>
+  <CodeBlock
+    code={`name: API docs
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  spec:
+    name: Spec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Export the spec from the code
+        working-directory: api
+        run: |
+          npm ci
+          npm run openapi
+      - name: Check the committed spec is fresh
+        run: |
+          if [ -n "$(git status --porcelain -- docs-site/openapi.json)" ]; then
+            git diff -- docs-site/openapi.json
+            echo "::error file=docs-site/openapi.json::The spec is stale. Run 'npm run openapi' in api/ and commit docs-site/openapi.json."
+            exit 1
+          fi
+      - name: Validate the spec
+        uses: oasdiff/oasdiff-action/validate@v0.1.17
+        with:
+          spec: docs-site/openapi.json
+
+  breaking:
+    name: Breaking changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: git fetch --depth=1 origin \${{ github.base_ref }}
+      - uses: oasdiff/oasdiff-action/breaking@v0.1.17
+        with:
+          base: "origin/\${{ github.base_ref }}:docs-site/openapi.json"
+          revision: "HEAD:docs-site/openapi.json"
+          fail-on: ERR
+          review: false
+
+  docs:
+    name: Docs
+    needs: spec
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs-site
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npx blume validate --strict
+      - run: npx blume build
+      - run: npx blume audit`}
+    lang="yaml"
+    title=".github/workflows/api-docs.yml"
+  />
+  <p>
+    The oasdiff actions are pinned to a release here; oasdiff also publishes a
+    moving <code>v0</code> tag if you'd rather take updates as they ship. Once
+    the workflow has run, make its checks required in your branch protection
+    rules, so a failing check blocks the merge.
+  </p>
+
+  <h3>Spec freshness</h3>
+  <p>
+    The spec job exports the spec from the checked-out code, then asks Git
+    whether that changed the committed file. <code>git status --porcelain</code>{" "}
+    also catches a spec that was never committed at all, which{" "}
+    <code>git diff</code> alone would miss. When the check fails, the log shows
+    the diff and the annotation says what to run.
+  </p>
+
+  <h3>Schema validation</h3>
+  <p>
+    The same job then runs oasdiff's validate action on the fresh spec. It
+    checks the document against the OpenAPI and JSON Schema rules and annotates
+    each finding. By default it fails only on errors, and reports warnings and
+    info-level findings, like an example that doesn't match its schema, without
+    failing.
+  </p>
+
+  <h3>Breaking changes</h3>
+  <p>
+    The breaking job compares the spec on the base branch with the one in the
+    pull request. oasdiff reads both straight from Git, which is why the job
+    fetches the base branch first. <code>fail-on: ERR</code> fails on changes
+    oasdiff rates as errors, like a new required request field. Set it to{" "}
+    <code>WARN</code> to also fail on warnings, like a removed request field.{" "}
+    <code>review: false</code> keeps both specs inside CI: by default, the
+    action uploads them, encrypted, to oasdiff.com to link a side-by-side
+    review.
+  </p>
+
+  <h3>The docs build</h3>
+  <p>
+    The docs job has <code>needs: spec</code>, so it only builds from a spec
+    the first job has proven fresh and valid. It checks out the same commit, so
+    the spec reaches it through the repository. If you'd rather not commit the
+    spec, upload it as an artifact in the spec job and download it in the docs
+    job, but you lose the reviewable diff and the base-branch copy that oasdiff
+    compares against. Then three Blume commands run:
+  </p>
+  <ul>
+    <li>
+      <code>blume validate --strict</code> checks every link in your pages,
+      including links to operation pages. <code>--strict</code> fails on
+      warnings too, including the reference's own, like{" "}
+      <code>BLUME_OPENAPI_EMPTY</code> for a spec with no operations, or{" "}
+      <code>BLUME_OPENAPI_PATH_PARAMETER_MISSING</code> for a path parameter
+      the operation never declares.
+    </li>
+    <li>
+      <code>blume build</code> fails with <code>BLUME_OPENAPI_UNAVAILABLE</code>{" "}
+      when it can't read or parse the spec. In <code>blume dev</code>, that's
+      only a warning, so a working dev server can hide it.
+    </li>
+    <li>
+      <code>blume audit</code> checks the built HTML and fails on errors, such
+      as a link to a page that was never built
+      (<code>BLUME_AUDIT_LINK_TO_BROKEN</code>). Advisory findings stay
+      warnings.
+    </li>
+  </ul>
+
+  <h2>Change a field in a pull request</h2>
+  <p>
+    Say messages can now be scheduled. On a new branch, add an optional{" "}
+    <code>sendAt</code> field to the request schema:
+  </p>
+  <CodeBlock
+    code={`     template: z
+       .string()
+       .openapi({ description: "The ID of the template to send." }),
++    sendAt: z.iso.datetime().optional().openapi({
++      description: "When to send the message. Omit it to send right away.",
++      example: "2026-10-01T09:00:00Z",
++    }),
+   })
+   .openapi("SendMessageRequest");`}
+    lang="diff"
+    title="api/src/app.ts"
+  />
+  <p>
+    Push only that change, and the spec job fails: the export adds a property
+    the committed spec doesn't have. Export again and commit the spec beside the
+    code:
+  </p>
+  <CodeBlock
+    code={`(cd api && npm run openapi)
+git add docs-site/openapi.json
+git commit -m "Regenerate the OpenAPI spec"
+git push`}
+    lang="bash"
+  />
+  <p>
+    The pull request's diff now shows the API change the way clients will see
+    it:
+  </p>
+  <CodeBlock
+    code={`           "template": {
+             "type": "string",
+             "description": "The ID of the template to send."
++          },
++          "sendAt": {
++            "type": "string",
++            "format": "date-time",
++            "description": "When to send the message. Omit it to send right away.",
++            "example": "2026-10-01T09:00:00Z"
+           }
+         },`}
+    lang="diff"
+    title="docs-site/openapi.json"
+  />
+  <p>
+    Every check passes. The spec is fresh and valid, and oasdiff rates a new
+    optional request field as a non-breaking change. The docs job builds the
+    reference from the new spec, and the Send a message page's request body
+    table gains a <code>sendAt</code> row, typed{" "}
+    <code>string&lt;date-time&gt;</code>, with its description and no required
+    badge. If your host builds a preview for each pull request, as Vercel and
+    Netlify do for a connected repository, reviewers can open{" "}
+    <code>/api/messages/send-message</code> there before anything merges.
+  </p>
+
+  <h3>When the change breaks clients</h3>
+  <p>
+    Now suppose the same pull request also renames <code>to</code> to{" "}
+    <code>recipient</code>. Every client that sends <code>to</code> today
+    breaks, and so does the breaking job. The action annotates each change on
+    the pull request, and the oasdiff CLI (<code>brew install oasdiff</code>)
+    prints the same result locally:
+  </p>
+  <CodeBlock
+    code="oasdiff breaking origin/main:docs-site/openapi.json HEAD:docs-site/openapi.json --fail-on ERR"
+    lang="bash"
+  />
+  <CodeBlock
+    code={`2 changes: 1 error, 1 warning, 0 info
+error	[new-required-request-property] at docs-site/openapi.json
+	in API POST /messages
+		added the new required request property \`recipient\`
+
+warning	[request-property-removed] at docs-site/openapi.json
+	in API POST /messages
+		removed the request property \`to\``}
+    lang="txt"
+  />
+  <p>
+    The new required field is an error, so the job fails. The removed field is
+    only a warning, which <code>fail-on: ERR</code> lets through on its own.
+    What happens next is an API decision rather than a docs one: accept both
+    names for a while, or ship the rename as a new API version.
+  </p>
+
+  <h3>When the change moves a page</h3>
+  <p>
+    Renaming an operation ID moves its page. Change <code>sendMessage</code> to{" "}
+    <code>createMessage</code>, and <code>blume validate</code> fails the docs
+    job, pointing at the link you wrote:
+  </p>
+  <CodeBlock
+    code={`BLUME_BROKEN_LINK Broken link to /api/messages/send-message: no page resolves to /api/messages/send-message.
+  at docs/index.mdx:6:45
+  fix: Check the path, or create the target page.
+  docs: https://useblume.dev/docs/cli/validate`}
+    lang="txt"
+  />
+  <p>
+    Update the link to <code>/api/messages/create-message</code>, and add a
+    redirect so the old URL keeps working for everyone who saved it:
+  </p>
+  <CodeBlock
+    code={`export default defineConfig({
+  // ...the config from above
+  redirects: [
+    { from: "/api/messages/send-message", to: "/api/messages/create-message" },
+  ],
+});`}
+    lang="ts"
+    title="docs-site/blume.config.ts"
+  />
+  <p>
+    <code>blume validate</code> counts a redirect as a page, so the redirect on
+    its own clears the error. <code>blume audit</code> then warns about a link
+    that goes through a redirect (<code>BLUME_AUDIT_LINK_TO_REDIRECT</code>),
+    which is your reminder to update it. The{" "}
+    <a href="/docs/deployment#redirects">redirects docs</a> cover how each host
+    serves them.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The freshness check fails, but you ran the export</h3>
+  <p>
+    The committed file differs from what CI writes. Run the export twice and
+    check <code>git status</code>: if the second run changes the file, the
+    document holds something that varies, like a date. If it only differs in
+    CI, compare dependency versions (CI installs from the lockfile), and check
+    whether a formatter or pre-commit hook rewrote the file after the export.
+  </p>
+  <h3>The breaking job can't load the base spec</h3>
+  <p>
+    On the first pull request, the base branch has no spec yet, and oasdiff
+    stops with <code>path 'docs-site/openapi.json' does not exist in 'main'</code>.
+    Merge the spec and the workflow first, then open API changes against them.
+    An error that says <code>invalid object name 'origin/main'</code> means the
+    base branch wasn't fetched, so keep the <code>git fetch</code> step before
+    the action.
+  </p>
+  <h3>The docs build fails with BLUME_OPENAPI_UNAVAILABLE</h3>
+  <p>
+    Blume couldn't read or parse the spec, and the message says why.{" "}
+    <code>spec</code> is resolved from the Blume project's root, not the
+    repository's, so <code>./openapi.json</code> means{" "}
+    <code>docs-site/openapi.json</code> here. Check that the export script writes to
+    that path, and that the file is committed.
+  </p>
+  <h3>oasdiff rejects a spec Blume renders</h3>
+  <p>
+    That's expected: Blume doesn't validate the spec against the OpenAPI
+    schema, so a spec with errors can still render. It warns only about a
+    short list of mistakes, listed under{" "}
+    <a href="/docs/references/openapi#spec-warnings">spec warnings</a>. Fix
+    the finding in the code the spec comes from, such as a
+    route's parameter schema, and export again. Don't hand-edit{" "}
+    <code>openapi.json</code>: the next export overwrites it, and the freshness
+    check fails until it does. To change what the docs show without changing
+    the API, like hiding internal endpoints, use an{" "}
+    <a href="/guides/openapi-overlays-public-docs">overlay</a>. Blume applies it
+    at build time, and the committed spec stays exactly as exported.
+  </p>
+  <h3>A breaking change is intentional</h3>
+  <p>
+    Sometimes you mean to break clients, say in an API that's still in beta.
+    oasdiff's breaking action takes an <code>err-ignore</code> file of regular
+    expressions for error-level changes to ignore. Add the change there in the
+    same pull request, so the exception gets reviewed along with it.
+  </p>
+</GuidePage>

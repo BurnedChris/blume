@@ -86,7 +86,23 @@ i18n: {
 
 Jede Sprache erhält ihre eigene Seitenleiste, aufgebaut aus den Dateien dieser Locale – so können Übersetzungen in Struktur, Reihenfolge oder Beschriftungen abweichen. Auch [`meta.ts`](/docs/content/meta)-Dateien von Ordnern werden pro Locale aufgelöst: Lege unter dem Standard-Parser `dir` eine `meta.ts` in `fr/guides/` ab, um die französische Gruppe unabhängig zu sortieren. Solange eine Locale keine eigene hat (oder keine gemeinsame `meta.$.ts`), spiegelt ihre Gruppe die der [Fallback](#fallbacks)-Locale – die `meta.ts` dieses Ordners und das `sidebar.display`, das dessen Indexseite setzt –, sodass Seiten, die auf den Fallback zurückgreifen, dieselben Titel, dieselbe Reihenfolge und dieselben einklappbaren Gruppen behalten. Unter dem `dot`-Parser liegen Übersetzungen neben den Originalen, sodass die `meta.ts` eines Ordners für jede Locale gilt. Alles andere zur [Navigation](/docs/content/navigation) funktioniert genauso, pro Sprache.
 
-Header-Tabs werden konfiguriert und nicht aus dem Inhalt abgeleitet, daher werden ihre Beschriftungen in `blume.config.ts` lokalisiert: Ein Tab-`label` akzeptiert neben der einfachen String-Form auch eine Zuordnung pro Locale (`{ en: "Docs", fr: "Documentation" }`) und greift für Locales, die du nicht ausgefüllt hast, auf den Eintrag der Standard-Locale zurück. Siehe [Tabs](/docs/content/navigation#tabs). Tab-Pfade, Header-Links und der Link des Header-Logos wechseln ebenfalls in die Locale der Leserin oder des Lesers, sofern diese Locale die Route bereitstellt, sodass der Header innerhalb einer Sprache bleibt. Eine Route, die nur die Standard-Locale bereitstellt – eine [benutzerdefinierte Seite](/docs/advanced/custom-pages) oder der generierte [Changelog](/docs/advanced/changelog)-Index –, behält ihren eigenen Pfad, statt auf eine lokalisierte URL zu zeigen, die einen 404 liefern würde.
+Header-Tabs, Header-Links und der Footer werden konfiguriert und nicht aus dem Inhalt abgeleitet, daher werden ihre Beschriftungen in `blume.config.ts` lokalisiert. Jede konfigurierte Beschriftung akzeptiert neben der einfachen String-Form auch eine Zuordnung pro Locale (`{ en: "Docs", fr: "Documentation" }`) und greift für Locales, die du nicht ausgefüllt hast, auf den Eintrag der Standard-Locale zurück: Beschriftungen von Tabs und Dropdowns ([Tabs](/docs/content/navigation#tabs)), [hervorgehobene Links](/docs/content/navigation#featured-links), [Header-Aktionen](/docs/content/navigation#header-actions) und der Call-to-Action, Links im [Footer](/docs/configuration#footer), Text und Linktext des [Banners](/docs/configuration#banner) sowie benutzerdefinierte Clients im Menü [Connect to MCP](/docs/discoverability/mcp#connect-to-mcp-menu).
+
+```ts blume.config.ts lineNumbers
+navigation: {
+  cta: {
+    href: "https://acme.dev/signup",
+    label: { en: "Start free", fr: "Essai gratuit" },
+  },
+},
+footer: {
+  links: [
+    { label: { en: "Pricing", fr: "Tarifs" }, href: "https://acme.dev/pricing" },
+  ],
+},
+```
+
+Tab-Pfade, Header- und Footer-Links und der Link des Header-Logos wechseln ebenfalls in die Locale der Leserin oder des Lesers, sofern diese Locale die Route bereitstellt, sodass die Oberfläche innerhalb einer Sprache bleibt. Eine Route, die nur die Standard-Locale bereitstellt – eine [benutzerdefinierte Seite](/docs/advanced/custom-pages) oder der generierte [Changelog](/docs/advanced/changelog)-Index –, behält ihren eigenen Pfad, statt auf eine lokalisierte URL zu zeigen, die einen 404 liefern würde.
 
 ## Fallbacks
 
@@ -101,7 +117,7 @@ i18n: {
 
 Fallback-Seiten verweisen mit ihrem kanonischen Link auf die Seite, die sie kopieren, werden aus dem Suchindex, `llms.txt` und den Seitenlisten von MCP und JSON-API ausgeschlossen und in `hreflang` nicht als echte Übersetzungen ausgewiesen, sodass unübersetzte Inhalte nicht um das Ranking konkurrieren. Sie erscheinen weiterhin in der Seitenleiste dieser Locale, sodass die Navigation vollständig bleibt – eine Leserin oder ein Leser erreicht jede Seite in jeder Sprache.
 
-Release Notes aus einer [`githubReleases()`](/docs/content/sources#github-releases)-Quelle sind die Ausnahme: Sie werden in einer einzigen Sprache veröffentlicht, daher werden sie nie auf die URLs anderer Locales kopiert und zeigen keinen Sprachumschalter.
+Release Notes aus einer [`githubReleases()`](/docs/content/sources/github-releases)-Quelle sind die Ausnahme: Sie werden in einer einzigen Sprache veröffentlicht, daher werden sie nie auf die URLs anderer Locales kopiert und zeigen keinen Sprachumschalter.
 
 :::tip
 Beginne damit, deine wichtigsten Seiten zu übersetzen – die Startseite, den Schnellstart und die wichtigsten Anleitungen – und lass den Rest auf den Fallback zurückgreifen. Du kannst Übersetzungen mit der Zeit ergänzen, ohne Links zu beschädigen.
@@ -125,7 +141,26 @@ Blume validiert die Struktur jedes Ergebnisses – Frontmatter, Code-Fences, Lin
 
 ## Der Sprachumschalter [#the-language-switcher]
 
-Wenn i18n aktiviert ist, erscheint automatisch ein Sprachumschalter im Header, generiert aus deinen `locales`. Für jede Seite verlinkt er die passende Übersetzung in jeder Sprache; wo eine Übersetzung fehlt, verlinkt er die Fallback-Seite und kennzeichnet sie als nicht übersetzt. Es gibt nichts zu konfigurieren. Seiten aus einer [GitHub Releases](/docs/content/sources#github-releases)-Quelle sind die Ausnahme: Release Notes gibt es nur in einer Sprache, daher werden diese Seiten ohne Umschalter gerendert.
+Wenn i18n aktiviert ist, erscheint automatisch ein Sprachumschalter im Header, generiert aus deinen `locales`. Für jede Seite verlinkt er die passende Übersetzung in jeder Sprache; wo eine Übersetzung fehlt, verlinkt er die Fallback-Seite und kennzeichnet sie als nicht übersetzt. Sind Fallbacks deaktiviert (`fallbackLocale: null`), gibt es keine Seite, die er verlinken könnte, daher lässt der Umschalter diese Sprache weg. Es gibt nichts zu konfigurieren. Seiten aus einer [GitHub Releases](/docs/content/sources/github-releases)-Quelle sind die Ausnahme: Release Notes gibt es nur in einer Sprache, daher werden diese Seiten ohne Umschalter gerendert.
+
+## Routing nach Browsersprache [#routing-by-browser-language]
+
+Um Besucherinnen und Besucher in ihre eigene Sprache zu schicken, aktiviere `routeByBrowserLanguage`:
+
+```ts blume.config.ts lineNumbers
+i18n: {
+  defaultLocale: "en",
+  locales: [
+    { code: "en", label: "English" },
+    { code: "fr", label: "Français" },
+  ],
+  routeByBrowserLanguage: true,
+}
+```
+
+Wer dann von außerhalb der Website auf der Startseite der Standardsprache landet, gelangt zur Startseite in der im Browser bevorzugten Sprache, sofern die Website sie anbietet. Blume probiert jede Sprache, die der Browser bevorzugt, der Reihe nach aus und sucht zuerst nach einem exakt passenden Code, dann nach der Basissprache (`fr-CA` findet `fr`). Steht die Standardsprache an erster Stelle, bleibt die Besucherin oder der Besucher auf der Seite. Sobald eine Leserin oder ein Leser über den Sprachumschalter eine Sprache wählt, merkt sich Blume die Auswahl und leitet nicht mehr weiter. Nur die Startseite leitet weiter; ein Link auf jede andere Seite öffnet sich so, wie er geschrieben ist.
+
+Die Weiterleitung läuft im Browser, bevor die Seite dargestellt wird, daher funktioniert sie bei jedem Host, auch bei statischen Builds. Sie ist standardmäßig deaktiviert, weil Suchmaschinen in einer Sprache crawlen: Wenn du sie aktivierst, behalte die [`hreflang`-Alternates](#seo) bei, die Blume ausgibt, damit die Seiten jeder Sprache weiterhin indexiert werden.
 
 ## Übersetzte Benutzeroberfläche [#translated-ui]
 
@@ -152,14 +187,14 @@ i18n: {
 Lokalisiertes SEO wird für dich erledigt – keine Metadaten pro Seite zu schreiben:
 
 - `<html lang>` und `dir` werden anhand der aktiven Locale gesetzt.
-- `hreflang`-Alternates verlinken jede echte Übersetzung einer Seite, plus ein `x-default`, das auf die Standard-Locale zeigt.
+- `hreflang`-Alternates verlinken jede echte Übersetzung einer Seite, die Suchmaschinen indexieren dürfen (eine Übersetzung mit `noindex`, eine ausgeblendete oder eine, deren kanonische URL woanders liegt, wird ausgelassen), plus ein `x-default`, das auf die Standard-Locale zeigt.
 - Kanonische URLs sind locale-korrekt, und JSON-LD führt `inLanguage`.
 
 Setze [`deployment.site`](/docs/deployment), damit diese als absolute URLs ausgegeben werden können.
 
 ## Suche [#search]
 
-Die Suche ist auf die aktive Sprache beschränkt: Auf einer `/fr/…`-Seite liefert der Dialog französische Ergebnisse, mit einem Umschalter **Alle Sprachen**, um auf einmal über alle Locales zu suchen. Der Standardindex (Orama) und der FlexSearch-Index filtern im Browser; gehostete Anbieter führen eine `locale`-Facette auf jedem Datensatz.
+Die Suche ist auf die aktive Sprache beschränkt: Auf einer `/fr/…`-Seite liefert der Dialog französische Ergebnisse, mit einem Umschalter **Alle Sprachen**, um auf einmal über alle Locales zu suchen. Der Standardindex (Orama) und der FlexSearch-Index filtern im Browser, Pagefind führt einen Index pro Sprache, und Algolia, Orama Cloud und Typesense führen ein `locale`-Feld auf jedem Datensatz. Mixedbread kann nicht nach Sprache eingrenzen, daher erstreckt sich damit jede Suche über alle Locales, und der Dialog hat keinen Umschalter. Unter [Suche](/docs/configuration/search) erfährst du, wie die einzelnen Adapter damit umgehen.
 
 ## Rechts-nach-links [#right-to-left]
 

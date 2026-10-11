@@ -1,0 +1,704 @@
+---
+// Payload as a docs CMS: checked against the Payload source and custom source
+// docs, the content sources overview (caching, preview, sync), the deployment
+// docs, and on main the payload() adapter (sources/payload.ts), its engine and
+// Lexical lowering (core/sources/payload.ts, lexical.ts, lower.ts, remote.ts),
+// source naming and snapshots (core/sources/resolve.ts, cache.ts), draft
+// filtering (core/project-graph.ts), and the dev, build, and sync flags.
+// Payload against its API key, drafts, Lexical features, and blocks docs, and
+// deploy hooks against Vercel's docs (September 2026).
+//
+// Ran: a blank Payload 3.90.2 app on SQLite with the collections below
+// (typechecked with tsc after generate:types), the seed script via `payload
+// run`, REST requests with the right and the wrong auth collection and with
+// and without draft=true, Blume's scanProject over both configs below
+// (published and preview) against that app, the unsupported-node check over
+// the snapshots it wrote, and the afterChange/afterDelete hooks against a
+// local endpoint. Not yet run end to end: no blume dev, build, sync, or
+// deploy, the admin panel steps weren't clicked through, and image.domains
+// wasn't tried on CMS images. Review: aligned the preview, deploy, and
+// rebuild steps with the other CMS guides (Vercel deploy hooks, VERCEL_ENV,
+// and Deployment Protection checked against Vercel's docs), and corrected the
+// missing-key troubleshooting against cli/prepare.ts and
+// core/sources/cache.ts. Rechecked the unsupported-node warning, fields.order,
+// and init's .gitignore against core/sources/payload.ts, lexical.ts,
+// remote.ts, and cli/commands/init.ts.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const blumeConfigTsCode = `import { defineConfig } from "blume";
+import { custom, filesystem } from "blume/sources";
+import { payloadSource } from "blume/sources/payload.ts";
+
+// A fenced code block that outlasts any backticks inside the code.
+const fence = (code: string, language: string) => {
+  const runs = code.match(/\`+/g) ?? [];
+  const ticks = "\`".repeat(Math.max(3, ...runs.map((run) => run.length + 1)));
+  return \`\${ticks}\${language}\\n\${code}\\n\${ticks}\`;
+};
+
+export default defineConfig({
+  title: "Acme Docs",
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      custom(
+        payloadSource({
+          name: "guides",
+          prefix: "guides",
+          url: process.env.PAYLOAD_URL ?? "http://localhost:3000",
+          collection: "docs",
+          authCollection: "integrations",
+          serializers: {
+            Code: (fields) =>
+              fence(String(fields.code ?? ""), String(fields.language ?? "")),
+          },
+        })
+      ),
+    ],
+  },
+});`;
+---
+
+<GuidePage guide={guideById("payload-cms-documentation-website")}>
+  <p>
+    To turn a Payload collection into a docs site, point Blume's{" "}
+    <code>payload()</code> source at it. On every build, Blume reads the
+    collection's published documents through Payload's REST API, turns their
+    Lexical rich text into Markdown, and builds static pages with a sidebar,
+    search, and Markdown copies for agents. Editors keep writing in the Payload
+    admin panel.
+  </p>
+  <p>
+    By the end of this guide, you have a Payload docs collection with drafts
+    and code blocks, an API key that lets Blume read it, a protected preview
+    of unpublished pages, and a production site that rebuilds whenever an
+    editor publishes. The example is a knowledge base for Acme, a fictional API that
+    sends email and SMS.
+  </p>
+  <p>
+    Payload 3 runs inside a Next.js app, so if you already render a Next.js
+    frontend and need only a few help pages, querying Payload from that app is
+    the smaller change. If your writers are happy with Markdown in Git, skip
+    the CMS: Blume reads a folder of Markdown with no source config at all. This
+    guide is for when docs belong in Payload beside the rest of your content,
+    but readers need docs navigation, search, and a site you deploy on its own.
+  </p>
+
+  <h2>Define the docs collection</h2>
+  <p>
+    You need a Payload 3 app. To start one, run{" "}
+    <code>npx create-payload-app@3 -n cms -t blank</code> and pick a database.
+    The blank template comes with a Users collection and a Media collection for
+    uploads, and Media is readable by anyone, which matters later.
+  </p>
+  <p>Add a collection for the docs:</p>
+  <CodeBlock
+    code={`import type { CollectionConfig } from 'payload'
+import {
+  BlocksFeature,
+  CodeBlock,
+  HeadingFeature,
+  lexicalEditor,
+} from '@payloadcms/richtext-lexical'
+
+export const Docs: CollectionConfig = {
+  slug: 'docs',
+  admin: {
+    useAsTitle: 'title',
+    defaultColumns: ['title', 'slug', '_status', 'updatedAt'],
+  },
+  access: {
+    // Only signed-in users and API keys can read docs through the API.
+    read: ({ req }) => Boolean(req.user),
+  },
+  versions: { drafts: true },
+  fields: [
+    { name: 'title', type: 'text', required: true },
+    { name: 'slug', type: 'text', required: true, unique: true, index: true },
+    { name: 'description', type: 'textarea' },
+    {
+      name: 'content',
+      type: 'richText',
+      editor: lexicalEditor({
+        features: ({ defaultFeatures }) => [
+          // Blume has no Markdown for relationship nodes, so don't offer them.
+          ...defaultFeatures.filter((feature) => feature.key !== 'relationship'),
+          // The page title is the h1, so the body starts at h2.
+          HeadingFeature({ enabledHeadingSizes: ['h2', 'h3', 'h4'] }),
+          BlocksFeature({
+            blocks: [
+              CodeBlock({
+                defaultLanguage: 'ts',
+                languages: { ts: 'TypeScript', bash: 'Shell', json: 'JSON' },
+              }),
+            ],
+          }),
+        ],
+      }),
+    },
+  ],
+}`}
+    lang="ts"
+    title="src/collections/Docs.ts"
+  />
+  <p>
+    Blume maps <code>title</code>, <code>description</code>, <code>slug</code>,{" "}
+    <code>content</code>, and <code>updatedAt</code> by default, so these field
+    names need no mapping; for other names, set the source's{" "}
+    <code>fields</code> option. The read rule keeps the collection out of
+    Payload's public API, so drafts can't leak through it, and the docs site
+    becomes the only public copy. <code>versions.drafts</code> adds Payload's{" "}
+    <code>_status</code> field and the Save Draft and Publish buttons. The
+    editor keeps Payload's default features except relationships, which Blume
+    can't render, and adds Payload's premade code block, whose block type is{" "}
+    <code>Code</code>. Payload marks that block experimental, so check it when
+    you upgrade Payload.
+  </p>
+  <p>
+    Then add a collection whose only job is to hold API keys. Nobody signs in
+    as an integration, so it turns off email and password login:
+  </p>
+  <CodeBlock
+    code={`import type { CollectionConfig } from 'payload'
+
+export const Integrations: CollectionConfig = {
+  slug: 'integrations',
+  admin: { useAsTitle: 'name' },
+  auth: {
+    useAPIKey: true,
+    disableLocalStrategy: true,
+  },
+  fields: [{ name: 'name', type: 'text', required: true }],
+}`}
+    lang="ts"
+    title="src/collections/Integrations.ts"
+  />
+  <p>Register both in your config:</p>
+  <CodeBlock
+    code={`import { Docs } from './collections/Docs'
+import { Integrations } from './collections/Integrations'
+
+export default buildConfig({
+  // ...everything else the template set
+  collections: [Users, Integrations, Media, Docs],
+})`}
+    lang="ts"
+    title="src/payload.config.ts"
+  />
+
+  <h2>Seed some content</h2>
+  <p>
+    This script uses Payload's Local API to create an image, two published
+    pages, and a draft. Lexical stores rich text as JSON, so a few helpers
+    build the nodes: a nested list, a checklist, an upload, a code block, and a
+    link.
+  </p>
+  <CodeBlock
+    code={`import config from '@payload-config'
+import { getPayload } from 'payload'
+import sharp from 'sharp'
+
+const payload = await getPayload({ config })
+
+// Lexical JSON helpers: a run of text, and an element node with children.
+type LexicalNode = { type: string; version: number; [key: string]: unknown }
+const BOLD = 1
+const CODE = 16
+const text = (value: string, format = 0): LexicalNode => ({
+  type: 'text', text: value, format, detail: 0, mode: 'normal', style: '', version: 1,
+})
+const node = (type: string, children: LexicalNode[], extra: object = {}): LexicalNode => ({
+  type, children, direction: 'ltr', format: '', indent: 0, version: 1, ...extra,
+})
+const item = (children: LexicalNode[], extra: object = {}) =>
+  node('listitem', children, { value: 1, ...extra })
+const body = (...children: LexicalNode[]) => ({
+  root: { type: 'root', children, direction: 'ltr' as const, format: '' as const, indent: 0, version: 1 },
+})
+
+// A placeholder diagram, drawn in memory so the seed needs no files.
+const png = await sharp({
+  create: { width: 1200, height: 600, channels: 3, background: '#4f46e5' },
+}).png().toBuffer()
+const diagram = await payload.create({
+  collection: 'media',
+  data: { alt: 'A message moving from the API to the recipient' },
+  file: { data: png, mimetype: 'image/png', name: 'message-flow.png', size: png.length },
+})
+
+await payload.create({
+  collection: 'docs',
+  data: {
+    _status: 'published',
+    title: 'Send your first message',
+    slug: 'send-your-first-message',
+    description: 'Send a transactional email with the Acme Messages API.',
+    content: body(
+      node('paragraph', [
+        text('Every request needs an API key in the '),
+        text('Authorization', CODE),
+        text(' header.'),
+      ]),
+      node('heading', [text('Before you start')], { tag: 'h2' }),
+      node('list', [
+        item([text('Create an API key in the dashboard.')]),
+        item([node('list', [item([text('Use a test key while you build.')])], {
+          listType: 'bullet', tag: 'ul',
+        })], { value: 2 }),
+        item([text('Verify the domain you send from.')], { value: 2 }),
+      ], { listType: 'number', start: 1, tag: 'ol' }),
+      node('list', [
+        item([text('API key created')], { checked: true }),
+        item([text('Sender domain verified')], { checked: false }),
+      ], { listType: 'check', tag: 'ul' }),
+      { type: 'upload', relationTo: 'media', value: diagram.id, fields: {}, format: '', version: 3 },
+      node('heading', [text('Send a request')], { tag: 'h2' }),
+      {
+        type: 'block', format: '', version: 2,
+        fields: {
+          blockType: 'Code', blockName: '', language: 'bash',
+          code: 'curl -X POST https://api.acme.example/v1/messages -H "Authorization: Bearer $ACME_API_KEY" -d @message.json',
+        },
+      },
+      node('quote', [
+        text('Test keys never deliver.', BOLD),
+        text(' Messages sent with them only show up in the dashboard.'),
+      ]),
+      node('paragraph', [
+        text('Next, '),
+        node('link', [text('reuse message bodies with templates')], {
+          fields: { linkType: 'custom', url: '/guides/message-templates', newTab: false },
+          version: 3,
+        }),
+        text('.'),
+      ]),
+    ),
+  },
+})
+
+await payload.create({
+  collection: 'docs',
+  data: {
+    _status: 'published',
+    title: 'Use message templates',
+    slug: 'message-templates',
+    description: 'Reuse a message body with variables.',
+    content: body(node('paragraph', [text('A template holds a message body with variables like {{name}}.')])),
+  },
+})
+
+await payload.create({
+  collection: 'docs',
+  draft: true,
+  data: {
+    _status: 'draft',
+    title: 'Track delivery with webhooks',
+    slug: 'webhooks',
+    description: 'Get a request when a message is delivered.',
+    content: body(node('paragraph', [text('Acme calls your endpoint when a message is delivered or bounces.')])),
+  },
+})
+
+console.log('Seeded the docs collection.')
+process.exit(0)`}
+    lang="ts"
+    title="src/seed.ts"
+  />
+  <p>Run it once from the Payload app's folder:</p>
+  <CodeBlock code="npx payload run src/seed.ts" lang="bash" />
+  <p>
+    Slugs are unique, so a second run stops at the first page. The link points
+    at <code>/guides/message-templates</code>, the path that page will have on
+    the docs site.
+  </p>
+
+  <h2>Create an API key for Blume</h2>
+  <p>
+    Start Payload with <code>npm run dev</code>, open{" "}
+    <code>http://localhost:3000/admin</code>, and create your first user. Then:
+  </p>
+  <ol>
+    <li>Open <strong>Integrations</strong> and choose <strong>Create New</strong>.</li>
+    <li>Name it <code>Blume</code> and check <strong>Enable API Key</strong>.</li>
+    <li>Copy the key. Payload shows it only once.</li>
+    <li>Save.</li>
+  </ol>
+  <p>
+    Blume sends the key as <code>Authorization: users API-Key &lt;key&gt;</code>.
+    The first word names the collection the key belongs to, and it defaults to{" "}
+    <code>users</code>, so this setup needs <code>authCollection</code> set to{" "}
+    <code>integrations</code>. Payload invalidates every API key when its{" "}
+    <code>PAYLOAD_SECRET</code> changes, so keep that secret stable across
+    deploys.
+  </p>
+
+  <h2>Connect Blume</h2>
+  <p>Create the docs site in its own folder, beside the Payload app:</p>
+  <CodeBlock code="npx blume init acme-docs" lang="bash" />
+  <p>
+    Pick the <code>docs</code> template, and when it asks where your content
+    lives, pick <code>filesystem</code> and <code>payload</code>. The Payload
+    source needs no SDK, since it speaks the REST API directly. Replace the
+    generated config with:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { filesystem, payload } from "blume/sources";
+
+export default defineConfig({
+  title: "Acme Docs",
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      payload({
+        prefix: "guides",
+        url: process.env.PAYLOAD_URL ?? "http://localhost:3000",
+        collection: "docs",
+        authCollection: "integrations",
+      }),
+    ],
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The source reads the key from <code>PAYLOAD_API_KEY</code>. Blume loads{" "}
+    <code>.env.local</code> for you, and <code>blume init</code> already
+    listed it in <code>.gitignore</code>, so put both values there:
+  </p>
+  <CodeBlock
+    code={`echo "PAYLOAD_URL=http://localhost:3000" >> .env.local
+echo "PAYLOAD_API_KEY=paste-your-key-here" >> .env.local`}
+    lang="bash"
+  />
+  <p>
+    With Payload still running, run <code>npx blume dev</code>. The two
+    published pages appear under{" "}
+    <code>/guides/</code> in a Guides sidebar group, sorted by title. To order
+    them, add a number field to Docs and name it in the source's{" "}
+    <code>fields.order</code>. Each document's <code>slug</code> is its path
+    under the prefix, and its <code>updatedAt</code> is the date a{" "}
+    <a href="/docs/configuration#last-modified">Last updated</a> line shows,
+    once you turn that on. The draft stays out.
+  </p>
+
+  <h2>Check what carried over</h2>
+  <p>
+    Open <code>/guides/send-your-first-message</code>. Blume lowers each Lexical
+    node to Markdown like this:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">In Payload</th>
+        <th scope="col">On the page</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Paragraphs, headings, quotes, horizontal rules</td>
+        <td>As written</td>
+      </tr>
+      <tr>
+        <td>Bold, italic, strikethrough, inline code</td>
+        <td>As written</td>
+      </tr>
+      <tr>
+        <td>Underline, subscript, superscript, alignment, indentation</td>
+        <td>Plain text, formatting dropped</td>
+      </tr>
+      <tr>
+        <td>Bullet, numbered, and check lists, nested or not</td>
+        <td>Markdown lists</td>
+      </tr>
+      <tr>
+        <td>Links to a URL</td>
+        <td>Links, for web, mail, phone, and relative addresses</td>
+      </tr>
+      <tr>
+        <td>Internal links to another document</td>
+        <td>The link's text, with no link</td>
+      </tr>
+      <tr>
+        <td>Uploads</td>
+        <td>An image at the upload's URL, with its alt text</td>
+      </tr>
+      <tr>
+        <td>Blocks and inline blocks</td>
+        <td>A serializer's output, or nothing</td>
+      </tr>
+      <tr>
+        <td>Relationships, tables, anything else</td>
+        <td>Nothing</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Where Blume has no Markdown for a node, it writes a comment into the page
+    source, like <code>&lt;!-- unsupported Lexical block: Code --&gt;</code>, and
+    nothing renders there, so the "Send a request" section is missing its
+    command. The fetch that finds one warns{" "}
+    <code>BLUME_SOURCE_UNSUPPORTED_NODE</code>, naming the page and the node,
+    but a dev server serving its snapshot doesn't fetch, so doesn't repeat it.
+    To list every such node at any time, read the snapshot Blume keeps of the
+    source. Run this in the docs project after <code>blume dev</code> or{" "}
+    <code>blume build</code> has fetched it:
+  </p>
+  <CodeBlock
+    code={`node -e '
+const { readdirSync, readFileSync } = require("node:fs");
+const dir = ".blume/cache/guides";
+for (const snapshot of readdirSync(dir))
+  for (const page of JSON.parse(readFileSync(dir + "/" + snapshot + "/entries.json", "utf8")))
+    for (const [, what] of page.raw.matchAll(/unsupported (.+?) ?(?:-->|\\*\\/)/g))
+      console.log(snapshot, page.ref, "-", what);
+'`}
+    lang="bash"
+  />
+  <p>
+    <code>guides</code> is the source's prefix. With the seed content, it
+    prints one line, for the code block in{" "}
+    <code>send-your-first-message.md</code>. Run it again whenever editors
+    start using a new block.
+  </p>
+
+  <h2>Render code blocks with a serializer</h2>
+  <p>
+    A serializer turns a block into Markdown or a Blume component, keyed by the
+    block's type. The <code>payload()</code> adapter takes plain options only,
+    so to pass functions, build the source with its engine,{" "}
+    <code>payloadSource</code>, and hand it to <code>custom()</code>:
+  </p>
+  <CodeBlock
+    code={blumeConfigTsCode}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The engine takes the same options plus <code>name</code>, which names its
+    snapshot folder. With a serializer set, the source writes its pages as MDX,
+    and it still escapes what editors typed, so the <code>{"{{name}}"}</code>{" "}
+    on the templates page renders as written. A serializer can also return a
+    component, like a <code>&lt;Callout&gt;</code> for a callout block.
+  </p>
+  <p>
+    The dev server serves a custom source from its snapshot, and editing a
+    serializer doesn't change which snapshot it reads. After any serializer
+    change, drop the snapshots and fetch again:
+  </p>
+  <CodeBlock code="npx blume sync --force" lang="bash" />
+  <p>
+    The command now renders as a highlighted code block, and the check from
+    the last section prints nothing, since <code>--force</code> also cleared the
+    older snapshot it was reading.
+  </p>
+
+  <h2>Preview drafts</h2>
+  <p>Restart the dev server with drafts included:</p>
+  <CodeBlock code="npx blume dev --preview" lang="bash" />
+  <p>
+    "Track delivery with webhooks" appears now. With <code>--preview</code>,
+    Blume asks Payload for <code>draft=true</code>, which returns the newest
+    version of every document, and marks the drafts as drafts. Without it,
+    Blume skips any document whose status is still draft.
+  </p>
+  <p>
+    The same split applies to a published page with unpublished changes. In
+    the admin panel, edit "Use message templates" and choose{" "}
+    <strong>Save Draft</strong>. The dev server serves a snapshot, so run{" "}
+    <code>npx blume sync --preview</code> to pull the edit into the running
+    preview. Keep the flag: a plain <code>blume sync</code> regenerates the
+    site from published content. <code>blume dev</code> without the flag and
+    production builds keep the published version until you choose{" "}
+    <strong>Publish changes</strong>. Preview and published content are cached
+    separately, so a production build never falls back to drafts.
+  </p>
+  <p>Then check that a production build leaves the draft out:</p>
+  <CodeBlock
+    code={`npx blume build
+npx blume preview`}
+    lang="bash"
+  />
+  <p>
+    <code>/guides/webhooks</code> is a 404, and the page is missing from the
+    sidebar and search.
+  </p>
+
+  <h2>Deploy with protected previews</h2>
+  <p>
+    Blume fetches from Payload while the site builds, so your Payload app has
+    to be deployed where the build machine can reach it. This guide assumes
+    it's at <code>https://cms.acme.example</code>, and uses Vercel for the docs
+    site, where production can run the normal build and preview deployments
+    can run the preview build behind a sign-in, so editors review drafts
+    without running Blume themselves. Add a script that picks between them
+    using Vercel's <code>VERCEL_ENV</code> variable:
+  </p>
+  <CodeBlock
+    code={`{
+  "scripts": {
+    "dev": "blume dev",
+    "build": "blume build",
+    "build:vercel": "if [ \\"$VERCEL_ENV\\" = \\"preview\\" ]; then blume build --preview; else blume build; fi"
+  }
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <ol>
+    <li>Push the docs project to a GitHub repository and import it in Vercel.</li>
+    <li>
+      Set the build command to <code>npm run build:vercel</code>, the output
+      directory to <code>dist</code>, and Node.js to 22 or later.
+    </li>
+    <li>
+      Under <strong>Environment Variables</strong>, add{" "}
+      <code>PAYLOAD_URL</code> (<code>https://cms.acme.example</code>) and{" "}
+      <code>PAYLOAD_API_KEY</code>, for Production and Preview.
+    </li>
+    <li>
+      Under <strong>Deployment Protection</strong>, turn on Vercel
+      Authentication with <strong>Standard Protection</strong>, which protects
+      every deployment except your production domains.
+    </li>
+  </ol>
+  <p>
+    The key is used only during the build, so it never reaches readers. To
+    give editors a review copy with a fixed address, push a branch named{" "}
+    <code>preview</code>. Vercel deploys it as a preview deployment, and its
+    branch URL stays the same from one build to the next. For other hosts,
+    the <a href="/docs/deployment#private-docs">private docs</a> section lists
+    their protection options.
+  </p>
+  <Callout type="warning">
+    A preview build is an ordinary static site. Drafts land in its pages,
+    search index, Markdown copies, and <code>llms.txt</code>, and Blume adds no
+    password or <code>noindex</code>. Deploy it only behind access protection,
+    never to your public domain.
+  </Callout>
+  <p>
+    Images are different from text. Blume serves remote images untouched, so
+    readers' browsers load each one from Payload, at an address like{" "}
+    <code>https://cms.acme.example/api/media/file/message-flow.png</code>. Keep
+    the Media collection publicly readable and Payload online. To have Blume
+    download and optimize them at build time instead, authorize the host in
+    your Blume config with{" "}
+    <code>{'image: { domains: ["cms.acme.example"] }'}</code>.
+  </p>
+
+  <h2>Rebuild when an editor publishes</h2>
+  <p>
+    Production only changes when it rebuilds. In your Vercel project's
+    settings, open <strong>Git</strong>, and under{" "}
+    <strong>Deploy Hooks</strong> create a hook for your production branch.
+    Vercel gives you a URL that starts a build when it receives a{" "}
+    <code>POST</code> request. Anyone with its URL can start a build, so treat
+    it like a password. Add it to the Payload app's environment as{" "}
+    <code>DOCS_DEPLOY_HOOK</code>, and call it from the Docs collection's
+    hooks:
+  </p>
+  <CodeBlock
+    code={`// Start a docs build through the deploy hook, when one is configured.
+const rebuildDocs = async () => {
+  if (!process.env.DOCS_DEPLOY_HOOK) return
+  await fetch(process.env.DOCS_DEPLOY_HOOK, { method: 'POST' }).catch((error) =>
+    console.error('Could not start a docs build', error),
+  )
+}
+
+export const Docs: CollectionConfig = {
+  // ...slug, admin, access, versions, and fields from before
+  hooks: {
+    afterChange: [
+      async ({ doc }) => {
+        if (doc._status === 'published') await rebuildDocs()
+      },
+    ],
+    afterDelete: [rebuildDocs],
+  },
+}`}
+    lang="ts"
+    title="src/collections/Docs.ts"
+  />
+  <p>
+    Publishing or deleting a page now starts a build, and saving a draft
+    doesn't. Unpublishing doesn't either, because the document's status is then
+    draft, so when you take a page down, start a build by hand with{" "}
+    <code>curl -X POST "$DOCS_DEPLOY_HOOK"</code>. The site keeps serving the
+    previous deployment until the build finishes, and a failed build leaves it
+    in place.
+  </p>
+  <p>
+    A preview deployment shows drafts as they were when it built. To refresh
+    it, create a second deploy hook for the <code>preview</code> branch and
+    call it when a draft is ready for review, with{" "}
+    <code>curl -X POST "$PREVIEW_DEPLOY_HOOK"</code>. Calling it on every
+    draft save would start a build per edit, and Vercel accepts at most 60
+    hook calls an hour per project.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The build fails with 403 Forbidden</h3>
+  <p>
+    <code>BLUME_SOURCE_FETCH_FAILED</code> with a <code>403</code> means the
+    request reached Payload without a user it accepts, so the collection's read
+    rule turned it away. Check that <code>authCollection</code> is the
+    collection that owns the key, that <code>PAYLOAD_API_KEY</code> is set
+    where the build runs, and that Payload's secret hasn't changed since you
+    made the key. A <code>payload()</code> source warns{" "}
+    <code>BLUME_MISSING_SECRET</code> before it fetches when the key is unset,
+    but a <code>custom()</code> source declares no variables, so there the 403
+    is all you see.
+  </p>
+  <h3>A block renders as nothing</h3>
+  <p>
+    It has no serializer, and the build warned{" "}
+    <code>BLUME_SOURCE_UNSUPPORTED_NODE</code> for it. Serializers are keyed
+    by the block's type, exactly as
+    Payload stores it, so Payload's code block needs <code>Code</code>, not{" "}
+    <code>code</code>. Run the check under{" "}
+    <a href="#check-what-carried-over">Check what carried over</a> to list
+    every block still missing one.
+  </p>
+  <h3>Images are broken</h3>
+  <p>
+    Check the image's address. If it starts with <code>localhost</code>, the
+    build ran without <code>PAYLOAD_URL</code>. If Payload answers it with an
+    error, the Media collection isn't publicly readable. If there's no image
+    at all, and the fetch warned <code>BLUME_SOURCE_UNSUPPORTED_NODE</code>{" "}
+    for a Lexical upload, <code>depth</code> is set to <code>0</code>: leave
+    it at its default of <code>1</code> so uploads carry their URLs.
+  </p>
+  <h3>A link to another page renders as plain text</h3>
+  <p>
+    It's an internal link, which points at a Payload document rather than a
+    URL. In the link dialog, switch it to a custom URL with the page's path on
+    the docs site, like <code>/guides/message-templates</code>.
+  </p>
+  <h3>The Payload app's build fails on <code>user.email</code></h3>
+  <p>
+    The blank template's sample home page greets the signed-in user by email,
+    and once Payload regenerates its types, that user can be an integration,
+    which has no email. Change the greeting in{" "}
+    <code>src/app/(frontend)/page.tsx</code> to{" "}
+    <code>{"{'email' in user ? user.email : user.name}"}</code>, or delete the
+    page if you don't use it.
+  </p>
+  <h3>The dev server shows old content</h3>
+  <p>
+    Dev fetches a source once and then serves its snapshot, even across
+    restarts. Run <code>npx blume sync</code>, with <code>--preview</code> when
+    you're previewing, and the running server reloads.
+  </p>
+  <h3>The build serves old content with a warning</h3>
+  <p>
+    <code>BLUME_SOURCE_OFFLINE</code> means Payload couldn't be reached and
+    Blume used the last snapshot it had. The warning includes the reason. A
+    fresh build machine has no snapshot, so there the same failure stops the
+    build and your last deployment stays live.
+  </p>
+</GuidePage>

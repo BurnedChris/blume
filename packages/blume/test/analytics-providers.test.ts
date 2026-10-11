@@ -5,6 +5,7 @@ import {
   amplitude,
   clarity,
   clearbit,
+  clics,
   databuddy,
   fathom,
   googleAnalytics,
@@ -29,6 +30,7 @@ const all = () => [
   amplitude({ key: "amp" }),
   clarity({ id: "abc123" }),
   clearbit({ key: "pk_1a1882" }),
+  clics({ projectId: "project-id" }),
   databuddy({ clientId: "client" }),
   fathom({ site: "YSVMSDAY" }),
   googleAnalytics({ id: "G-XXXX" }),
@@ -54,6 +56,7 @@ describe("provider adapter factories", () => {
       "amplitude",
       "clarity",
       "clearbit",
+      "clics",
       "databuddy",
       "fathom",
       "google-analytics",
@@ -85,14 +88,14 @@ describe("provider adapter factories", () => {
         oneDollarStats({ hostname: "docs.example.com" }),
       ],
     });
-    expect(config.analytics).toHaveLength(22);
-    expect(config.analytics[17]?.options).toMatchObject({ serverZone: "EU" });
-    expect(config.analytics[18]?.options).toMatchObject({ spa: "auto" });
-    expect(config.analytics[19]?.options).toMatchObject({ region: "eu" });
-    expect(config.analytics[20]?.options).toMatchObject({
+    expect(config.analytics).toHaveLength(23);
+    expect(config.analytics[18]?.options).toMatchObject({ serverZone: "EU" });
+    expect(config.analytics[19]?.options).toMatchObject({ spa: "auto" });
+    expect(config.analytics[20]?.options).toMatchObject({ region: "eu" });
+    expect(config.analytics[21]?.options).toMatchObject({
       "track-web-vitals": "true",
     });
-    expect(config.analytics[21]?.options).toMatchObject({
+    expect(config.analytics[22]?.options).toMatchObject({
       hostname: "docs.example.com",
     });
   });
@@ -103,6 +106,7 @@ describe("provider adapter factories", () => {
       amplitude({ key: "" }),
       clarity({ id: "" }),
       clearbit({ key: "" }),
+      clics({ projectId: "" }),
       databuddy({ clientId: "" }),
       fathom({ site: "" }),
       googleAnalytics({ id: "" }),

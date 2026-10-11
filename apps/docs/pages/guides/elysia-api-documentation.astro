@@ -1,0 +1,731 @@
+---
+// Build an Elysia API documentation website: checked against the OpenAPI,
+// deployment, and validate docs, `blume init` (cli/init/scaffold.ts), the
+// OpenAPI parser, operation routes, and request builder (openapi/parse.ts,
+// openapi/model.ts, components/openapi/request.ts), and the dev watcher
+// (cli/commands/dev.ts) on main; Elysia against elysiajs.com/plugins/openapi,
+// elysiajs.com/patterns/openapi, and the @elysia/openapi 1.4.16 source;
+// Vercel's settings against its build configuration docs.
+// Ran in a scratch project (Bun 1.4.2, elysia 1.4.30, @elysia/openapi
+// 1.4.16, @elysia/cors 1.4.2): `bun create elysia`, the app below typechecked
+// with tsc 5.9, every route and error exercised with app.handle and a live
+// server, the export compared with the served /openapi/json, the spec parsed
+// with Blume's parseSpec and extractOperations (routes /api/messages/
+// send-message and /api/messages/get-message), `blume init docs-site`, and
+// `blume validate --strict` on the docs site. Not run: blume dev, build, or
+// preview, or a deploy. Not yet run end to end.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("elysia-api-documentation")}>
+  <p>
+    To publish an Elysia API with both reference docs and tutorials, add
+    Elysia's OpenAPI plugin, <code>@elysia/openapi</code>, and give every route
+    a schema for its body, parameters, and responses, errors included. Elysia
+    then serves an OpenAPI 3.1 spec at <code>/openapi/json</code>. Export that
+    spec to a file, point Blume's <code>openapi()</code> adapter at it, and write
+    your tutorials as Markdown pages that share the reference's sidebar, search,
+    and links.
+  </p>
+  <p>
+    By the end, you have a Bun API whose spec matches what it enforces at
+    runtime, and a static docs site beside it with a quickstart, an errors page,
+    and a page per endpoint with a Try it panel. The example is the fictional
+    Acme Messages API from the{" "}
+    <a href="/guides/openapi-documentation-website">OpenAPI guide</a>, rebuilt
+    in Elysia with two routes.
+  </p>
+  <p>
+    If the API is internal and one reference page is all your readers need, you
+    may not need a docs site at all: the plugin already serves one. Here's where
+    that page stops.
+  </p>
+
+  <h2>The plugin's page or a docs site</h2>
+  <p>
+    The plugin serves a reference at <code>/openapi</code> as soon as you add
+    it. A docs site doesn't replace it; they do different jobs:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col"></th>
+        <th scope="col">The plugin's <code>/openapi</code> page</th>
+        <th scope="col">A Blume docs site</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <th scope="row">Served by</th>
+        <td>Your API, on every deployment of it</td>
+        <td>A separate static host</td>
+      </tr>
+      <tr>
+        <th scope="row">Contents</th>
+        <td>
+          One page for the whole API, drawn in the browser by Scalar from{" "}
+          <code>/openapi/json</code>
+        </td>
+        <td>
+          A page per operation plus the tutorials you write, on one site with
+          one search
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">Changes when</th>
+        <td>The API deploys</td>
+        <td>You export the spec and rebuild the site</td>
+      </tr>
+      <tr>
+        <th scope="row">For agents and crawlers</th>
+        <td>One URL, rendered by JavaScript</td>
+        <td>
+          A URL per page, each with a Markdown copy, listed in{" "}
+          <code>llms.txt</code> and the sitemap
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    You can keep both: the site for public docs, and the plugin's page for your
+    team against a staging API. To drop the page but keep the raw spec, pass{" "}
+    <code>provider: null</code> to <code>openapi()</code>:{" "}
+    <code>/openapi</code> goes away and <code>/openapi/json</code> stays, so
+    the export below keeps working.
+  </p>
+
+  <h2>Create the API</h2>
+  <p>
+    Scaffold an Elysia project with Bun, then add the plugin. These are the
+    versions this guide was tested with:
+  </p>
+  <CodeBlock
+    code={`bun create elysia acme-messages
+cd acme-messages
+bun add elysia@1.4.30 @elysia/openapi@1.4.16`}
+    lang="bash"
+  />
+  <p>
+    Elysia's docs install the plugin as <code>@elysia/openapi</code>. Older
+    tutorials use <code>@elysiajs/openapi</code>, or the earlier{" "}
+    <code>@elysiajs/swagger</code>, whose page lived at <code>/swagger</code>.
+    By the end of this guide, the repository looks like this:
+  </p>
+  <CodeBlock
+    code={`acme-messages/
+├── package.json
+├── scripts/
+│   └── export-openapi.ts
+├── src/
+│   ├── app.ts          the routes and the OpenAPI plugin
+│   └── index.ts        starts the server
+└── docs-site/          the Blume site
+    ├── blume.config.ts
+    ├── openapi.json    written by bun run openapi
+    └── docs/`}
+    lang="txt"
+  />
+
+  <h2>Describe routes and errors</h2>
+  <p>
+    Put the app in its own module, so the export script can import it without
+    starting a server. Replace the scaffold's routes with this file:
+  </p>
+  <CodeBlock
+    code={`import { openapi } from "@elysia/openapi";
+import { Elysia, t } from "elysia";
+
+// t.UnionEnum defaults to its first value, which would quietly turn a
+// missing channel into "email". Clearing the default keeps it required.
+const Channel = t.UnionEnum(["email", "sms"], {
+  default: undefined,
+  description: "How to deliver the message.",
+});
+
+const Message = t.Object(
+  {
+    channel: Channel,
+    id: t.String({ examples: ["msg_8f2k"] }),
+    status: t.UnionEnum(["queued", "sent", "delivered", "failed"], {
+      default: undefined,
+    }),
+  },
+  { description: "A message and its delivery status." }
+);
+
+const SendMessageRequest = t.Object({
+  channel: Channel,
+  template: t.String({
+    description: "The ID of the template to send.",
+    examples: ["welcome"],
+  }),
+  to: t.String({
+    description: "An email address, or a phone number in E.164 format.",
+    examples: ["ada@example.com"],
+  }),
+  variables: t.Optional(
+    t.Record(t.String(), t.String(), {
+      description: "Values for the template's variables.",
+    })
+  ),
+});
+
+// Every error has the same shape. Its description becomes the response's
+// description in the spec.
+const ApiError = (description: string) =>
+  t.Object(
+    {
+      error: t.String({ description: "A code your client can branch on." }),
+      message: t.String({ description: "What went wrong, for a person." }),
+    },
+    { description }
+  );
+
+// An in-memory store stands in for your database.
+const messages = new Map<string, typeof Message.static>();
+
+const v1 = new Elysia({ prefix: "/v1" })
+  .model({ Message, SendMessageRequest })
+  .onError(({ code, error, status }) => {
+    if (code === "VALIDATION" && error.type !== "response") {
+      return status(422, {
+        error: "invalid_request",
+        message: error.all[0]?.summary ?? "The request is invalid.",
+      });
+    }
+  })
+  .onBeforeHandle(({ headers, status }) => {
+    const key = process.env.ACME_API_KEY;
+    if (!key || headers.authorization !== \`Bearer \${key}\`) {
+      return status(401, {
+        error: "unauthorized",
+        message: "Send your API key as a bearer token.",
+      });
+    }
+  })
+  .post(
+    "/messages",
+    ({ body, status }) => {
+      const message = {
+        channel: body.channel,
+        id: \`msg_\${crypto.randomUUID().slice(0, 8)}\`,
+        status: "queued" as const,
+      };
+      messages.set(message.id, message);
+      return status(202, message);
+    },
+    {
+      body: "SendMessageRequest",
+      detail: {
+        description:
+          "Queues an email or SMS for delivery and returns its ID right away.",
+        operationId: "sendMessage",
+        summary: "Send a message",
+        tags: ["Messages"],
+      },
+      parse: "json",
+      response: {
+        202: "Message",
+        401: ApiError("The API key is missing or wrong."),
+        422: ApiError("The body doesn't match the schema."),
+      },
+    }
+  )
+  .get(
+    "/messages/:id",
+    ({ params, status }) =>
+      messages.get(params.id) ??
+      status(404, { error: "not_found", message: "No message has that ID." }),
+    {
+      detail: {
+        description: "Returns a message and its delivery status.",
+        operationId: "getMessage",
+        summary: "Get a message",
+        tags: ["Messages"],
+      },
+      params: t.Object({ id: t.String({ examples: ["msg_8f2k"] }) }),
+      response: {
+        200: "Message",
+        401: ApiError("The API key is missing or wrong."),
+        404: ApiError("No message has that ID."),
+      },
+    }
+  );
+
+export const app = new Elysia()
+  .use(
+    openapi({
+      documentation: {
+        components: {
+          securitySchemes: {
+            bearerAuth: {
+              description: "An API key, sent as a bearer token.",
+              scheme: "bearer",
+              type: "http",
+            },
+          },
+        },
+        info: {
+          description: "Send transactional email and SMS.",
+          title: "Acme Messages API",
+          version: "1.0.0",
+        },
+        security: [{ bearerAuth: [] }],
+        servers: [{ url: "https://api.acme.example" }],
+        tags: [
+          {
+            description: "Send a message and check whether it arrived.",
+            name: "Messages",
+          },
+        ],
+      },
+    })
+  )
+  .use(v1);`}
+    lang="ts"
+    title="src/app.ts"
+  />
+  <p>Each part lands somewhere in the spec:</p>
+  <ul>
+    <li>
+      <strong>Models.</strong> <code>.model()</code> registers{" "}
+      <code>Message</code> and <code>SendMessageRequest</code> by name. Routes
+      that refer to them by name get a <code>$ref</code>, and the schemas land
+      under <code>components.schemas</code>, so the reference shows them as
+      named types.
+    </li>
+    <li>
+      <strong><code>detail</code>.</strong> Becomes the operation.{" "}
+      <code>summary</code> is the page title, the first tag is its sidebar
+      group, and <code>operationId</code> sets its URL.
+    </li>
+    <li>
+      <strong><code>response</code>.</strong> One schema per status code,
+      errors included. Each <code>ApiError</code> description becomes that
+      response's description; without one, Elysia writes "Response for status
+      404". A route with no <code>response</code> has no responses in the spec
+      at all.
+    </li>
+    <li>
+      <strong><code>documentation</code>.</strong> Copied to the top of the
+      spec: the title, the server, the tag descriptions, and the bearer scheme
+      that <code>security</code> applies to every operation.
+    </li>
+  </ul>
+  <p>
+    The server is <code>https://api.acme.example</code> with no{" "}
+    <code>/v1</code>, because the prefix is already part of every path in the
+    spec. Put it in both places and the docs would send requests to{" "}
+    <code>/v1/v1/messages</code>.
+  </p>
+
+  <h3>Make the runtime match the spec</h3>
+  <p>
+    The schemas that document each route also validate it, which is what keeps
+    the reference honest. Three details in the file close the gaps where the two
+    would drift apart:
+  </p>
+  <ul>
+    <li>
+      <strong>Validation errors.</strong> By default, Elysia answers a bad body
+      with a 422 in its own format, which the spec doesn't describe. The{" "}
+      <code>onError</code> hook returns the same{" "}
+      <code>{"{ error, message }"}</code> shape as every other error, and the
+      route lists its 422. The hook skips errors whose type is{" "}
+      <code>response</code>: those mean a handler broke its own schema, which is
+      a bug to fix, not a client error.
+    </li>
+    <li>
+      <strong>Body formats.</strong> Without <code>parse: "json"</code>, Elysia
+      also accepts form-encoded and multipart bodies, and the spec lists all
+      three. With it, the route rejects anything but JSON with a 400, and the
+      spec lists JSON alone.
+    </li>
+    <li>
+      <strong>Enum defaults.</strong> <code>t.UnionEnum</code> defaults to its
+      first value. Keep that, and a request with no <code>channel</code> goes
+      out as email, while the spec marks the field as required and also gives
+      it a default. <code>default: undefined</code> makes it required in both.
+    </li>
+  </ul>
+  <p>
+    Elysia also checks each response against the schema declared for its status
+    code, so a handler that returns the wrong shape fails with a validation
+    error instead of sending something the reference doesn't describe. Elysia
+    can infer response types from your TypeScript with{" "}
+    <code>fromTypes()</code>, but declaring them, as here, means the schema that
+    documents a response is also the one that checks it.
+  </p>
+
+  <h2>Export the spec</h2>
+  <p>Start the server from its own file:</p>
+  <CodeBlock
+    code={`import { app } from "./app";
+
+app.listen(3000);
+console.log(\`Acme Messages API on \${app.server?.url}\`);`}
+    lang="ts"
+    title="src/index.ts"
+  />
+  <p>
+    Run it with <code>ACME_API_KEY=sk_test_123 bun run dev</code>. The
+    plugin's page is at <code>http://localhost:3000/openapi</code> and the raw
+    spec at <code>/openapi/json</code>.
+  </p>
+  <p>
+    The docs site builds from a file, not from a running server. Write the file
+    with a script that asks the app for its spec in memory:{" "}
+    <code>app.handle</code> runs a request through Elysia without opening a
+    port.
+  </p>
+  <CodeBlock
+    code={`import { app } from "../src/app";
+
+const response = await app.handle(new Request("http://localhost/openapi/json"));
+if (!response.ok) {
+  throw new Error(\`GET /openapi/json answered \${response.status}\`);
+}
+const spec = await response.json();
+await Bun.write("docs-site/openapi.json", \`\${JSON.stringify(spec, null, 2)}\\n\`);
+console.log("Wrote docs-site/openapi.json");`}
+    lang="ts"
+    title="scripts/export-openapi.ts"
+  />
+  <p>Add a script for it beside the scaffold's <code>dev</code> script:</p>
+  <CodeBlock
+    code={`"scripts": {
+  "dev": "bun run --watch src/index.ts",
+  "openapi": "bun scripts/export-openapi.ts"
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <p>
+    Run <code>bun run openapi</code> from the repository root. It creates{" "}
+    <code>docs-site/</code> if it doesn't exist yet and writes the spec there.
+    The file is the same JSON the server returns at{" "}
+    <code>/openapi/json</code>, and the same code always produces the same
+    bytes, so its Git diff shows exactly what changed in the API.
+  </p>
+
+  <h2>Create the docs site</h2>
+  <p>From the repository root, scaffold a Blume project around the spec:</p>
+  <CodeBlock
+    code="bunx blume init docs-site --template docs --yes"
+    lang="bash"
+  />
+  <p>
+    It writes <code>blume.config.ts</code>, a <code>docs/index.mdx</code> home
+    page, and a <code>package.json</code> with <code>dev</code> and{" "}
+    <code>build</code> scripts, then installs Blume with Bun. The site has its
+    own dependencies, separate from the API's. The <code>blume</code> command
+    itself runs on Node.js, so you need Node.js 22.19 or later installed too.
+    Replace the config:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { openapi } from "blume/reference";
+
+export default defineConfig({
+  title: "Acme Docs",
+  navigation: {
+    tabs: [
+      { label: "Docs", path: "/" },
+      { label: "API reference", path: "/api" },
+    ],
+  },
+  reference: [openapi({ route: "/api", spec: "./openapi.json" })],
+});`}
+    lang="ts"
+    title="docs-site/blume.config.ts"
+  />
+  <p>
+    The reference mounts at <code>/api</code> with an overview, and each
+    operation gets a page at a URL built from its tag and{" "}
+    <code>operationId</code>: <code>/api/messages/send-message</code> and{" "}
+    <code>/api/messages/get-message</code>. The reference doesn't add a header
+    tab of its own, so the API reference tab pointing at the same route is what
+    makes it reachable. The{" "}
+    <a href="/guides/openapi-documentation-website">OpenAPI guide</a> covers the
+    options this config leaves at their defaults, like code sample languages.
+  </p>
+
+  <h2>Write the tutorials</h2>
+  <p>
+    Tutorials are Markdown pages in <code>docs-site/docs/</code>. A page at the
+    top level sits under the Docs tab, and a page in <code>docs/api/</code>{" "}
+    joins the API reference tab's sidebar, beside the generated pages. Start
+    with the home page:
+  </p>
+  <CodeBlock
+    code={`---
+title: Acme Messages
+description: Send transactional email and SMS from your app with one API call, and check whether each message arrived.
+---
+
+The Acme Messages API sends email and SMS for your app. Start with the
+[quickstart](/quickstart), then look up any endpoint in the
+[API reference](/api).`}
+    lang="mdx"
+    title="docs-site/docs/index.mdx"
+  />
+  <p>
+    Then a quickstart that walks through both endpoints and links to their
+    reference pages:
+  </p>
+  <CodeBlock
+    code={`---
+title: Quickstart
+description: Send your first email with the Acme Messages API, then check whether it was delivered.
+---
+
+## Send a message
+
+Every request needs your API key as a bearer token. Send a welcome email:
+
+\`\`\`bash
+curl https://api.acme.example/v1/messages \\
+  -H "Authorization: Bearer $ACME_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"channel":"email","to":"ada@example.com","template":"welcome"}'
+\`\`\`
+
+The API answers \`202 Accepted\` with the new message:
+
+\`\`\`json
+{ "channel": "email", "id": "msg_8f2k", "status": "queued" }
+\`\`\`
+
+[Send a message](/api/messages/send-message) lists every field the body takes.
+
+## Check delivery
+
+Pass the ID to [Get a message](/api/messages/get-message):
+
+\`\`\`bash
+curl https://api.acme.example/v1/messages/msg_8f2k \\
+  -H "Authorization: Bearer $ACME_API_KEY"
+\`\`\`
+
+\`status\` moves from \`queued\` to \`sent\`, then \`delivered\` or \`failed\`.`}
+    lang="mdx"
+    title="docs-site/docs/quickstart.mdx"
+  />
+  <p>
+    Every endpoint shares one error shape, so describe it once, on a page under
+    the reference:
+  </p>
+  <CodeBlock
+    code={`---
+title: Errors
+description: Every error from the Acme Messages API has the same JSON shape, a code to branch on and a message for people.
+---
+
+Every error response has the same body:
+
+\`\`\`json
+{ "error": "not_found", "message": "No message has that ID." }
+\`\`\`
+
+Branch on \`error\`, and show or log \`message\`.
+
+| Status | \`error\` | When |
+| --- | --- | --- |
+| 401 | \`unauthorized\` | The \`Authorization\` header is missing, or the key is wrong. |
+| 404 | \`not_found\` | No message has that ID. |
+| 422 | \`invalid_request\` | The body doesn't match the schema, like a \`channel\` other than \`email\` or \`sms\`. |
+
+Each endpoint's page lists the errors it can return, starting with
+[Send a message](/api/messages/send-message).`}
+    lang="mdx"
+    title="docs-site/docs/api/errors.mdx"
+  />
+  <p>
+    Links to operation pages are ordinary links. Run{" "}
+    <code>bunx blume validate</code> in <code>docs-site/</code> and it reports
+    any that no longer resolve, like a link to an operation whose ID you
+    changed.
+  </p>
+
+  <h2>Preview and build</h2>
+  <p>Start the docs dev server:</p>
+  <CodeBlock
+    code={`cd docs-site
+bun run dev`}
+    lang="bash"
+  />
+  <p>
+    Open the URL it prints and go to the API reference tab. The Send a message
+    page shows the <code>SendMessageRequest</code> fields, the 202, 401, and 422
+    responses with the descriptions you gave them, and an Authorization section
+    from the bearer scheme. Its curl sample sends{" "}
+    <code>Authorization: Bearer YOUR_TOKEN</code> to{" "}
+    <code>https://api.acme.example/v1/messages</code>, and the Try it form
+    starts with the <code>examples</code> values from your schemas.
+  </p>
+  <p>Then build the site and serve the production build locally:</p>
+  <CodeBlock
+    code={`bun run build
+bunx blume preview`}
+    lang="bash"
+  />
+  <p>
+    The build writes static HTML, a search index, <code>llms.txt</code>, and a
+    Markdown copy of every page to <code>docs-site/dist/</code>.
+  </p>
+
+  <h2>Deploy the site</h2>
+  <p>
+    The docs deploy separately from the API, to any static host. On Vercel,
+    import the repository as a new project, then set these under Build and
+    Deployment in the project settings:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Setting</th>
+        <th scope="col">Value</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Root Directory</td>
+        <td><code>docs-site</code></td>
+      </tr>
+      <tr>
+        <td>Build Command</td>
+        <td><code>bun run build</code></td>
+      </tr>
+      <tr>
+        <td>Output Directory</td>
+        <td><code>dist</code></td>
+      </tr>
+      <tr>
+        <td>Node.js Version</td>
+        <td>22.x or later</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The spec lives in <code>docs-site/</code> and is committed, so the docs
+    build never runs your API or installs its dependencies. It also keeps the
+    build working if you turn off Vercel's{" "}
+    <strong>Include source files outside of the Root Directory in the Build Step</strong>{" "}
+    (on by default), which hides every file outside the Root Directory from
+    the build. Blume detects the site's URL on
+    Vercel. For other hosts, and for setting <code>deployment.site</code> where
+    a host doesn't expose its URL, see <a href="/docs/deployment">Deployment</a>.
+  </p>
+
+  <h3>Let Try it reach the API</h3>
+  <p>
+    The Try it panel sends requests from the reader's browser to the server in
+    your spec. Browsers allow that only when the API permits the docs origin
+    with CORS. Add Elysia's CORS plugin with{" "}
+    <code>bun add @elysia/cors@1.4.2</code>, and allow your docs domain:
+  </p>
+  <CodeBlock
+    code={`import { cors } from "@elysia/cors";
+
+export const app = new Elysia()
+  .use(cors({ origin: "https://docs.acme.example" }))
+  .use(
+    openapi({
+      // ...the documentation from before
+    })
+  )
+  .use(v1);`}
+    lang="ts"
+    title="src/app.ts"
+  />
+  <p>
+    The plugin answers the browser's preflight requests, and the exported spec
+    doesn't change. The <code>acme.example</code> domains don't exist, so point
+    both at your real ones. The other way around CORS is Blume's built-in
+    proxy, covered in{" "}
+    <a href="/guides/api-documentation-cors-errors">Fix CORS errors in an API documentation playground</a>.
+  </p>
+
+  <h2>Keep the spec in sync</h2>
+  <p>
+    The docs change when the committed spec changes. After you edit a route, run{" "}
+    <code>bun run openapi</code> and commit <code>docs-site/openapi.json</code>{" "}
+    with the code, so the pull request shows what readers will see change.
+    Because the export is deterministic, CI can catch a route change nobody
+    exported:
+  </p>
+  <CodeBlock
+    code={`name: API spec
+on: pull_request
+
+jobs:
+  spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run openapi
+      - run: git diff --exit-code docs-site/openapi.json`}
+    lang="yaml"
+    title=".github/workflows/api-spec.yml"
+  />
+  <p>
+    You could instead point <code>spec</code> at your deployed{" "}
+    <code>https://api.acme.example/openapi/json</code>, since Blume fetches a
+    URL spec at build time. Then every docs build depends on the API being up,
+    and spec changes skip review. For more on CI, see{" "}
+    <a href="/guides/openapi-documentation-ci">Keep API documentation in sync with backend changes in CI</a>.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The export script gets a 404</h3>
+  <p>
+    The script requests <code>/openapi/json</code>, the plugin's default. If
+    you set <code>path</code> or <code>specPath</code> in{" "}
+    <code>openapi()</code>, change the URL in the script to match. And{" "}
+    <code>enabled: false</code> removes both routes, so don't switch the plugin
+    off with an environment variable the export doesn't set.
+  </p>
+  <h3>A required field shows a default</h3>
+  <p>
+    That's <code>t.UnionEnum</code>'s default, which is its first value. At
+    runtime, a request that leaves the field out gets that value instead of an
+    error. Pass <code>default: undefined</code>, as <code>Channel</code> does
+    above.
+  </p>
+  <h3>Operation URLs read like post-v1-messages</h3>
+  <p>
+    A route without <code>detail.operationId</code> gets one generated from its
+    method and path, like <code>postV1Messages</code>, and Blume builds the
+    page URL from it: <code>/api/messages/post-v1-messages</code>. Set an{" "}
+    <code>operationId</code> on every route. If the old URLs are already public,
+    add <code>redirects</code> for them in <code>blume.config.ts</code>.
+  </p>
+  <h3>The site still shows the old endpoints</h3>
+  <p>
+    The site reads the exported file, not the running API, so run{" "}
+    <code>bun run openapi</code> again. The docs dev server watches the spec
+    file and updates the reference when the export rewrites it.
+  </p>
+  <h3>bun build doesn't build the site</h3>
+  <p>
+    <code>bun build</code> is Bun's bundler, not your <code>build</code>{" "}
+    script. Use <code>bun run build</code>, or <code>bunx blume build</code>.
+  </p>
+  <h3>The build fails with BLUME_OPENAPI_UNAVAILABLE</h3>
+  <p>
+    Blume couldn't read the spec. <code>./openapi.json</code> resolves from{" "}
+    <code>docs-site/</code>, so check that the export wrote the file there and
+    that it's committed. In <code>bun run dev</code>, the same problem is a
+    warning and the reference is left out, so a working dev server can hide it.
+  </p>
+  <h3>Send fails but curl works</h3>
+  <p>
+    That's CORS: the browser blocks a response the API didn't allow for the
+    docs origin. Add the CORS plugin as shown above, with the exact origin the
+    docs are served from, including the scheme.
+  </p>
+</GuidePage>

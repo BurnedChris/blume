@@ -1,0 +1,582 @@
+---
+// Fix hreflang and canonical URLs on multilingual docs: checked against the
+// i18n, audit, metadata, and deployment docs, and on main against the
+// catch-all page template (canonical, hreflang, and fallback logic in
+// astro/templates.ts), RootLayout's head, the route manifest's fallback
+// routes (core/manifest.ts), translation pairing by logical route
+// (core/sources/normalize.ts), the i18n folder diagnostics (core/i18n.ts),
+// the sitemap (deploy/sitemap.ts), the audit's i18n, indexability, sitemap,
+// and duplicate checks and their catalog messages, translate's frontmatter
+// reconstruction (translate/validate.ts, prompts.ts; it drops seo.canonical),
+// and the language switcher's entries with fallbackLocale: null
+// (astro/templates.ts). Google guidance checked
+// against its localized-versions, canonicalization, consolidate-duplicate-URLs,
+// and page indexing report docs. What I ran: curl against the repo's own docs
+// dev server (en + de) for a translated page, its German translation, an
+// untranslated page, and its German fallback copy, to confirm the head markup
+// shape shown here. The fixture's head markup and audit findings are derived
+// from that and the source. Not yet run end to end on the fixture.
+// Review pass: re-checked the Google quotes, translate's TRANSLATABLE_KEY_PATHS,
+// and audit/checks/{i18n,sitemap,duplicates}.ts fallback handling.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("multilingual-documentation-hreflang")}>
+  <p>
+    To keep translated docs from sending conflicting signals, make every real
+    translation canonical to itself and list every translation, itself
+    included, in its <code>hreflang</code> links, with an{" "}
+    <code>x-default</code> for the default language. A page you haven't
+    translated yet, served at a localized URL, should point its canonical at
+    the original and stay out of the <code>hreflang</code> group and the
+    sitemap. Blume emits all of this from your folder layout once it knows your
+    site's URL, so most conflicts come from an override: usually a{" "}
+    <code>seo.canonical</code> that a translation copied from its original.
+  </p>
+  <p>
+    In this guide you build a two-language fixture with one missing
+    translation, map every URL to its language, canonical, and alternates, read
+    the head markup Blume generates, then find and fix one broken relationship
+    with <code>blume audit</code>. It checks what search engines see. To set up
+    and write the translations themselves, start with the{" "}
+    <a href="/guides/translate-markdown-documentation">translation guide</a>.
+  </p>
+  <p>
+    These tags tell search engines which URLs are language versions of each
+    other, so they can show readers the one in their language. They don't make
+    a translation rank or bring traffic on their own. If you never set{" "}
+    <code>seo.canonical</code> and your translations mirror the default
+    language's file paths, Blume's defaults are already right, and this guide
+    is a way to confirm it. One limit: Blume pairs translations by path, so it
+    can't link translated URL slugs like <code>/de/anleitungen/installation</code>{" "}
+    to <code>/guides/install</code>.
+  </p>
+
+  <h2>What each page should say</h2>
+  <p>A multilingual docs site has two kinds of localized page:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Page</th>
+        <th scope="col">Canonical</th>
+        <th scope="col">hreflang</th>
+        <th scope="col">Sitemap</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>A real translation</td>
+        <td>Itself</td>
+        <td>Every real translation, itself included, plus <code>x-default</code></td>
+        <td>Listed</td>
+      </tr>
+      <tr>
+        <td>A fallback copy: the original's content at a localized URL</td>
+        <td>The page it copies</td>
+        <td>Not a member of any group</td>
+        <td>Left out</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    This follows Google's guidance. Each language version{" "}
+    <a href="https://developers.google.com/search/docs/specialty/international/localized-versions">
+      "must list itself as well as all other language versions"
+    </a>, and if two pages don't point to each other, "the tags will be
+    ignored." With <code>hreflang</code>, Google says to{" "}
+    <a href="https://developers.google.com/search/docs/crawling-indexing/consolidate-duplicate-urls">
+      "specify a canonical page in the same language, or the best possible
+      substitute language"
+    </a>{" "}
+    when none exists in that language. Language versions count as duplicates{" "}
+    <a href="https://developers.google.com/search/docs/crawling-indexing/canonicalization">
+      "only if the primary content is in the same language"
+    </a>, which describes a fallback copy exactly: English text inside German
+    navigation.
+  </p>
+  <p>
+    Two limits worth knowing. Google{" "}
+    <a href="https://developers.google.com/search/docs/specialty/international/managing-multi-regional-sites">
+      reads a page's language from its visible content
+    </a>, not from <code>lang</code> or the URL, so <code>hreflang</code>{" "}
+    groups URLs; it doesn't relabel them. And a canonical is, in Google's words,
+    "a hint, not a rule."
+  </p>
+
+  <h2>Build a two-language fixture</h2>
+  <p>Scaffold a project, then replace its config and pages:</p>
+  <CodeBlock
+    code={`npx blume init acme-docs --yes
+cd acme-docs`}
+    lang="bash"
+  />
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme",
+  deployment: {
+    site: "https://docs.acme.example",
+  },
+  i18n: {
+    defaultLocale: "en",
+    locales: [
+      { code: "en", label: "English" },
+      { code: "de", label: "Deutsch" },
+    ],
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>deployment.site</code> matters here: canonical and{" "}
+    <code>hreflang</code> URLs are absolute, so a build without it emits
+    neither. English lives at the root of <code>docs/</code> and German in{" "}
+    <code>docs/de/</code>. There's no German configure page, which is the
+    missing translation:
+  </p>
+  <CodeBlock
+    code={`docs/
+  index.mdx
+  guides/
+    install.mdx
+    configure.mdx
+  de/
+    index.mdx
+    guides/
+      install.mdx`}
+    lang="txt"
+  />
+  <CodeBlock
+    code={`---
+title: Acme documentation
+description: Send transactional email and SMS with the Acme Messages API.
+---
+
+Start by [installing Acme](/guides/install), then [configure your account](/guides/configure).`}
+    lang="mdx"
+    title="docs/index.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Install Acme
+description: Create an API key and send your first message with the Acme Messages API.
+seo:
+  canonical: https://docs.acme.example/guides/install
+---
+
+Create an API key in the Acme dashboard, then send a test message to your own address. Next, [configure your account](/guides/configure).`}
+    lang="mdx"
+    title="docs/guides/install.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Configure Acme
+description: Set a sender name, a reply-to address, and a default template.
+---
+
+Set a sender name and a reply-to address before you send messages to customers.`}
+    lang="mdx"
+    title="docs/guides/configure.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Acme-Dokumentation
+description: Versende transaktionale E-Mails und SMS mit der Acme Messages API.
+---
+
+Beginne mit der [Installation](/guides/install) und [konfiguriere dann dein Konto](/guides/configure).`}
+    lang="mdx"
+    title="docs/de/index.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Acme installieren
+description: Erstelle einen API-Schlüssel und sende deine erste Nachricht mit der Acme Messages API.
+seo:
+  canonical: https://docs.acme.example/guides/install
+---
+
+Erstelle im Acme-Dashboard einen API-Schlüssel und sende dann eine Testnachricht an deine eigene Adresse. Danach kannst du [dein Konto konfigurieren](/guides/configure).`}
+    lang="mdx"
+    title="docs/de/guides/install.mdx"
+  />
+  <p>
+    The English install page sets <code>seo.canonical</code> to its own URL.
+    That's harmless on its own, since Blume emits the same self-canonical by
+    default. The German page copied it along with the rest of the frontmatter.
+    That happens when you translate by copying a file.{" "}
+    <code>blume translate</code> doesn't: it rebuilds each translation's
+    frontmatter from the source and copies every key except{" "}
+    <code>seo.canonical</code>, so its translations get their own URL as the
+    canonical.
+  </p>
+
+  <h2>Map every URL</h2>
+  <p>
+    Blume builds each URL from the file's path and pairs translations by that
+    path: <code>docs/de/guides/install.mdx</code> is the German version of{" "}
+    <code>docs/guides/install.mdx</code> because the path after{" "}
+    <code>de/</code> matches. Here's the matrix for the fixture, with paths
+    shown relative to <code>https://docs.acme.example</code> (the tags
+    themselves are absolute):
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">URL</th>
+        <th scope="col">Built from</th>
+        <th scope="col"><code>lang</code></th>
+        <th scope="col">Canonical</th>
+        <th scope="col">hreflang</th>
+        <th scope="col">Sitemap</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>/</code></td>
+        <td><code>docs/index.mdx</code></td>
+        <td><code>en</code></td>
+        <td><code>/</code></td>
+        <td>de, en, x-default</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>/de</code></td>
+        <td><code>docs/de/index.mdx</code></td>
+        <td><code>de</code></td>
+        <td><code>/de</code></td>
+        <td>de, en, x-default</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>/guides/install</code></td>
+        <td><code>docs/guides/install.mdx</code></td>
+        <td><code>en</code></td>
+        <td><code>/guides/install</code></td>
+        <td>de, en, x-default</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>/de/guides/install</code></td>
+        <td><code>docs/de/guides/install.mdx</code></td>
+        <td><code>de</code></td>
+        <td><strong><code>/guides/install</code></strong></td>
+        <td>de, en, x-default</td>
+        <td><strong>No</strong></td>
+      </tr>
+      <tr>
+        <td><code>/guides/configure</code></td>
+        <td><code>docs/guides/configure.mdx</code></td>
+        <td><code>en</code></td>
+        <td><code>/guides/configure</code></td>
+        <td>en, x-default</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>/de/guides/configure</code></td>
+        <td>Fallback copy of <code>docs/guides/configure.mdx</code></td>
+        <td><code>de</code></td>
+        <td><code>/guides/configure</code></td>
+        <td>Not a member</td>
+        <td>No</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    <code>/de/guides/configure</code> is the fallback copy. Blume renders the
+    English page there so German readers' links keep working, points its
+    canonical at the English page, and leaves it out of the sitemap, site
+    search, and every <code>hreflang</code> group. It doesn't add{" "}
+    <code>noindex</code>: the canonical carries the signal, which is what
+    Google recommends over <code>noindex</code> for duplicates within a site.
+    English configure's group lists only English, because there's no German
+    version to name yet.
+  </p>
+  <p>
+    The row in bold is the broken one: <code>/de/guides/install</code> is a
+    real German translation whose canonical names the English page. Blume
+    leaves a page whose canonical names another URL out of the sitemap, so the
+    German translation drops out of it too.
+  </p>
+
+  <h2>Read the generated head</h2>
+  <p>
+    Start the dev server with <code>npm run dev</code>, then in a second
+    terminal print the language tags of three pages:
+  </p>
+  <CodeBlock
+    code={`for route in /guides/install /de/guides/install /de/guides/configure; do
+  echo "== $route"
+  curl -s "http://localhost:4321$route" \\
+    | grep -oE '<html[^>]*>|<link[^>]*(canonical|hreflang)[^>]*>'
+done`}
+    lang="bash"
+  />
+  <CodeBlock
+    code={`== /guides/install
+<html dir="ltr" lang="en">
+<link rel="canonical" href="https://docs.acme.example/guides/install">
+<link href="https://docs.acme.example/de/guides/install" hreflang="de" rel="alternate">
+<link href="https://docs.acme.example/guides/install" hreflang="en" rel="alternate">
+<link href="https://docs.acme.example/guides/install" hreflang="x-default" rel="alternate">
+== /de/guides/install
+<html dir="ltr" lang="de">
+<link rel="canonical" href="https://docs.acme.example/guides/install">
+<link href="https://docs.acme.example/de/guides/install" hreflang="de" rel="alternate">
+<link href="https://docs.acme.example/guides/install" hreflang="en" rel="alternate">
+<link href="https://docs.acme.example/guides/install" hreflang="x-default" rel="alternate">
+== /de/guides/configure
+<html data-pagefind-ignore="all" dir="ltr" lang="de">
+<link rel="canonical" href="https://docs.acme.example/guides/configure">
+<link href="https://docs.acme.example/guides/configure" hreflang="en" rel="alternate">
+<link href="https://docs.acme.example/guides/configure" hreflang="x-default" rel="alternate">`}
+    lang="html"
+  />
+  <p>
+    The German install page contradicts itself. Its <code>hreflang</code>{" "}
+    names it as the German member of the group, while its canonical asks
+    search engines to index the English URL instead. A search engine that
+    follows the canonical indexes the English URL in place of the German one,
+    and the group's German entry points at a page that isn't indexed.
+  </p>
+  <p>
+    The fallback copy is consistent. It claims no German entry, its canonical
+    and <code>x-default</code> both name the English page, and the extra
+    attribute on <code>&lt;html&gt;</code> is one of the ways Blume keeps it out
+    of site search. Its article also carries <code>lang="en"</code>, so screen
+    readers read the English text as English.
+  </p>
+
+  <h2>Run the audit</h2>
+  <p>
+    Stop the dev server, build, and run the checks that cover languages,
+    canonicals, and the sitemap. <code>--verbose</code> prints each finding's
+    message under its page:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+npx blume audit --only i18n,indexability,sitemap --verbose`}
+    lang="bash"
+  />
+  <p>The report includes these findings:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Check</th>
+        <th scope="col">Severity</th>
+        <th scope="col">Page</th>
+        <th scope="col">Message</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>BLUME_AUDIT_HREFLANG_BAD_TARGET</code></td>
+        <td>error</td>
+        <td><code>/guides/install</code>, <code>/de/guides/install</code></td>
+        <td>
+          hreflang="de" points at /de/guides/install, which canonicalizes
+          elsewhere.
+        </td>
+      </tr>
+      <tr>
+        <td><code>BLUME_AUDIT_CANONICAL_NOT_SELF</code></td>
+        <td>info</td>
+        <td><code>/de/guides/install</code></td>
+        <td>
+          Page declares /guides/install as its canonical, so it will not be
+          indexed itself.
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The <code>hreflang</code> errors make the command exit with code 1.
+    Nothing is reported for <code>/de/guides/configure</code>: the audit knows
+    it's a fallback copy and expects it to point elsewhere.
+  </p>
+  <p>
+    Each finding names the file to open. The canonical finding points at line
+    5 of <code>docs/de/guides/install.mdx</code>, the canonical line. The{" "}
+    <code>hreflang</code> finding on <code>/guides/install</code>{" "}
+    names <code>docs/guides/install.mdx</code>, because that page carries the
+    link, but the cause is the target named in the message.
+  </p>
+
+  <h2>Fix the German canonical</h2>
+  <p>
+    Delete the <code>seo</code> block from the German page, so it falls back
+    to Blume's self-canonical:
+  </p>
+  <CodeBlock
+    code={`---
+title: Acme installieren
+description: Erstelle einen API-Schlüssel und sende deine erste Nachricht mit der Acme Messages API.
+---
+
+Erstelle im Acme-Dashboard einen API-Schlüssel und sende dann eine Testnachricht an deine eigene Adresse. Danach kannst du [dein Konto konfigurieren](/guides/configure).`}
+    lang="mdx"
+    title="docs/de/guides/install.mdx"
+  />
+  <p>
+    Remove the same two lines from <code>docs/guides/install.mdx</code> too.
+    Its self-canonical is redundant, and anyone who translates the page by
+    copying the file copies the canonical with it.
+  </p>
+  <Callout type="info">
+    If you track translations with <code>blume translate</code>, editing the
+    English file changes its hash, so <code>blume translate --check</code>{" "}
+    reports the German page as stale. The next translate run rebuilds its
+    frontmatter from the English page, and never carries a{" "}
+    <code>seo.canonical</code> over.
+  </Callout>
+  <p>Build and audit again:</p>
+  <CodeBlock
+    code={`npx blume build
+npx blume audit --only i18n,indexability,sitemap`}
+    lang="bash"
+  />
+  <p>
+    Both findings are gone. With no errors left in those categories, the
+    command exits with code 0. The German page's head now names itself:
+  </p>
+  <CodeBlock
+    code={`<html dir="ltr" lang="de">
+<link rel="canonical" href="https://docs.acme.example/de/guides/install">
+<link href="https://docs.acme.example/de/guides/install" hreflang="de" rel="alternate">
+<link href="https://docs.acme.example/guides/install" hreflang="en" rel="alternate">
+<link href="https://docs.acme.example/guides/install" hreflang="x-default" rel="alternate">`}
+    lang="html"
+  />
+  <p>
+    In the matrix, the German install row's canonical now reads{" "}
+    <code>/de/guides/install</code>, and the page is back in the sitemap.
+    Every member of each group is canonical to itself and names the others,
+    and the fallback copy stays outside.
+  </p>
+
+  <h2>Choose what untranslated pages do</h2>
+  <p>
+    Blume renders a fallback copy for every missing translation by default. The
+    alternative is to serve a 404 instead:
+  </p>
+  <CodeBlock
+    code={`i18n: {
+  defaultLocale: "en",
+  locales: [
+    { code: "en", label: "English" },
+    { code: "de", label: "Deutsch" },
+  ],
+  fallbackLocale: null,
+},`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Your <code>hreflang</code> groups are the same either way, since fallback
+    copies were never members. The difference is for readers. With fallbacks,
+    the German sidebar lists every page and German links stay in German
+    navigation. With <code>null</code>, the German sidebar lists only
+    translated pages, and a German page's link to an untranslated page goes to
+    the English one. On an untranslated English page, the language switcher
+    leaves German out, since there's no German page to link.
+  </p>
+  <p>
+    The default also means a translation ships without a URL change. Once{" "}
+    <code>docs/de/guides/configure.mdx</code> exists,{" "}
+    <code>/de/guides/configure</code> turns from a copy into a real
+    translation: it becomes self-canonical, joins the group on both pages, and
+    enters the sitemap.
+  </p>
+
+  <h2>Keep it checked in CI</h2>
+  <p>
+    The audit reads the built files and needs no network, so it runs right
+    after your build step:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+npx blume audit --only i18n,indexability,sitemap`}
+    lang="bash"
+  />
+  <p>
+    The default gate fails on errors, which covers the <code>hreflang</code>{" "}
+    conflict in this guide. Drop <code>--only</code> to run every
+    check. For a complete workflow file, see the{" "}
+    <a href="/guides/documentation-seo-audit-ci">SEO audit guide</a>.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The build has no canonical or hreflang tags</h3>
+  <p>
+    Blume needs your site's URL to write them. Without{" "}
+    <code>deployment.site</code>, the audit reports{" "}
+    <code>BLUME_AUDIT_SITE_NOT_SET</code>. With a platform adapter like{" "}
+    <code>vercel()</code>, the URL is detected at deploy time, so a local build
+    lacks it and the audit reports <code>BLUME_AUDIT_SITE_INFERRED_AT_DEPLOY</code>{" "}
+    instead; audit a production-like build or the deployment. In{" "}
+    <code>blume dev</code>, the URL falls back to{" "}
+    <code>http://localhost:4321</code>, so dev shows tags that a build without
+    a site URL won't have.
+  </p>
+  <h3>A translation isn't linked to its original</h3>
+  <p>
+    The German file's path doesn't match. A page at{" "}
+    <code>docs/de/anleitungen/installation.mdx</code> publishes at{" "}
+    <code>/de/anleitungen/installation</code> in a group of its own, so the
+    audit reports <code>BLUME_AUDIT_HREFLANG_XDEFAULT_MISSING</code> there, and{" "}
+    <code>/de/guides/install</code> stays a fallback copy. A frontmatter{" "}
+    <code>slug</code> replaces the path, so give a translation the same{" "}
+    <code>slug</code> as its original, or leave it off both. Move the file and
+    redirect the old URL if it was published:
+  </p>
+  <CodeBlock
+    code="git mv docs/de/anleitungen/installation.mdx docs/de/guides/install.mdx"
+    lang="bash"
+  />
+  <CodeBlock
+    code={`redirects: [
+  { from: "/de/anleitungen/installation", to: "/de/guides/install", status: 308 },
+],`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The{" "}
+    <a href="/guides/documentation-url-migration-redirects">URL migration guide</a>{" "}
+    covers redirects in depth.
+  </p>
+  <h3>German pages declare lang="en"</h3>
+  <p>
+    The <code>de</code> folder isn't in <code>i18n.locales</code>, so Blume
+    treats it as English content at <code>/de/…</code> and warns with{" "}
+    <code>BLUME_I18N_UNCONFIGURED_LOCALE</code>. Add the locale to your config.
+  </p>
+  <h3>English pages also appear under /en/</h3>
+  <p>
+    The default locale lives at the content root, so a <code>docs/en/</code>{" "}
+    folder is ordinary content that publishes at <code>/en/…</code>, and at{" "}
+    <code>/de/en/…</code> as a fallback copy. Blume warns with{" "}
+    <code>BLUME_I18N_DEFAULT_LOCALE_FOLDER</code>. Move its contents up to{" "}
+    <code>docs/</code>.
+  </p>
+  <h3>Search Console lists German URLs as alternate pages</h3>
+  <p>
+    For a fallback copy, "Alternate page with proper canonical tag" is the
+    canonical working, and{" "}
+    <a href="https://support.google.com/webmasters/answer/7440203">
+      Google's help
+    </a>{" "}
+    says there's nothing you need to do. If a real translation shows
+    "Duplicate, Google chose different canonical than user," check that its
+    main content is actually translated: Google treats a page whose header,
+    footer, and navigation are translated but whose body isn't as a
+    duplicate. The{" "}
+    <a href="/guides/documentation-not-indexed">indexing guide</a> covers the
+    other statuses.
+  </p>
+</GuidePage>

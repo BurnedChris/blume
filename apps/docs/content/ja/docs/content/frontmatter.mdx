@@ -6,6 +6,8 @@ description: >-
 
 すべてのページは次のフロントマターを受け付けます。すべてのフィールドは任意です。
 
+フロントマターは YAML なので、コロンの後にスペースが続く値は `description: "Setup: the easy way"` のように引用符で囲んでください。引用符で囲まないと、YAML は 2 つ目のコロンをネストされたキーの始まりとして解釈し、Blume はそのファイルと行を `BLUME_FRONTMATTER_INVALID` として報告します。
+
 <TypeTable
   type={{
     title: { type: "string", description: "Page title." },
@@ -22,7 +24,7 @@ description: >-
     authors: {
       type: "string | string[] | object[]",
       description:
-        "Post author(s) for blog/changelog content — a name, or objects with a name plus optional avatar/url and any extra fields. Preserved as-is.",
+        "Post author(s) for blog/changelog content — a name, or objects with a name plus optional avatar/url and any extra fields. Credited as Person nodes in the page's JSON-LD; other fields are preserved as-is.",
     },
     slug: {
       type: "string",
@@ -50,6 +52,23 @@ description: >-
       default: "false",
       description: "Shorthand for seo.noindex.",
     },
+    narration: {
+      type: "boolean",
+      default: "true",
+      description:
+        "Set to false to leave this page without the Listen to this page player when narration is on.",
+    },
+    related: {
+      type: "(string | { [title]: string })[] | false",
+      description:
+        "Pages to suggest at the foot of this one, up to ten: root-relative paths, absolute URLs, or { Title: link } to name a link. See Related pages below.",
+    },
+    pagination: {
+      type: "boolean",
+      default: "true",
+      description:
+        "Set to false to drop the previous and next links at the foot of the page. The page stays in the order, so its neighbors still link to it.",
+    },
     icon: {
       type: "string",
       description:
@@ -60,8 +79,63 @@ description: >-
       description:
         'Pin the page\'s "last updated" date (ISO or YAML date); overrides the git-derived date.',
     },
+    mode: {
+      type: '"default" | "wide" | "center" | "custom" | "frame"',
+      default: '"default"',
+      description: "What the page shows around its content. See Layout below.",
+    },
+    api: {
+      type: "string",
+      description:
+        "An endpoint this page documents by hand, as an HTTP method and a path or URL (POST /v1/users). See Hand-written API pages.",
+    },
+    authMethod: {
+      type: '"bearer" | "basic" | "key" | "none"',
+      description:
+        "How an api page's endpoint authenticates, over the site's api.auth.",
+    },
+    playground: {
+      type: '"interactive" | "simple" | "none"',
+      default: '"interactive"',
+      description:
+        "What an api page shows: the Try it panel and samples, the samples only, or neither.",
+    },
   }}
 />
+
+## レイアウト [#layout]
+
+`mode` は、ページのコンテンツの周囲に何を表示するかを設定します。
+
+| モード | サイドバー | タイトルと目次 | ページ末尾のリンクとフッター | コンテンツの幅 |
+| --- | --- | --- | --- | --- |
+| `default` | あり | あり | あり | 本文向けの標準幅 |
+| `wide` | あり | タイトルのみ | あり | カラム全体 |
+| `center` | なし | タイトルのみ | あり | 中央寄せの広めのカラム |
+| `frame` | あり | なし | なし | カラム全体 |
+| `custom` | なし | なし | なし | ページ全体 |
+
+`wide` は幅の広い表や図を載せるページに、`center` はリリースノートやお知らせのように上から下へ読み進めるページに適しています。`custom` はヘッダーだけを残すモードで、MDX で書いたランディングページ向けです。`frame` はサイドバーも残すモードで、ドキュメントのナビゲーション内に置くツールやダッシュボード向けです。どちらのモードもページのタイトルや説明をレンダリングしないため、見出しは自分で書いてください。どのモードでもページは検索対象に残り、Markdown 版も引き続き利用できます。
+
+```yaml lineNumbers
+title: Welcome
+mode: custom
+```
+
+値は Mintlify と同じです。ただし、Mintlify の `assistant` モード（ページ全体を使うチャット）に相当するものはありません。
+
+## 関連ページ [#related-pages]
+
+`related` には、このページの末尾で提案するページを列挙します。これらのページは **関連ページ** という見出しの下にカードとして表示されます。
+
+```yaml lineNumbers
+related:
+  - /guides/deployment
+  - Search setup: /configuration/search
+  - https://astro.build
+```
+
+ルート相対パスはサイト内の別のページを指し、カードにはそのページのタイトルと説明が表示されます。翻訳されたページでは、対応する翻訳があればそちらにリンクします。`Title: link` 形式のエントリーではカードのタイトルを直接指定でき、絶対 URL はホスト名を表示してサイト外にリンクします。パスはページ内のほかのリンクと同じようにチェックされるため、どのページにも一致しないパスは [`blume validate`](/docs/cli/validate) で報告されます。このキーは Mintlify と同じなので、移行したページではそのまま使えます。
 
 ## サイドバー [#sidebar]
 
@@ -75,7 +149,7 @@ sidebar:
   display: page
 ```
 
-`hidden` はページをサイドバーと前へ/次へのページネーションから除外します。フォルダーの `index` ページでは、そのページ自身の行だけが除外されます。グループの行は引き続きそのページにリンクし、前へ/次へのリンクもそのページを経由します。
+`hidden` はページをサイドバーと前へ/次へのページネーションから除外し、その結果、サイトマップ、検索、`llms.txt` からも除外します（[非表示のページ](/docs/content/navigation#hidden-pages) を参照）。フォルダーの `index` ページでは、そのページ自身の行だけが除外されます。グループの行は引き続きそのページにリンクするため、前へ/次へのリンクもそのページを経由し、ページはサイトマップ、検索、`llms.txt` にも残ります。ホームページ（ルートの `index` ページ）でも、除外されるのは行だけで、ページはサイトマップ、検索、`llms.txt` に残ります。
 
 `display` はページが属するフォルダーグループの表示モードを設定します（[グループごとのオーバーライド](/docs/content/navigation#per-group-overrides)）。これが意味を持つのは、自動生成されたサイドバー配下にあるフォルダーの `index` ページだけです。それ以外の場所（index 以外のページ、コンテンツルート自体の `index` ページ、明示的な `navigation.sidebar` 配下のページ）には設定対象のグループがないため、Blume は `BLUME_SIDEBAR_DISPLAY_IGNORED` という警告を出します。
 
@@ -92,7 +166,7 @@ seo:
     creator: "@jane"
 ```
 
-`noindex` は robots の `noindex` を出力し、ページをサイトマップから除外し、構造化データも出力しません。`x.creator` はページを X アカウント（`twitter:creator`）の作成として示します。たとえばゲスト投稿の著者を示すときに使います。すべてのフィールドについては [メタデータ](/docs/discoverability/metadata#per-page-overrides) を参照してください。
+`noindex` は robots の `noindex` を出力し、ページをサイトマップから除外し、構造化データも出力しません。`canonical` に別の URL を指定した場合も、ページはサイトマップから除外されます。サイトマップには正規 URL だけが掲載されるためです。`x.creator` はページを X アカウント（`twitter:creator`）の作成として示します。たとえばゲスト投稿の著者を示すときに使います。すべてのフィールドについては [メタデータ](/docs/discoverability/metadata#per-page-overrides) を参照してください。
 
 ## 検索 [#search]
 
@@ -100,7 +174,11 @@ seo:
 search:
   exclude: false
   tags: [api]
+  keywords: [install, setup]
+  boost: 3
 ```
+
+`exclude` はページを検索対象から除外し、`tags` はホスト型の検索アダプターがフィルタリングに使えるように、ページのレコードにラベルを付けます（[タグ](/docs/configuration/search#tags) を参照）。`keywords` には、ページ本文に含まれない語句でもページが見つかるようにするための追加の語句を指定します。`boost` はページの関連度に掛ける倍率で、1 より大きいと上位に、1 より小さいと下位に表示されます。[ランキング](/docs/configuration/search#ranking) を参照してください。
 
 ## AI
 
@@ -109,7 +187,7 @@ ai:
   exclude: true
 ```
 
-`ai.exclude` はページを [`llms.txt` と `llms-full.txt`](/docs/discoverability/llms-txt#excluding-a-page) から除外します。ページは引き続きレンダリングされ、検索対象にも残り、サイトマップにも掲載されたままです。
+`ai.exclude` はページを [`llms.txt` と `llms-full.txt`](/docs/discoverability/llms-txt#excluding-a-page) から除外し、[サイトのスキル](/docs/discoverability/agent-discovery#your-sites-skill) のページマップからも除外します。ページは引き続きレンダリングされ、検索、[MCP サーバー](/docs/discoverability/mcp)、[JSON API](/docs/discoverability/json-api) の対象にも残り、サイトマップにも掲載されたままです。
 
 ## 変更履歴 [#changelog]
 

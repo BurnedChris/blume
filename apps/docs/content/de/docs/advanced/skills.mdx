@@ -16,7 +16,7 @@ npx skills add haydenbleasel/blume
 
 ## Migration
 
-`blume-migrate` zieht eine bestehende Dokumentationsseite zu Blume um: Mintlify, Fumadocs, Docusaurus, Starlight, Nextra oder jedes andere Framework. Das Ziel ist idiomatisches Blume statt einer zeilengetreuen Portierung — mit einer Mapping-Referenz für jedes genannte Framework, einer Weiterleitung für jede URL, die sich ändert, und einem Bericht über alles, was dabei wegfällt. Am schnellsten führst du ihn mit [`blume migrate`](/docs/migrating) aus: Der Befehl erkennt dein Framework und öffnet Codex oder Claude Code mit der im Paket gebündelten Kopie. Wenn du ihn mit einem anderen Agenten nutzen willst, installiere ihn:
+`blume-migrate` zieht eine bestehende Dokumentationsseite zu Blume um: Mintlify, Docusaurus, GitBook, MkDocs, ReadMe, die [anderen genannten Quellen](/docs/migrating#sources) oder jedes andere Framework. Das Ziel ist idiomatisches Blume statt einer zeilengetreuen Portierung — mit einer Mapping-Referenz für jedes genannte Framework, einer Weiterleitung für jede URL, die sich ändert, und einem Bericht über alles, was dabei wegfällt. Am schnellsten führst du ihn mit [`blume migrate`](/docs/migrating) aus: Der Befehl erkennt dein Framework und öffnet Codex oder Claude Code mit der im Paket gebündelten Kopie. Wenn du ihn mit einem anderen Agenten nutzen willst, installiere ihn:
 
 ```bash
 npx skills add haydenbleasel/blume --skill blume-migrate
@@ -24,7 +24,7 @@ npx skills add haydenbleasel/blume --skill blume-migrate
 
 ## Selbstaktualisierende Dokumentation [#self-updating-docs]
 
-`blume-update-docs` hält deine Dokumentation mit dem Produkt synchron, das sie beschreibt. Bei jedem Durchlauf — typischerweise nach einem Zeitplan, den du in deinem Agent-Runner konfigurierst — prüft der Skill kürzlich gemergte PRs, Changelogs, Config-Schemas und CLI-Hilfetexte gegen die Doku-Inhalte, aktualisiert nur Seiten, die inhaltlich veraltet sind (Arbeiten hinter Feature-Flags werden ignoriert), verifiziert das Ergebnis mit `blume build` und öffnet oder aktualisiert einen `blume/*`-Pull-Request. Wenn sich nichts verändert hat, meldet er einen sauberen No-Op, statt einen störenden PR zu öffnen.
+`blume-update-docs` hält deine Dokumentation mit dem Produkt synchron, das sie beschreibt. Bei jedem Durchlauf — typischerweise nach einem Zeitplan, den du in deinem Agent-Runner konfigurierst — prüft der Skill kürzlich gemergte PRs, Changelogs, Config-Schemas und CLI-Hilfetexte gegen die Doku-Inhalte, aktualisiert nur Seiten, die inhaltlich veraltet sind (Arbeiten hinter Feature-Flags werden ignoriert), verifiziert das Ergebnis mit `blume build` und `blume validate` und öffnet oder aktualisiert einen `blume/*`-Pull-Request. Wenn sich nichts verändert hat, meldet er einen sauberen No-Op, statt einen störenden PR zu öffnen.
 
 ```bash
 npx skills add haydenbleasel/blume --skill blume-update-docs
@@ -34,4 +34,18 @@ Blume hostet die Automatisierung nicht — binde den Skill in eine geplante Aufg
 
 ```text
 Use the blume-update-docs skill. Review the PRs merged within the last 7 days and compare them to the docs content. Ignore work behind feature flags. If docs need updates, make them, verify the docs build, and open a blume/* PR. If not, report what you checked and do not open a PR.
+```
+
+## Den Skill für deine Website schreiben [#writing-your-sites-skill]
+
+`blume-write-skill` schreibt den [Agent Skill für deine eigene Dokumentation](/docs/discoverability/agent-discovery#your-sites-skill): eine einzelne `SKILL.md`, die auf deiner Dokumentation basiert und einem Coding-Agenten beibringt, dein Produkt zu nutzen — Einrichtung, Kernkonzepte, häufige Aufgaben und Stolperfallen —, wobei jedes Thema auf seine Seite verlinkt. Er ersetzt die Seitenübersicht, die Blume unter `/skill.md` generiert. Am schnellsten führst du ihn mit `blume skill` aus: Der Befehl ermittelt, wo der Skill hingehört, und öffnet Codex oder Claude Code mit der im Paket gebündelten Kopie:
+
+```bash
+blume skill --claude   # or --codex
+```
+
+Wenn du ihn mit einem anderen Agenten nutzen willst, installiere ihn:
+
+```bash
+npx skills add haydenbleasel/blume --skill blume-write-skill
 ```

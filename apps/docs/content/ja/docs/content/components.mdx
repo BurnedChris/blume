@@ -6,6 +6,8 @@ description: >-
 
 Blume には、アクセシブルでテーマ設定可能なコンポーネントセットが同梱されており、**インポート不要**で任意の `.mdx` ページで利用できます。以下ではそれぞれをライブプレビューとソースとともに紹介します。コンポーネントはバニラ実装で React を使いません。React が有効になるのは、プロジェクトで React を使っている場合 — プロジェクト内の `.tsx` や `.jsx` ファイル、React の [アイランド](/docs/content/islands)、[`<Component>`](#component) のサンプル、[コンポーネントのオーバーライド](/docs/configuration/customization) のいずれかがある場合 — か、[アシスタント](/docs/configuration/assistant) が有効になっている場合のみです。
 
+コンポーネントは、受け取らないプロパティを無視します。ほとんどのコンポーネントは子要素を表示するため、他のドキュメントツールの書き方では何も表示されないことがあります。例えば VitePress の `<Badge type="tip" text="beta" />` は子要素のない Badge なので、何も表示されません。子要素がなく、受け取らないプロパティが指定されたコンポーネントについて、Blume は `BLUME_UNKNOWN_PROP` として警告し、受け取れるプロパティを示します。代わりに、`<Badge>beta</Badge>` のように内容をタグの間に記述してください。
+
 ## Card と CardGroup [#card-and-cardgroup]
 
 カードは、アイコン、タイトル、短い説明文とともにリンク先を示します。`CardGroup` でまとめるとレスポンシブなグリッドになります。ランディングページ、セクションのインデックス、「次のステップ」など、読者を先へ導きたい場所で活用してください。
@@ -32,7 +34,7 @@ Blume には、アクセシブルでテーマ設定可能なコンポーネン�
 
 `Card` は `title`、任意の `href`（省略するとクリックできないカードになります）、そして Blume 組み込みのアイコンセットから選ぶ `icon` を受け取ります。`CardGroup` は `cols`（デフォルトは `2`）を受け取ります。
 
-カードはさらに次のプロパティも受け取ります。`img` はカード上部に表示される画像です（`horizontal` を指定すると、`sm` ブレークポイント以上ではテキストの横に並びます）。`cta` はテキストの下にアクセントカラーで表示される行動喚起（CTA）の行です。`arrow` はタイトルと CTA の後ろに矢印を表示します（デフォルトでは外部リンクの場合のみ表示されます）。`type` はコールアウトと同じようにカードに色を付け、対応するアイコンを選びます（`note`、`info`、`tip`、`check`、`warning`、`danger` のいずれか）。`color` はアイコンの色で、任意の CSS カラーを指定できます。
+カードはさらに次のプロパティも受け取ります。`img` はカード上部に表示される画像です（`horizontal` を指定すると、`sm` ブレークポイント以上ではテキストの横に並びます）。パスは Markdown の画像と同じように指定します — ページと同じ場所にあるファイル（`./cover.png`）、`public/` 配下のパス、または URL です。`cta` はテキストの下にアクセントカラーで表示される行動喚起（CTA）の行です。`arrow` はタイトルと CTA の後ろに矢印を表示します（デフォルトでは外部リンクの場合のみ表示されます）。`type` はコールアウトと同じようにカードに色を付け、対応するアイコンを選びます（`note`、`info`、`tip`、`check`、`warning`、`danger` のいずれか）。`color` はアイコンの色で、任意の CSS カラーを指定できます。
 
 ## Steps
 
@@ -93,6 +95,52 @@ Blume には、アクセシブルでテーマ設定可能なコンポーネン�
   <Tab title="Windows">Use winget to install the toolchain.</Tab>
 </Tabs>
 ```
+
+## View
+
+`<View>` ブロックを使うと、異なるプログラミング言語やフレームワークの読者など、複数の対象読者に向けた 1 つのページを書けます。異なる `title` はそれぞれ、ページのコンテンツ上部にあるピッカーの選択肢になり、選択されたビューのブロックだけが表示されます。目次もこれに追従し、非表示のビュー内にある見出しは目次から除外されます。どの `<View>` にも含まれない本文はすべてのビューで表示され、同じタイトルを共有するブロックは連動して表示・非表示が切り替わるため、共通のセクションとビュー固有のセクションを交互に配置できます。`icon` はピッカー内でビュー名の横に表示されます。
+
+````mdx lineNumbers
+Everyone reads this paragraph.
+
+<View title="JavaScript" icon="braces">
+
+## Install the client
+
+```bash
+npm install @acme/commerce
+```
+
+</View>
+
+<View title="Python" icon="terminal">
+
+## Install the client
+
+```bash
+pip install acme-commerce
+```
+
+</View>
+````
+
+読者が別のビューを選ぶまでは、最初のビューが表示されます。Blume はその選択をビューで書かれたページ間で記憶し、URL に `?view=Python` として書き込むため、リンクを開くと同じビューが表示されます。ビュー内の見出しへのリンクを開くと、そのビューが表示されます。選択に応じてページの大部分が変わる場合は `<View>` を、ページの一部だけが変わる場合は [Tabs](#tabs) を使ってください。エージェント向け Markdown にはすべてのビューが、それぞれの名前の下に含まれます。
+
+## Callout
+
+`<Callout>` は [コールアウトディレクティブ](/docs/content/syntax#callouts) の基盤となるコンポーネントです。`:::warning[Heads up]` は `<Callout type="warning" title="Heads up">` として描画されます。ディレクティブでは設定できない独自のアイコンや色がコールアウトに必要な場合は、コンポーネントを直接記述してください。
+
+<Callout type="tip" title="公開する" icon="rocket">
+  デプロイする前に `blume build` を実行してください。
+</Callout>
+
+```astro
+<Callout type="tip" title="Ship it" icon="rocket">
+  Run `blume build` before you deploy.
+</Callout>
+```
+
+`type` は色合いとデフォルトのアイコンを設定します（`note`、`info`（デフォルト）、`tip`、`success`（または `check`）、`warning`、`danger` のいずれか）。エイリアスの `caution`、`error`、`important`、`warn` は `:::` 形式でのみ使えます。`title` は太字の 1 行目を追加します。`icon` は type のアイコンを置き換え、[`<Icon>`](#icon) と同じ入力を受け取ります — Lucide の名前、画像のパスや URL、インライン SVG のいずれかです。`color` には任意の CSS カラーを指定でき、type の色合いを置き換えます。枠線、アイコン、本文テキストが、ページの背景の上でその色になります。
 
 ## Badge
 
@@ -200,7 +248,7 @@ Blume は Lucide 専用です — 名前だけを指定すると Lucide から�
 
 ## Accordion
 
-関連する折りたたみ要素を、区切り線の入った 1 つの枠線付きコンテナにまとめます — FAQ、任意の手順、長い例などに。各子要素は `AccordionItem` です（`title`、任意の `icon`、`description`、`defaultOpen`）。単独の開閉要素には [Expandable](#expandable) を使ってください。
+関連する折りたたみ要素を、区切り線の入った 1 つの枠線付きコンテナにまとめます — FAQ、任意の手順、長い例などに。各子要素は `AccordionItem` です（`title`、任意の `icon`、`description`、`defaultOpen`）。`title` はインライン Markdown として描画されるため、その中のコードスパン、強調、リンクは文中と同じように表示されます。生の HTML はテキストとして表示されます。単独の開閉要素には [Expandable](#expandable) を使ってください。
 
 <Accordion>
   <AccordionItem title="MDX に対応していますか？">
@@ -224,7 +272,7 @@ Blume は Lucide 専用です — 名前だけを指定すると Lucide から�
 
 ## Expandable
 
-入れ子の詳細（フィールドのサブプロパティの展開や補足の余談など）のための軽量なインライン開閉要素です。`title` がトグルのラベルになります（デフォルトは「Show more」）。`defaultOpen` を指定すると展開された状態で始まります。
+入れ子の詳細（フィールドのサブプロパティの展開や補足の余談など）のための軽量なインライン開閉要素です。`title` がトグルのラベルになり（デフォルトは「Show more」）、アコーディオンの項目と同様にインライン Markdown として描画されます。`defaultOpen` を指定すると展開された状態で始まります。
 
 <Expandable title="詳細オプションを表示">
   これらの設定は任意で、変更が必要になることはほとんどありません。
@@ -270,7 +318,7 @@ Blume は Lucide 専用です — 名前だけを指定すると Lucide から�
 
 ## CodeGroup
 
-複数のコードブロックを 1 つのタブ切り替え式にまとめます — 言語ごと、ファイルごとに 1 タブ。タブのラベルは各ブロックのタイトル（言語の後に続くテキスト）になり、グループのコピーボタンはタブバーに配置され、表示中のブロックをコピーします。`dropdown` を追加すると、タブバーの代わりにメニューで切り替えます。
+複数のコードブロックを 1 つのタブ切り替え式にまとめます — 言語ごと、ファイルごとに 1 タブ。タブのラベルは各ブロックのタイトル（言語の後に続くテキスト）になり、タイトルのないブロックでは言語名（`TypeScript`、`Python`）になります。グループのコピーボタンはタブバーに配置され、表示中のブロックをコピーします。`dropdown` を追加すると、タブバーの代わりにメニューで切り替えます。
 
 <CodeGroup>
 
@@ -342,7 +390,7 @@ fn greet(name: &str) -> String {
 
 ## YouTube
 
-YouTube 動画を、レスポンシブでプライバシーに配慮した（`youtube-nocookie.com`）16:9 のフレームに埋め込みます。クライアント JavaScript は一切含まれません。動画の `id` または完全な `url` に加え、任意の `title`（アクセシビリティ用）と秒単位の `start` 時間を渡せます。
+YouTube 動画を、レスポンシブでプライバシーに配慮した（`youtube-nocookie.com`）16:9 のフレームに埋め込みます。クライアント JavaScript は一切含まれません。動画の `id` または完全な `url` に加え、任意の `title`（アクセシビリティ用）と秒単位の `start` 時間を渡せます。プレイリストの `url`（`youtube.com/playlist?list=…` または `youtube.com/embed/videoseries?list=…`）を指定すると、プレイリスト全体が埋め込まれます。
 
 <YouTube id="aqz-KE-bpKQ" title="Big Buck Bunny" />
 
@@ -451,7 +499,7 @@ Hover the <Tooltip tip="A set of protocols software uses to communicate." headli
 
 ## Prompt
 
-ラベルとコピーボタンからなる 1 行の要素です。`description`（Markdown）が表示されるラベルで、本文がプロンプトそのものになります。本文は非表示で、**Copy prompt** ボタンを押すと、リンク、リスト、コードをそのまま保った Markdown としてクリップボードにコピーされます。`actions` でボタンを制御します（例: `["copy", "cursor"]`）。
+ラベルとコピーボタンからなる 1 行の要素です。`description`（Markdown）が表示されるラベルで、本文がプロンプトそのものになります。本文は非表示で、**Copy prompt** ボタンを押すと、リンク、リスト、コードをそのまま保った Markdown としてクリップボードにコピーされます。句読点は入力したとおりにコピーされます。ページ上の他の本文ではカーリークォート、ダッシュ、三点リーダーとして表示されますが、ここではストレートクォート、`--`、`...` が書いたまま残ります。`actions` でボタンを制御します（例: `["copy", "cursor"]`）。
 
 <Prompt
   description="エンドポイントを**ドキュメント化**するようモデルに依頼します。"
@@ -527,7 +575,7 @@ Hover the <Tooltip tip="A set of protocols software uses to communicate." headli
 
 ### 自動型テーブル [#auto-type-table]
 
-TypeScript の型から型テーブルを生成し、ドキュメントをソースと同期させ続けます。`AutoTypeTable` に `path`（プロジェクトルートからの解決）と型の `name` を指定します。説明は JSDoc コメントから、デフォルト値は `@default` タグから取得され、省略可能なプロパティ（`?`）はそれに応じて示されます。
+TypeScript の型から型テーブルを生成し、ドキュメントをソースと同期させ続けます。`AutoTypeTable` に、ファイルを示す `path`（プロジェクトルート、つまり `blume` を実行するフォルダから解決されます）と型の `name` を指定します。説明は JSDoc コメントから、デフォルト値は `@default` タグから取得され、省略可能なプロパティ（`?`）はそれに応じて示されます。
 
 ```astro
 <AutoTypeTable path="./src/button.ts" name="ButtonProps" />
@@ -571,6 +619,82 @@ export interface ButtonProps {
 />
 ```
 
+## API フィールド [#api-fields]
+
+エンドポイントをフィールドごとに手書きで文書化するための行で、生成される [OpenAPI リファレンス](/docs/references/openapi) と同じスタイルで表示されます。`ParamField` はリクエストパラメータで、その送信先を示す属性 — `path`、`query`、`header`、`body` のいずれか — で名前を指定します。`ResponseField` はレスポンスのフィールドで、`name` で名前を指定します。どちらも `type`、`required`、`deprecated`、`default` を受け取り、説明は子要素として記述します。`ResponseField` はさらに、名前の前後に表示されるラベル `pre` と `post` も受け取ります。
+
+<ParamField path="userId" type="string" required>
+  ユーザーの ID。
+</ParamField>
+
+<ParamField query="limit" type="integer" default={20}>
+  返す結果の数（最大 100）。
+</ParamField>
+
+<ResponseField name="plan" type="string" post={["beta"]}>
+  ユーザーのプラン。
+</ResponseField>
+
+```mdx lineNumbers
+<ParamField path="userId" type="string" required>
+  The user's ID.
+</ParamField>
+
+<ParamField query="limit" type="integer" default={20}>
+  How many results to return, up to 100.
+</ParamField>
+
+<ResponseField name="plan" type="string" post={["beta"]}>
+  The user's plan.
+</ResponseField>
+```
+
+[`Expandable`](#expandable) を使うと、オブジェクトのフィールドをその説明の中に入れ子にできます。
+
+```mdx lineNumbers
+<ResponseField name="address" type="object">
+  Where the order ships.
+
+  <Expandable title="properties">
+    <ResponseField name="city" type="string" required>
+      City name.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+```
+
+`api` フロントマターを持つページでは、`ParamField` からページの Try it パネルとリクエストサンプルも組み立てられます。詳しくは [手書きの API ページ](/docs/references/api-pages) を参照してください。これらのフィールドは Mintlify と同じ名前とプロパティを使うため、Mintlify 向けに書かれたページもそのまま描画されます。ページの Markdown コピーには、各フィールドが型とフラグとともに列挙されます。
+
+### リクエストとレスポンスの例 [#request-and-response-examples]
+
+`RequestExample` と `ResponseExample` はコードブロックを保持し、タイトル付きのフェンスごとに 1 つのタブを作ります（[`CodeGroup`](#codegroup) と同様に、`dropdown` を指定すると言語メニューに切り替わります）。幅の広い画面では、OpenAPI オペレーションの例と同じように、ページ横のカラムに固定され — リクエストが上、レスポンスが下 — 読者がフィールドをスクロールしても表示されたままになります。そのスペースを確保するため、ページの目次は非表示になります。幅の狭い画面では、ページのコンテンツの後に続けて表示されます。
+
+````mdx lineNumbers
+<RequestExample>
+
+```bash cURL
+curl --request POST https://api.acme.dev/v1/users \
+  --header "Authorization: Bearer $ACME_TOKEN" \
+  --data '{ "email": "ada@example.com" }'
+```
+
+```ts title="Acme SDK"
+await acme.users.create({ email: "ada@example.com" });
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json 201
+{ "id": "usr_8f2k", "status": "invited" }
+```
+
+</ResponseExample>
+````
+
+ページのトップレベルであればどこに書いてもかまいません。それぞれがカラムに移動します。`Tab` など別のコンポーネントの中に入れ子にしたものは、書かれた位置にそのまま残ります。
+
 ## GitHub 情報 [#github-info]
 
 GitHub リポジトリへのリンクを、スター数とフォーク数とともに表示するカードです。カウントはビルド時に取得され — クライアント JavaScript は不要 — リアルタイムの値ではなく、最後にビルドした時点の数値が表示されます。API に到達できない場合でも、カードはカウントなしで描画されます。`owner` と `repo` を渡すか、省略して `blume.config` のリポジトリを使用します。API のレート制限を緩和するには、環境変数 `GITHUB_TOKEN` を設定してください。`token` プロパティを指定すると特定のカードだけその値を上書きできますが、環境変数を使えばトークンをコンテンツに含めずに済みます。
@@ -592,7 +716,7 @@ GitHub リポジトリへのリンクを、スター数とフォーク数とと�
 
 ## Component
 
-`Component` は、プロジェクトの `examples/` ディレクトリにあるサンプルファイルを、ハイライトされたソースと並べてタブ形式でライブプレビューとして描画します。`path` でファイルを指定します — `examples/` 配下の位置から拡張子を除いたもの（つまり `examples/counter.tsx` なら `path="counter"`）。React、Vue、Svelte、Astro のサンプルがすべてサポートされ、フレームワークのサンプルはハイドレートされ、Astro のものは静的に描画されます。単一のファイルからプレビューとコードを同期させ続けます。
+`Component` は、プロジェクトの `examples/` ディレクトリにあるサンプルファイルを、ハイライトされたソースと並べてタブ形式でライブプレビューとして描画します。`path` でファイルを指定します — `examples/` 配下の位置から拡張子を除いたもの（つまり `examples/counter.tsx` なら `path="counter"`）。React、Vue、Svelte、Astro のサンプルがすべてサポートされ、フレームワークのサンプルはハイドレートされ、Astro のものは静的に描画されます。単一のファイルからプレビューとコードを同期させ続けます。どのサンプルにも該当しない `path` を指定すると、代わりに「No example found」というボックスが描画され、`blume dev`、`blume build`、[`blume doctor`](/docs/cli/doctor) がその記述箇所の行で警告（`BLUME_EXAMPLE_NOT_FOUND`）を出します。
 
 プレビューは、ドキュメントのスタイルが一切届かない独立したフレーム内で描画されます — 本文のマージン、タイポグラフィ、テーマの装飾がコンポーネントに漏れ込むことはありません。フレームには Tailwind（プリフライトと、プロジェクトおよび examples ディレクトリからスキャンされたユーティリティ）と、`bg-background` のようなクラスがデフォルトでサイトのパレットに従うようにする Blume のデザイントークンが与えられ、サイトのライト／ダーク切り替えにリアルタイムで追従します。ペインは描画されたサンプルに合わせてサイズを調整し — 読み込み後にサンプルが拡大・縮小しても追従し続けます — Preview タブと Code タブは同じ高さを共有するため、切り替えてもページがずれることはありません。
 
@@ -687,6 +811,8 @@ import CodeBlock from "blume/components/content/CodeBlock.astro";
 ```
 
 `title` はヘッダーのラベル（例えばファイル名）を設定します。指定しない場合は言語が表示されます。`icons={false}` を指定すると、フェンスに対する [`markdown.code.icons`](/docs/content/syntax#code-blocks) と同様に、言語のブランドアイコンが非表示になります。
+
+`code` を指定しない場合、`CodeBlock` は子要素を書かれたとおりに描画します。そのため、`<CodeBlock>…</CodeBlock>` でラップしたフェンス付きブロック（Fern や Mintlify でのコードの書き方）は、そのフェンスとして表示されます。この場合、`title` やその他のプロパティは適用されません。代わりに、フェンスの言語の後に [タイトル](/docs/content/syntax#code-blocks) を指定してください。
 
 （独自コンポーネントの中などで）自分で HTML 文字列にハイライトしたい場合は、`blume/markdown` から基盤となるヘルパーをインポートします。
 

@@ -1,0 +1,538 @@
+---
+// Deploy docs and an MCP server to Cloudflare Workers: checked against the
+// deployment, MCP, Markdown, assistant, and rate-limiting docs, the
+// Cloudflare platform and adapter (deploy/platforms/cloudflare.ts,
+// deploy/adapters/cloudflare.ts), the wrapper Worker
+// (deploy/cloudflare-negotiation.ts), the MCP handler (ai/mcp/server.ts),
+// the dependency and secret checks, @astrojs/cloudflare 14.3's generated
+// config, apps/docs/wrangler.jsonc, and Cloudflare's Wrangler, static assets,
+// Workers Builds, secrets, and Custom Domains docs on 2026-09-27. Review:
+// `wrangler dev` over copies of apps/docs' build with and without
+// html_handling: with Blume's run_worker_first rules both serve /docs/deployment
+// at 200 (the Worker's ASSETS fetch follows the 307); with the rules removed,
+// the default 307s it to /docs/deployment/.
+// Ran: npm 11, pnpm 12, and Bun 1.4 installs of blume with
+// @astrojs/cloudflare 14.3.3 and wrangler 4.142.0 (pnpm stopped with
+// ERR_PNPM_IGNORED_BUILDS on esbuild and workerd until approved; npm and Bun
+// ran both); `wrangler dev` (through the .wrangler/deploy redirect, beside a
+// user wrangler.jsonc) and `wrangler deploy --dry-run` over a copy of
+// apps/docs' Cloudflare build, with the curl checks below for HTML, Markdown,
+// .md, .well-known, 404, and MCP requests; the same checks against
+// useblume.dev. Not yet run end to end: `blume build` on a fresh project, a
+// real `wrangler deploy`, Workers Builds, and a Custom Domain.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("cloudflare-workers-documentation")}>
+  <p>
+    Yes. One Cloudflare Worker can serve both: your docs pages as static
+    assets, and a live MCP endpoint that coding agents connect to. Name Blume's{" "}
+    <code>cloudflare()</code> adapter and turn on the MCP server, and{" "}
+    <code>blume build</code> produces a Worker with your prerendered site beside
+    it. <code>wrangler deploy</code> ships both in one step.
+  </p>
+  <p>
+    By the end of this guide, the Acme docs run on Workers with the MCP server
+    at <code>/mcp</code>, every page answers as HTML or Markdown at the same
+    URL, and you've tested static and Worker requests separately, locally and
+    live. Blume's own site, useblume.dev, runs on
+    this setup, so you can try the checks against it before yours is up.
+  </p>
+  <p>
+    If you don't need MCP or the assistant, skip the adapter: a static build
+    serves every page without running a Worker, and agents can still read the{" "}
+    <code>.md</code> URLs and <code>llms.txt</code> (see{" "}
+    <a href="/guides/static-vs-server-documentation">Static or server-rendered</a>).
+    Blume's MCP server is also read-only. Tools that change data or check who's
+    calling need a server of your own.
+  </p>
+
+  <h2>How one Worker serves the site</h2>
+  <p>
+    A Worker with static assets has two layers. The static layer serves files
+    from <code>dist/client</code> without running any code. The Worker script
+    runs for the paths its <code>assets.run_worker_first</code> rules claim.
+    Blume writes those rules at build time, so each request lands here:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Request</th>
+        <th scope="col">Answered by</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>
+          <code>/_astro/*</code> build assets, <code>.md</code> and{" "}
+          <code>.txt</code> files, <code>/.well-known/*</code>
+        </td>
+        <td>The static layer, with the headers from Blume's <code>_headers</code> file</td>
+      </tr>
+      <tr>
+        <td>A page URL, like <code>/</code> or <code>/quickstart</code></td>
+        <td>
+          Blume's wrapper Worker: the HTML page, or the page's Markdown when the
+          request prefers <code>text/markdown</code>
+        </td>
+      </tr>
+      <tr>
+        <td>A URL no page backs</td>
+        <td>
+          The Worker: the 404 page, or <code>/404.md</code> for a Markdown
+          request, with a 404 status either way
+        </td>
+      </tr>
+      <tr>
+        <td><code>POST /mcp</code></td>
+        <td>The MCP endpoint in the Astro Worker</td>
+      </tr>
+      <tr>
+        <td>A redirect from <code>blume.config.ts</code></td>
+        <td>The wrapper Worker, with the status you configured</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Because page requests run the Worker, each page view counts as a Worker
+    request on your Cloudflare plan. On the free plan, requests over the limit
+    get a <code>429</code> instead of falling back to the static file.
+    Cloudflare's{" "}
+    <a href="https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/">static assets billing</a>{" "}
+    page has the details, and Blume's <a href="/pricing">pricing page</a>{" "}
+    estimates a server build on Cloudflare.
+  </p>
+
+  <h2>Install the adapter and Wrangler</h2>
+  <p>
+    Start from a Blume project. If you don't have one, run{" "}
+    <code>npx blume init acme-docs</code> and pick the <code>docs</code>{" "}
+    template. Blume runs on Astro 7, whose Cloudflare adapter is{" "}
+    <code>@astrojs/cloudflare</code> 14. The adapter lists Wrangler 4 as a
+    peer, and you deploy with Wrangler anyway, so install both as dev
+    dependencies:
+  </p>
+  <CodeBlock
+    code="npm install -D @astrojs/cloudflare@^14.3.3 wrangler@^4.142.0"
+    lang="bash"
+  />
+  <p>
+    Blume ships the Vercel and Node adapters, but not this one. Without it,{" "}
+    <code>blume build</code> stops with <code>BLUME_DEPENDENCY_MISSING</code>{" "}
+    and prints the install command for your package manager.
+  </p>
+
+  <h3>Approve build scripts on pnpm</h3>
+  <p>
+    Wrangler brings two packages with install scripts: <code>esbuild</code>,
+    and <code>workerd</code>, the Workers runtime Wrangler runs locally. npm and
+    Bun run both without extra setup. pnpm runs a dependency's build script only
+    once you approve it. pnpm 11 and later fail the install with{" "}
+    <code>ERR_PNPM_IGNORED_BUILDS</code> until you do, and pnpm 10 skips the
+    scripts with a warning. Approve both, then run <code>pnpm install</code>{" "}
+    again:
+  </p>
+  <CodeBlock
+    code={`allowBuilds:
+  esbuild: true
+  workerd: true`}
+    lang="yaml"
+    title="pnpm-workspace.yaml"
+  />
+  <p>
+    A new pnpm project from <code>blume init</code> already approves{" "}
+    <code>esbuild</code>, so you only add <code>workerd</code>.{" "}
+    <code>allowBuilds</code> needs pnpm 10.26 or later.
+  </p>
+
+  <h2>Configure Blume</h2>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { cloudflare } from "blume/deploy";
+
+export default defineConfig({
+  title: "Acme Docs",
+  agents: {
+    mcp: { enabled: true },
+  },
+  deployment: cloudflare({ site: "https://docs.acme.example" }),
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Naming the adapter switches the build to server output, which the MCP
+    server needs. The endpoint mounts at <code>/mcp</code>; set{" "}
+    <code>agents.mcp.route</code> to move it.
+  </p>
+  <p>
+    Set <code>site</code> yourself. Blume detects the site URL on Cloudflare
+    Pages, but Workers doesn't expose one. Canonical links, the sitemap, and the
+    page URLs the MCP tools return all use it, and it turns on the Connect to
+    MCP menu on every page. Use the domain you'll serve from, even before it's
+    attached.
+  </p>
+  <Callout type="info">
+    <code>@astrojs/cloudflare</code> dropped Cloudflare Pages in version 13,
+    so a <code>cloudflare()</code> server build deploys to Workers only. A
+    static build doesn't use the adapter and still deploys to Pages, but a
+    Pages project that needs the MCP server moves to Workers first.
+  </Callout>
+
+  <h2>Add a Wrangler config</h2>
+  <p>
+    The adapter can generate a Worker config on its own, but a{" "}
+    <code>wrangler.jsonc</code> at the project root, beside{" "}
+    <code>blume.config.ts</code>, is where you name the Worker and set how its
+    assets behave. The build merges it into the config it deploys.
+  </p>
+  <CodeBlock
+    code={`{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "acme-docs",
+  "compatibility_date": "2026-09-01",
+  // Node.js APIs for the Astro runtime and the MCP server.
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "binding": "ASSETS",
+    "html_handling": "drop-trailing-slash",
+    "not_found_handling": "404-page",
+    // Blume adds its own rules to this list at build time.
+    "run_worker_first": ["/mcp"]
+  }
+}`}
+    lang="jsonc"
+    title="wrangler.jsonc"
+  />
+  <ul>
+    <li>
+      <strong><code>name</code></strong> is the Worker's name and its{" "}
+      <code>workers.dev</code> hostname. Without it, Blume names the Worker
+      after your <code>package.json</code> name.
+    </li>
+    <li>
+      <strong><code>compatibility_date</code></strong> pins the runtime behavior
+      your Worker gets. Set it to the date you create the file.
+    </li>
+    <li>
+      <strong><code>binding</code></strong> must stay <code>ASSETS</code>: the
+      Astro Worker reads the static files under that name, and declaring it
+      keeps the adapter from swapping in an assets block of its own.
+    </li>
+    <li>
+      <strong><code>html_handling</code></strong>: Blume builds each page as{" "}
+      <code>quickstart/index.html</code> and links to it without a slash. In
+      this build, page requests run through the Worker, which serves them at
+      the slashless URL either way. Pages the static layer serves by itself
+      follow this setting, which happens when the build couldn't write its
+      Worker rules (see{" "}
+      <a href="#troubleshooting">Troubleshooting</a>). There,
+      Cloudflare's default answers <code>/quickstart</code> with a{" "}
+      <code>307</code> to <code>/quickstart/</code>, and{" "}
+      <code>drop-trailing-slash</code> serves it at <code>/quickstart</code>{" "}
+      instead.
+    </li>
+    <li>
+      <strong><code>not_found_handling</code></strong> answers unknown URLs with
+      Blume's 404 page and a 404 status, which the wrapper swaps for{" "}
+      <code>/404.md</code> when a client asks for Markdown.
+    </li>
+    <li>
+      <strong><code>run_worker_first</code></strong>: the build merges its own
+      rules into this list. Listing the endpoint keeps it on the Worker even if
+      that merge is skipped.
+    </li>
+  </ul>
+
+  <h2>Build and inspect the Worker</h2>
+  <CodeBlock code="npx blume build" lang="bash" />
+  <p>
+    In the summary at the end, Output should read <code>server</code>, Adapter{" "}
+    <code>cloudflare</code>, and Server features <code>MCP server</code>. Above
+    it, the log says{" "}
+    <code>Wired Accept: text/markdown negotiation into the Cloudflare Worker</code>.
+    The build writes three things Wrangler uses:
+  </p>
+  <ul>
+    <li>
+      <code>dist/client</code>: the static files, including each page's{" "}
+      <code>.md</code> copy, <code>llms.txt</code>, <code>_headers</code>, and{" "}
+      <code>_redirects</code>.
+    </li>
+    <li>
+      <code>dist/server</code>: the Worker. Astro's <code>entry.mjs</code>,
+      the <code>blume-worker.mjs</code> wrapper in front of it, and{" "}
+      <code>wrangler.json</code>, the config that actually deploys, with your{" "}
+      <code>wrangler.jsonc</code> merged in.
+    </li>
+    <li>
+      <code>.wrangler/deploy/config.json</code>: a pointer that sends Wrangler
+      commands run from the project root to <code>dist/server/wrangler.json</code>.
+      Blume adds <code>.wrangler/</code> to your <code>.gitignore</code>.
+    </li>
+  </ul>
+  <p>Print the parts of the deploy config that matter here:</p>
+  <CodeBlock
+    code={`node -e 'const c = require("./dist/server/wrangler.json"); console.log(JSON.stringify({ name: c.name, main: c.main, assets: c.assets }, null, 2))'`}
+    lang="bash"
+  />
+  <p>
+    <code>main</code> should be <code>blume-worker.mjs</code>, and{" "}
+    <code>run_worker_first</code> should start with <code>/*</code> followed by
+    exemptions like <code>!/_astro/*</code>, <code>!/*.md</code>, and{" "}
+    <code>!/.well-known/*</code>. Your <code>/mcp</code> rule is gone because{" "}
+    <code>/*</code> covers it, and Wrangler rejects a rule another one makes
+    redundant. Then let Wrangler check the bundle without uploading it:
+  </p>
+  <CodeBlock code="npx wrangler deploy --dry-run" lang="bash" />
+  <p>It starts by confirming which config it read:</p>
+  <CodeBlock
+    code={`Using redirected Wrangler configuration.
+ - Configuration being used: "dist/server/wrangler.json"
+ - Original user's configuration: "wrangler.jsonc"
+ - Deploy configuration file: ".wrangler/deploy/config.json"`}
+    lang="txt"
+  />
+  <p>
+    It also lists the Worker's modules with their sizes. The MCP server reads a
+    snapshot of every page built into the Worker, so that module grows with
+    your docs. Compare the total against Cloudflare's{" "}
+    <a href="https://developers.cloudflare.com/workers/platform/limits/">Workers limits</a>,
+    which also cap how many static files one version can hold.
+  </p>
+
+  <h2>Test it locally</h2>
+  <p>
+    <code>npx wrangler dev</code> follows the same pointer and runs the built
+    Worker in <code>workerd</code> at <code>http://localhost:8787</code>. In a
+    second terminal, send one request of each kind:
+  </p>
+  <CodeBlock
+    code={`DOCS=http://localhost:8787
+
+# Static layer
+curl -s -o /dev/null -D - "$DOCS/index.md"
+curl -s -o /dev/null -D - "$DOCS/.well-known/mcp.json"
+
+# Worker: the same page as HTML, then as Markdown
+curl -s -o /dev/null -D - "$DOCS/"
+curl -s -o /dev/null -D - -H "Accept: text/markdown" "$DOCS/"
+
+# Worker: a missing page, asked for as Markdown
+curl -s -o /dev/null -w "%{http_code} %{content_type}\\n" \\
+  -H "Accept: text/markdown" "$DOCS/no-such-page"
+
+# Worker: the MCP endpoint
+curl -s "$DOCS/mcp" \\
+  -H "Content-Type: application/json" \\
+  -H "Accept: application/json, text/event-stream" \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_docs","arguments":{"query":"quickstart"}}}'`}
+    lang="bash"
+  />
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Request</th>
+        <th scope="col">What to look for</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>/index.md</code></td>
+        <td>
+          <code>content-type: text/markdown; charset=utf-8</code> and no{" "}
+          <code>vary: Accept</code>
+        </td>
+      </tr>
+      <tr>
+        <td><code>/.well-known/mcp.json</code></td>
+        <td>
+          <code>access-control-allow-origin: *</code>, which comes from{" "}
+          <code>_headers</code>, a file Cloudflare applies only on the static
+          layer
+        </td>
+      </tr>
+      <tr>
+        <td><code>/</code></td>
+        <td><code>content-type: text/html</code> and <code>vary: Accept</code></td>
+      </tr>
+      <tr>
+        <td><code>/</code> as Markdown</td>
+        <td>
+          <code>content-type: text/markdown; charset=utf-8</code>,{" "}
+          <code>vary: Accept</code>, and an <code>x-markdown-tokens</code>{" "}
+          estimate
+        </td>
+      </tr>
+      <tr>
+        <td>The missing page</td>
+        <td><code>404 text/markdown; charset=utf-8</code></td>
+      </tr>
+      <tr>
+        <td><code>/mcp</code></td>
+        <td>
+          A JSON-RPC <code>result</code> listing matching pages, each with a{" "}
+          <code>url</code> on your <code>site</code>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The <code>vary: Accept</code> header is the tell: only the wrapper Worker
+    adds it. Run the same commands with <code>DOCS=https://useblume.dev</code>{" "}
+    to see a live site answer them.
+  </p>
+
+  <h2>Deploy</h2>
+  <CodeBlock
+    code={`npx wrangler login
+npx wrangler deploy`}
+    lang="bash"
+  />
+  <p>
+    <code>wrangler login</code> opens a browser to authorize Wrangler with your
+    Cloudflare account. <code>wrangler deploy</code> uploads the static files
+    and the Worker, then prints the Worker's <code>workers.dev</code> URL. Set{" "}
+    <code>DOCS</code> to that URL and run the checks again.
+  </p>
+
+  <h3>Add your domain</h3>
+  <p>
+    To serve the docs at <code>docs.acme.example</code>, add a Custom Domain to{" "}
+    <code>wrangler.jsonc</code>. The domain's zone must be active on your
+    Cloudflare account, and the hostname can't already have a CNAME record;
+    Cloudflare creates the DNS record and certificate for you.
+  </p>
+  <CodeBlock
+    code={`"routes": [{ "pattern": "docs.acme.example", "custom_domain": true }],`}
+    lang="jsonc"
+    title="wrangler.jsonc"
+  />
+  <p>
+    The deploy reads the config the build wrote, so rebuild after any change to{" "}
+    <code>wrangler.jsonc</code>:
+  </p>
+  <CodeBlock code="npx blume build && npx wrangler deploy" lang="bash" />
+
+  <h3>Deploy on every push</h3>
+  <p>
+    To build from Git, connect the repository under your Worker's{" "}
+    <strong>Settings</strong> &gt; <strong>Build</strong> in the Cloudflare
+    dashboard. Set the build command to <code>npx blume build</code> and keep
+    the default deploy command, <code>npx wrangler deploy</code>. Workers
+    Builds uses the Wrangler version in your <code>package.json</code>.
+    Commit <code>wrangler.jsonc</code>, since the build reads it; the pointer
+    the build writes for Wrangler stays out of Git.
+  </p>
+  <p>
+    Two things differ from your machine. If you install with pnpm, the build
+    image's default pnpm can predate <code>allowBuilds</code>, so set the{" "}
+    <code>PNPM_VERSION</code> build variable to the version you use. And
+    Workers Builds doesn't keep <code>node_modules/.cache</code> between builds,
+    so every deploy renders every Open Graph card again.
+  </p>
+
+  <h2>Add secrets</h2>
+  <p>
+    The MCP server needs none: it answers from the snapshot built into the
+    Worker. The <a href="/docs/configuration/assistant">assistant</a> does. With <code>ai.assistant.enabled</code> and no provider set, it uses the
+    Vercel AI Gateway and reads <code>AI_GATEWAY_API_KEY</code> on each
+    request. Store the key on the Worker:
+  </p>
+  <CodeBlock code="npx wrangler secret put AI_GATEWAY_API_KEY" lang="bash" />
+  <p>
+    Wrangler asks for the value, then creates and deploys a new version of the
+    Worker right away. It finds the Worker by the <code>name</code> in your{" "}
+    <code>wrangler.jsonc</code>, since secret commands don't follow the build's
+    pointer. <code>blume build</code> still warns{" "}
+    <code>BLUME_MISSING_SECRET</code> when the key isn't in the build's own
+    environment. That's expected: the Worker reads it at request time. For{" "}
+    <code>blume dev</code>, put it in <code>.env.local</code>.
+  </p>
+  <p>
+    Build-time tokens, like a Notion source's <code>NOTION_TOKEN</code>, are
+    read while the site builds, so in Workers Builds they go under{" "}
+    <strong>Build variables and secrets</strong>, which the running Worker never
+    sees. To cap how often one reader can call the assistant, see{" "}
+    <a href="/guides/rate-limit-documentation-ai-assistant">rate-limiting the assistant</a>.
+  </p>
+
+  <h2>Connect an agent</h2>
+  <p>With the site live on your domain, add the server to Claude Code:</p>
+  <CodeBlock
+    code={`claude mcp add --transport http acme-docs https://docs.acme.example/mcp
+claude mcp list`}
+    lang="bash"
+  />
+  <p>
+    <code>acme-docs</code> should show as connected. For Cursor, VS Code, and
+    what an agent does with the tools, see{" "}
+    <a href="/guides/mcp-server-for-documentation">Add an MCP server to your docs</a>.
+    To keep the docs internal, put{" "}
+    <a href="/guides/private-documentation-cloudflare-access">Cloudflare Access</a>{" "}
+    in front of the Worker, and remember that agents outside it can't reach{" "}
+    <code>/mcp</code> either.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The build stops with BLUME_DEPENDENCY_MISSING</h3>
+  <p>
+    <code>@astrojs/cloudflare</code> isn't installed where the project can
+    resolve it. Run the install command the error prints, from the directory
+    that holds <code>blume.config.ts</code>. <code>npx blume doctor</code>{" "}
+    reports the same thing without building.
+  </p>
+  <h3>pnpm fails with ERR_PNPM_IGNORED_BUILDS</h3>
+  <p>
+    Add the packages it names to <code>allowBuilds</code> in{" "}
+    <code>pnpm-workspace.yaml</code>, as in{" "}
+    <a href="#install-the-adapter-and-wrangler">Install the adapter and Wrangler</a>,
+    and install again. Recent pnpm releases may write placeholder entries for
+    them into that file; replace each with <code>true</code>.
+  </p>
+  <h3>Markdown requests get HTML</h3>
+  <p>
+    Look for this warning in the build log:{" "}
+    <code>Could not wire Accept: text/markdown negotiation into dist/server/wrangler.json</code>.
+    The build skips the wrapper when your own <code>run_worker_first</code>{" "}
+    rules would push the list past Wrangler's limit of 100 rules, or a rule
+    past 100 characters, or when the config has no assets binding. Trim your
+    rules, keep <code>"binding": "ASSETS"</code>, and rebuild. The{" "}
+    <code>.md</code> URLs keep working either way. Until then, the static
+    layer serves the pages itself, so keep{" "}
+    <code>"html_handling": "drop-trailing-slash"</code>, or every page
+    redirects to a URL ending in a slash.
+  </p>
+  <h3>The MCP endpoint answers 406 or 405</h3>
+  <p>
+    A <code>406 Not Acceptable</code> means the request's <code>Accept</code>{" "}
+    header didn't include both <code>application/json</code> and{" "}
+    <code>text/event-stream</code>, which the transport requires. A{" "}
+    <code>405 Method Not Allowed</code> for a <code>GET</code>, such as opening{" "}
+    <code>/mcp</code> in a browser, is expected: the endpoint only answers{" "}
+    <code>POST</code>.
+  </p>
+  <h3>The build fails with BLUME_SERVER_FEATURE_REQUIRED</h3>
+  <p>
+    The MCP server is on, but the build is static. Remove{" "}
+    <code>output: "static"</code> from <code>cloudflare()</code>, or turn the
+    server off.
+  </p>
+  <h3>Wrangler can't find the Worker or its files</h3>
+  <p>
+    <code>.wrangler/deploy/config.json</code> is written by the build and
+    ignored by Git, so a fresh checkout has none. Run{" "}
+    <code>npx blume build</code> before <code>npx wrangler deploy</code>, from
+    the same directory.
+  </p>
+  <h3>The build warns about Node.js imports</h3>
+  <p>
+    A warning that starts{" "}
+    <code>Unexpected Node.js imports for environment</code> means the Worker
+    config has no <code>nodejs_compat</code> flag. Add it to{" "}
+    <code>compatibility_flags</code> in <code>wrangler.jsonc</code> and rebuild.
+  </p>
+</GuidePage>

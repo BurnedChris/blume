@@ -32,6 +32,7 @@ import {
   resolvedSearchAdapterSchema,
 } from "../search/adapters/registry.ts";
 import type { SearchAdapterInput } from "../search/adapters/registry.ts";
+import { ownedMetatag } from "../seo/metatags.ts";
 import { normalizeXHandle } from "../seo/x-handle.ts";
 import { filesystem } from "../sources/filesystem.ts";
 import {
@@ -40,9 +41,10 @@ import {
 } from "../sources/registry.ts";
 import { FONT_SLUGS, isFontSlug } from "../theme/fonts.ts";
 import { isExternalUrl, normalizeBasePath } from "./base-path.ts";
-import { FOOTER_SOCIALS, MAX_FOOTER_COLUMNS } from "./footer.ts";
+import { FOOTER_SOCIALS } from "./footer.ts";
 import { PUBLIC_HOST_URL } from "./github.ts";
 import { uiLocaleOverridesSchema } from "./i18n-ui.ts";
+import { isBuiltInMcpClient, mcpClients } from "./mcp-clients.ts";
 import { openInChatProviders } from "./open-in-chat.ts";
 import { PAGE_MODES } from "./page-modes.ts";
 import { redirectPatternError } from "./redirect-patterns.ts";
@@ -180,16 +182,18 @@ const seoMetaSchema = z.strictObject({
   x: z.strictObject({ creator: xHandleSchema }).optional(),
 });
 
-const searchMetaSchema = z.strictObject(
-  {
-    exclude: z.boolean().default(false),
-    tags: z.array(z.string()).optional(),
-  },
-  removedKeysHint({
-    boost:
-      "search.boost was removed: search never read it, so the page ranked the same without it. Delete the field.",
-  })
-);
+const searchMetaSchema = z.strictObject({
+  /**
+   * Multiply the page's search relevance: above 1 ranks it higher, below 1
+   * lower. Keep it to a few key pages, and under 10: a large boost floats a
+   * page over better matches.
+   */
+  boost: z.number().positive().optional(),
+  exclude: z.boolean().default(false),
+  /** Extra terms the page is found by, beyond its own text. */
+  keywords: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional(),
+});
 
 const aiMetaSchema = z.strictObject({
   /** Exclude this page from llms.txt and llms-full.txt. */
@@ -204,10 +208,9 @@ const changelogMetaSchema = z.strictObject({
 
 /**
  * A post author: a bare name/handle, or an object with a name plus optional
- * avatar/URL. The object is passthrough so richer author metadata (social
- * handles, roles) survives untouched — Blume doesn't render authors yet, so
- * this exists to preserve the field (common on blog/changelog pages) rather
- * than have a strict scan reject it.
+ * avatar/URL. Blume credits the name and URL in the page's JSON-LD; the object
+ * is passthrough so richer author metadata (social handles, roles) survives
+ * untouched rather than have a strict scan reject it.
  */
 const authorSchema = z.union([
   z.string(),
@@ -251,7 +254,7 @@ const pageMetaBaseSchema = z.strictObject({
     .optional(),
   /** How this page's endpoint authenticates, over the site's `api.auth`. */
   authMethod: z.enum(AUTH_METHODS).optional(),
-  /** Post author(s) for blog/changelog content; preserved, not yet rendered. */
+  /** Post author(s) for blog/changelog content, credited in JSON-LD. */
   authors: z.union([authorSchema, z.array(authorSchema)]).optional(),
   changelog: changelogMetaSchema.optional(),
   /** Publish date for feed-backed content like blog/changelog. */
@@ -303,10 +306,23 @@ const pageMetaBaseSchema = z.strictObject({
   type: z.string().optional(),
 });
 
-export const pageMetaSchema = pageMetaBaseSchema;
-
 export type PageMeta = z.infer<typeof pageMetaBaseSchema>;
 export type PageMetaInput = z.input<typeof pageMetaBaseSchema>;
+
+/**
+ * Fold the top-level `hidden`/`noindex` shorthands into the nested fields
+ * every consumer reads (`sidebar.hidden`, `seo.noindex`). It runs inside both
+ * page schemas, so the scan's `PageMeta` (the sitemap, llms.txt, search) and
+ * the content collections' `entry.data` (the page's robots tag) can't
+ * disagree about a page that uses the shorthand.
+ */
+const foldShorthands = <Meta extends PageMeta>(meta: Meta): Meta => ({
+  ...meta,
+  seo: { ...meta.seo, noindex: meta.seo.noindex || meta.noindex },
+  sidebar: { ...meta.sidebar, hidden: meta.sidebar.hidden || meta.hidden },
+});
+
+export const pageMetaSchema = pageMetaBaseSchema.transform(foldShorthands);
 
 /** The fully-defaulted front matter of a page that declares nothing. */
 const EMPTY_PAGE_META: PageMeta = pageMetaBaseSchema.parse({});
@@ -324,11 +340,12 @@ const EMPTY_PAGE_META: PageMeta = pageMetaBaseSchema.parse({});
  */
 export const pageCollectionSchema = pageMetaBaseSchema
   .loose()
+  .transform(foldShorthands)
   // oxlint-disable-next-line promise/prefer-await-to-then -- zod's catch, not a promise
   .catch(() => EMPTY_PAGE_META);
 
 /** Built-in page frontmatter keys; custom keys must never redeclare one. */
-const BUILT_IN_PAGE_META_KEYS = new Set<string>(
+export const BUILT_IN_PAGE_META_KEYS: ReadonlySet<string> = new Set<string>(
   pageMetaBaseSchema.keyof().options
 );
 
@@ -471,28 +488,29 @@ const apiConfigSchema = z.strictObject({
 });
 
 /**
- * The site footer: social profile icons and up to four link columns. Unset,
- * the site has no footer (a `components.ts` `Footer` still renders).
+ * The site footer: a copyright line, a row of links, and social profile
+ * icons. Unset, the site has no footer (a `components.ts` `Footer` still
+ * renders).
  */
 const footerConfigSchema = z.strictObject({
-  /** Link columns, each an optional heading over its links. */
+  /** A line of plain text between the links and the icons (`© 2026 Acme, Inc.`). */
+  copyright: localizableLabelSchema.optional(),
+  /** Links in one row, in the order written. */
   links: z
-    .array(
-      z.strictObject({
-        items: z
-          .array(
-            z.strictObject({ href: z.string(), label: localizableLabelSchema })
-          )
-          .min(1),
-        label: localizableLabelSchema.optional(),
-      })
-    )
-    .max(MAX_FOOTER_COLUMNS, {
-      message: `footer.links holds at most ${MAX_FOOTER_COLUMNS} columns.`,
-    })
+    .array(z.strictObject({ href: z.string(), label: localizableLabelSchema }))
     .default([]),
   /** Social profiles, platform to URL, shown as icons in the order written. */
   socials: z.partialRecord(z.enum(FOOTER_SOCIALS), z.string()).default({}),
+});
+
+/**
+ * The generated `/changelog` index. Its title and description may be
+ * per-locale maps; unset, they're the `changelog` UI strings `i18n.ui`
+ * translates.
+ */
+const changelogConfigSchema = z.strictObject({
+  description: localizableLabelSchema.optional(),
+  title: localizableLabelSchema.optional(),
 });
 
 /** A validated `content.sources` entry: an adapter descriptor from `blume/sources`. */
@@ -788,9 +806,17 @@ const searchIndexingSchema = z
   })
   .prefault({});
 
+/** What the search dialog's analytics events carry. */
+const searchAnalyticsSchema = z
+  .strictObject({
+    queries: z.boolean().default(true),
+  })
+  .prefault({});
+
 /** The object form of `search`: the adapter plus its adapter-independent settings. */
 const searchOptionsSchema = z.strictObject(
   {
+    analytics: searchAnalyticsSchema,
     indexing: searchIndexingSchema,
     /** Curated links for the Cmd+K empty state; defaults to the first sidebar pages. */
     popular: z.array(searchPopularLinkSchema).default([]),
@@ -869,7 +895,91 @@ const publicJwkSchema = z
     }
   });
 
+// The label is the row button's only accessible name (its icon is
+// decorative), so unlike a header link's it can't be blank in any locale.
+const mcpClientLabelSchema = z.union(
+  [
+    z.string().trim().min(1),
+    z
+      .record(z.string(), z.string().trim().min(1))
+      .refine((value) => Object.keys(value).length > 0, {
+        message: "Provide at least one locale's label.",
+      }),
+  ],
+  { error: "Expected a label, or a map of locale code to label" }
+);
+
+// A "Connect to MCP" row for a client Blume doesn't ship: its `command` is
+// copied with `{name}` and `{url}` filled in.
+const mcpCustomClientSchema = z.strictObject({
+  command: z.string().trim().min(1),
+  icon: iconName.optional(),
+  label: mcpClientLabelSchema,
+});
+
+const ACCEPTED_MCP_CLIENTS = `${mcpClients.map((key) => `"${key}"`).join(", ")}, or a custom client { label, command, icon? }`;
+
+/** A union's issue: every member failed, each with issues of its own. */
+const isUnionIssue = (
+  issue: z.core.$ZodIssue
+): issue is z.core.$ZodIssueInvalidUnion => issue.code === "invalid_union";
+
+// A bad entry fails the list member of `clients`, which zod reports as a bare
+// "Invalid input" on the whole list; that union issue is all this map sees.
+// The entries' issues ride along in `errors`. The culprit is an entry that
+// matches neither a built-in key nor a custom client, which fails as a union
+// at its index (a blank field or an unknown key elsewhere doesn't fail the
+// list on its own). Name that entry, and for a custom client its bad field.
+const mcpClientsError = (issue: z.core.$ZodRawIssue): string => {
+  const entryIssue = (issue.code === "invalid_union" ? issue.errors : [])
+    .flat()
+    .filter(isUnionIssue)
+    .find((nested) => Number.isInteger(nested.path[0]));
+  if (!entryIssue) {
+    return `agents.mcp.clients takes true, false, or a list whose entries are each ${ACCEPTED_MCP_CLIENTS}.`;
+  }
+  const index = Number(entryIssue.path[0]);
+  const at = `agents.mcp.clients.${String(index)}`;
+  const entry = Array.isArray(issue.input) ? issue.input[index] : null;
+  if (isString(entry)) {
+    return `${at} is "${entry}", which isn't a built-in client. Use ${ACCEPTED_MCP_CLIENTS}.`;
+  }
+  const fieldIssue = entryIssue.errors
+    .flat()
+    .find((nested) => nested.path.length > 0);
+  return fieldIssue
+    ? `${at}.${fieldIssue.path.map(String).join(".")}: ${fieldIssue.message}. A custom client is { label, command, icon? }.`
+    : `${at} isn't ${ACCEPTED_MCP_CLIENTS}.`;
+};
+
 const mcpConfigSchema = z.strictObject({
+  /**
+   * The "Connect to MCP" page action's clients. `true` (the default) lists
+   * every built-in client, `false` none (the menu keeps "Copy server URL"),
+   * and an array picks built-in clients by key and adds custom ones, in the
+   * given order. Normalized to the list so consumers read a plain array.
+   */
+  clients: z
+    .union(
+      [
+        z.boolean(),
+        z.array(z.union([z.enum(mcpClients), mcpCustomClientSchema])).refine(
+          (value) => {
+            const keys = value.filter(isBuiltInMcpClient);
+            return new Set(keys).size === keys.length;
+          },
+          { message: "agents.mcp.clients must not repeat a built-in client." }
+        ),
+      ],
+      { error: mcpClientsError }
+    )
+    .default(true)
+    .transform((value) => {
+      if (isBoolean(value)) {
+        return value ? [...mcpClients] : [];
+      }
+      return value;
+    }),
   enabled: z.boolean().default(false),
   /** Optional system hint passed to connecting agents. */
   instructions: z.string().optional(),
@@ -1124,7 +1234,7 @@ const navigationConfigSchema = z.strictObject({
   /** Pinned links shown above the generated sidebar sections. */
   featured: z.array(featuredLinkSchema).default([]),
   /**
-   * The GitHub link in the header. `true` derives it from `github`, `false`
+   * The GitHub link in the footer. `true` derives it from `github`, `false`
    * hides it, and an absolute URL points it anywhere on GitHub — an
    * organization, say, when the docs repo itself is private and `github` has
    * to stay unset. The mark stays the GitHub one, so a URL elsewhere belongs in
@@ -1160,6 +1270,8 @@ export type AssistantConfig = NonNullable<
 >;
 export { openInChatProviders } from "./open-in-chat.ts";
 export type { OpenInChatProvider } from "./open-in-chat.ts";
+export { mcpClients } from "./mcp-clients.ts";
+export type { McpClient, McpCustomClient } from "./mcp-clients.ts";
 
 // Reader-facing "Export" page action (PDF via print, EPUB via client-side
 // generation). Off by default. Accepts a shorthand boolean to toggle both
@@ -1198,10 +1310,10 @@ const feedbackConfigSchema = z
 
 // "Listen to this page". Off by default. `true` reads pages aloud with the
 // reader's browser voices, which needs no key and works on any host; an object
-// with a `provider` (`gateway()` from `blume/ai`) generates neural audio at
-// build instead, one cached clip per sentence, and falls back to the browser's
-// voices where no clips exist (`blume dev`, a build without the key). Both
-// normalize to `{ enabled, provider }`.
+// with a `provider` (`gateway()` or `openai()` from `blume/ai`) generates
+// neural audio at build instead, one cached clip per sentence, and falls back
+// to the browser's voices where no clips exist (`blume dev`, a build without
+// the key). Both normalize to `{ enabled, provider }`.
 const narrationConfigSchema = z
   .union([
     z.boolean(),
@@ -1245,6 +1357,12 @@ const i18nConfigSchema = z
     locales: z.array(localeSchema).min(1),
     /** `"dir"`: locale directories (`fr/page.mdx`). `"dot"`: filename suffix (`page.fr.mdx`). */
     parser: z.enum(["dir", "dot"]).default("dir"),
+    /**
+     * Send a visitor who lands on the default language's home page to the
+     * home page in their browser's preferred language, until they pick a
+     * language with the switcher. Off by default.
+     */
+    routeByBrowserLanguage: z.boolean().default(false),
     /** Per-locale UI string overrides: `{ fr: { search: { button: "…" } } }`. */
     ui: uiLocaleOverridesSchema.optional(),
   })
@@ -1491,8 +1609,9 @@ const ogConfigSchema = z.strictObject({
   /**
    * Generate a per-page Open Graph image. Defaults to on once a deployment
    * site URL is known (set or auto-detected) and off otherwise, since
-   * `og:image` must be absolute to be useful to crawlers — resolved in
-   * `loadConfig`. An explicit value here always wins.
+   * `og:image` must be absolute to be useful to crawlers, and off when `image`
+   * sets a default every page would show instead — resolved in `loadConfig`.
+   * An explicit value here always wins.
    */
   enabled: z.boolean().optional(),
   /**
@@ -1501,6 +1620,13 @@ const ogConfigSchema = z.strictObject({
    * families are fetched from Google Fonts at build.
    */
   fonts: z.array(ogFontSchema).optional(),
+  /**
+   * Default social image for pages without their own `seo.image`, in place of
+   * the generated card: one path or URL, or one per locale (resolved like any
+   * localizable label). A root-relative path is served under the deployment
+   * base.
+   */
+  image: localizableLabelSchema.optional(),
   /**
    * Local SVG used in the generated card instead of the site logo; `false`
    * renders the card without any brand mark.
@@ -1610,14 +1736,65 @@ type SoftwareResolved = z.output<typeof softwareConfigSchema>;
 
 /** Discoverability features: OG images, feeds, sitemap, structured data. */
 const seoConfigFields = {
+  /**
+   * Date pages without a front matter `date` by the git commit that added
+   * their source file, following exact renames. Off by default.
+   */
+  datePublished: z.union([z.literal(false), z.literal("git")]).default(false),
+  /**
+   * Structured-data entities shared with a parent site (`example.com/docs`),
+   * referenced by absolute `@id` instead of defined again (see `seo/jsonld.ts`).
+   */
+  jsonLd: z
+    .strictObject({
+      /** Credited on pages without their own `authors`. */
+      author: z.strictObject({ "@id": z.url() }).optional(),
+      /** The Organization's `@id`; `seo.organization` still adds its details. */
+      organizationId: z.url().optional(),
+      /** Every page's publisher, over the Organization. */
+      publisher: z.strictObject({ "@id": z.url() }).optional(),
+      /** Emit the WebSite node. Defaults to true unless `websiteId` is set. */
+      website: z.boolean().optional(),
+      /** The WebSite's `@id`, which every page names as `isPartOf`. */
+      websiteId: z.url().optional(),
+    })
+    .prefault({}),
+  /**
+   * Meta tags written into every page's head, name to content: site
+   * verification, `theme-color`, and anything else Blume has no setting for.
+   * A tag Blume writes itself is refused with the setting that controls it.
+   */
+  metatags: z
+    .record(z.string().min(1), z.string())
+    .optional()
+    .superRefine((tags, ctx) => {
+      for (const name of Object.keys(tags ?? {})) {
+        const owner = ownedMetatag(name);
+        if (owner) {
+          ctx.addIssue({
+            code: "custom",
+            message: `seo.metatags can't set "${name}": Blume writes that tag. Set it with ${owner}.`,
+            path: [name],
+          });
+        }
+      }
+    }),
   og: ogConfigSchema.default({}),
   /** The organization behind the site, as an `Organization` JSON-LD node. */
   organization: organizationConfigSchema.optional(),
   /** Generate robots.txt (with a Sitemap reference when available). */
   robots: z.boolean().default(true),
   rss: rssConfigSchema.prefault({}),
-  /** Generate sitemap.xml (requires deployment.site). */
-  sitemap: z.boolean().default(true),
+  /**
+   * Generate sitemap.xml (requires deployment.site). `{ alternates: true }`
+   * also lists each page's translations as hreflang links.
+   */
+  sitemap: z
+    .union([
+      z.boolean(),
+      z.strictObject({ alternates: z.boolean().default(false) }),
+    ])
+    .default(true),
   /** The documented product, as a homepage `SoftwareApplication` node. */
   software: z
     .union([z.boolean(), softwareConfigSchema])
@@ -1712,6 +1889,14 @@ const agentsConfigSchema = z.strictObject({
     .default({}),
   /** Expose the docs as an MCP server for connecting agents. */
   mcp: mcpConfigSchema.prefault({}),
+  /**
+   * Generate the site's own agent skill: a `SKILL.md` named after the site,
+   * built from its navigation, page descriptions, and agent surfaces, served
+   * at `/skill.md` and in the skills discovery index. Needs a
+   * `deployment.site`. A skill in `agents.skills` with the same name replaces
+   * it. On by default.
+   */
+  skillMd: z.boolean().default(true),
   /**
    * Publish Agent Skills for discovery: a directory (resolved against the
    * project root) whose subdirectories each hold a `SKILL.md`. The build
@@ -1998,9 +2183,9 @@ const markdownConfigSchema = z.strictObject(
 const reactConfigSchema = z.strictObject({
   /**
    * Auto-memoize React components/hooks with the React Compiler
-   * (`babel-plugin-react-compiler`). On by default whenever React is enabled
+   * (`oxc-transform-react`). On by default whenever React is enabled
    * (a project `.tsx`/`.jsx`, a React island/example/override, or the assistant); set
-   * to `false` to skip the compiler's babel pass.
+   * to `false` to skip the compiler pass.
    */
   compiler: z.boolean().default(true),
 });
@@ -2078,6 +2263,7 @@ export const blumeConfigSchema = z
         })
         .optional()
         .transform((value) => normalizeBasePath(value)),
+      changelog: changelogConfigSchema.optional(),
       // An adapter from `blume/consent`; analytics waits for the reader.
       consent: consentConfigSchema,
       content: contentConfigSchema.prefault({}),
@@ -2116,6 +2302,7 @@ export const blumeConfigSchema = z
       markdown: markdownConfigSchema.prefault({}),
       narration: narrationConfigSchema.prefault(false),
       navigation: navigationConfigSchema.prefault({}),
+      poweredBy: z.boolean().default(true),
       // An adapter from `blume/ratelimit`, `memory()` by default; `false` is off.
       rateLimit: rateLimitConfigSchema,
       react: reactConfigSchema.prefault({}),
@@ -2213,7 +2400,7 @@ export const blumeConfigSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          'rateLimit: cloudflare() counts with a Workers binding, so it needs `deployment: cloudflare()` from "blume/deploy". On another host, use upstash() or memory() from "blume/ratelimit".',
+          'rateLimit: cloudflare() counts with a Workers binding, so it needs `deployment: cloudflare()` from "blume/deploy". On another host, use upstash(), unkey(), or memory() from "blume/ratelimit".',
         path: ["rateLimit"],
       });
     }

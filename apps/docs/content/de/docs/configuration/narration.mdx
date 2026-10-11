@@ -1,0 +1,157 @@
+---
+title: Vorlesen
+description: >-
+  Ein „Diese Seite anhören“-Player, der jede Seite vorliest und den gerade gelesenen Satz hervorhebt – mit den Browserstimmen deiner Leser oder mit neuronalen Stimmen, die beim Build erzeugt werden.
+---
+
+Die Vorlesefunktion fügt unter der Beschreibung jeder Seite einen Player **Diese Seite anhören** hinzu. Deine Leser drücken auf Play, und die Seite wird vom Titel an vorgelesen. Der gerade gelesene Satz wird dabei hervorgehoben und bleibt immer sichtbar. Die Funktion ist standardmäßig aus und du schaltest sie so ein:
+
+```ts blume.config.ts lineNumbers
+export default defineConfig({
+  narration: true,
+});
+```
+
+Mit `true` werden Seiten mit den [Browserstimmen](#browser-voices) deiner Leser vorgelesen. Du brauchst keinen Schlüssel und keinen Build-Schritt, und es funktioniert auf jedem Host, ob statisch oder nicht. Wenn du stattdessen [generierte Stimmen](#generated-voices) nutzen willst, füge einen `provider` hinzu.
+
+## Was vorgelesen wird [#what-it-reads]
+
+Vorgelesen werden der Reihe nach der Seitentitel, die Beschreibung, Überschriften, Absätze, Listeneinträge und Kartentexte. Vor manchen Komponenten kommt ein kurzer gesprochener Hinweis, damit Zuhörende wissen, welche Art von Inhalt als Nächstes folgt:
+
+| Komponente | Hinweis |
+| --- | --- |
+| [Callouts](/docs/content/syntax#callouts) | „Hinweis.“, „Tipp.“, „Warnung.“ usw. |
+| [Steps](/docs/content/components#steps) | „Schritt 1.“, „Schritt 2.“ |
+| [Tabs](/docs/content/components#tabs) | „macOS-Tab.“ Jeder Tab wird vorgelesen, nicht nur der geöffnete |
+| [Accordions](/docs/content/components#accordion) und [Expandable](/docs/content/components#expandable) | „Ausklappbarer Abschnitt.“ |
+
+Kommt das Vorlesen bei einem geschlossenen Abschnitt oder einem ausgeblendeten Tab an, wird er geöffnet. So landet die Hervorhebung immer auf Text, den deine Leser auch sehen.
+
+Codeblöcke, Tabellen, Bilder, Videos, Diagramme, mathematische Formeln, Typtabellen, Dateibäume und Live-Vorschauen von Komponenten werden übersprungen, weil sie vorgelesen keinen Sinn ergeben.
+
+Der Player erscheint nur auf Seiten mit so viel Fließtext, dass sich das Zuhören lohnt, also etwa ab 50 Wörtern. Sehr kurze Seiten und Seiten, die vor allem aus Code oder API-Feldern bestehen, bekommen keinen Player.
+
+## Zuhören [#listening]
+
+Während eine Seite abgespielt wird, bleibt der Player unter dem Header fixiert. Er hat Play und Pause, Tasten für den vorherigen und nächsten Satz, einen Fortschrittsregler, die bisher gelesene Zeit neben der Gesamtlänge der Seite und eine Geschwindigkeitsregelung von 0,8× bis 2×. Die Geschwindigkeit wird für die nächste Seite gespeichert.
+
+Die Seite scrollt mit, damit der gerade gelesene Satz sichtbar bleibt. Scrollen deine Leser weg, hört die Seite auf mitzuscrollen, aber der Ton läuft weiter. Wer zum Satz zurückscrollt oder auf **Mitlesen** drückt, schaltet das Mitscrollen wieder ein. Wird eine andere Seite geöffnet, stoppt das Vorlesen.
+
+## Browserstimmen [#browser-voices]
+
+`narration: true` liest die Seite mit der [Web Speech API](https://developer.mozilla.org/docs/Web/API/SpeechSynthesis) und den Stimmen auf dem Gerät deiner Leser vor und wählt eine Stimme für die Sprache der Seite. Hat ein Browser keine Stimme für diese Sprache, bleibt der Player ausgeblendet, statt die Seite mit falschem Akzent vorzulesen.
+
+Dafür musst du nichts tun und es kostet nichts. Wie es klingt, hängt aber vom Gerät ab. Die Systemstimmen unter macOS, iOS und Windows klingen gut, während manche Linux-Browser nur wenige oder gar keine Stimmen mitbringen.
+
+## Generierte Stimmen [#generated-voices]
+
+Übergib einen `provider`, um beim Build Audio mit einem neuronalen Sprachsynthesemodell zu erzeugen. Der Provider ist einer der [Adapter](/docs/configuration/assistant#adapters) des Assistenten, nur mit einem Sprachsynthesemodell: `gateway()` für die Sprachsynthesemodelle im Vercel AI Gateway oder [`openai()`](#openai-and-self-hosted-voices) für die eigenen Sprachsynthesemodelle von OpenAI oder einen Sprachserver, den du selbst betreibst.
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { gateway } from "blume/ai";
+
+export default defineConfig({
+  narration: {
+    provider: gateway({
+      model: "openai/tts-1-hd",
+      voice: "alloy",
+    }),
+  },
+});
+```
+
+`blume build` liest jede gebaute Seite genau so, wie der Player sie vorlesen wird, und teilt sie in Sätze auf. Dann erzeugt es über den Provider, hier das [Vercel AI Gateway](https://vercel.com/docs/ai-gateway), einen Clip pro Satz. Die Clips und ein kleines Manifest pro Seite landen als statische Dateien unter `/blume-narration/` in deinem Build. Erneutes Abspielen kostet also nichts, und auf keinem Server läuft etwas.
+
+Bevor etwas generiert wird, gibt der Build aus, wie viele neue Clips er braucht und wie viele Zeichen sie umfassen. So siehst du die Kosten schon vorher:
+
+```txt
+Generating narration: 214 new clip(s), 15,880 characters, with openai/tts-1-hd
+```
+
+`gateway()` nimmt diese Optionen an:
+
+| Option | Standard | Beschreibung |
+| --- | --- | --- |
+| `model` | `openai/tts-1-hd` | Ein Sprachsynthesemodell aus dem Gateway: `openai/tts-1`, `openai/tts-1-hd`, `fish-audio/s2.1-pro`, `spacexai/grok-tts` und weitere Modelle, die das Gateway anbietet. |
+| `voice` | `alloy` | Die Stimme des Modells. |
+| `instructions` |  | Wie die Stimme klingen soll, bei Modellen, die Anweisungen annehmen („Lies ruhig vor, wie eine Lehrkraft“). |
+| `apiKeyEnv` | `AI_GATEWAY_API_KEY` | Die Umgebungsvariable mit dem Gateway-Schlüssel. Auf Vercel funktioniert auch das OIDC-Token des Builds. |
+| `headers` |  | Statische Header, die mit jeder Anfrage gesendet werden. |
+| `providerOptions` |  | Wird unverändert an `generateSpeech` aus dem AI SDK weitergegeben, für Modelleinstellungen, die Blume nicht selbst kennt. |
+
+### OpenAI und selbst gehostete Stimmen [#openai-and-self-hosted-voices]
+
+`openai()` erzeugt die Clips stattdessen mit der Speech-API von OpenAI: mit den eigenen Modellen von OpenAI und deinem `OPENAI_API_KEY` oder, mit einer `baseUrl`, mit jedem Server, der denselben `POST /audio/speech`-Endpunkt bereitstellt, etwa [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI), [Speaches](https://speaches.ai) oder ein [LiteLLM](https://docs.litellm.ai)-Proxy mit einem Sprachsynthesemodell. So bekommt auch eine Site generierte Stimmen, deren Build keinen gehosteten Dienst erreichen kann:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { openai } from "blume/ai";
+
+export default defineConfig({
+  narration: {
+    provider: openai({
+      baseUrl: "http://localhost:8880/v1",
+      model: "kokoro",
+      voice: "af_heart",
+    }),
+  },
+});
+```
+
+Ein Server, der einen Schlüssel erwartet, etwa ein LiteLLM-Proxy, bekommt den, den du in `apiKeyEnv` angibst (`openai({ baseUrl, apiKeyEnv: "LITELLM_API_KEY", model })`). Ohne `apiKeyEnv` wird ein Server mit `baseUrl` ohne Schlüssel aufgerufen, damit dein `OPENAI_API_KEY` nie an einen anderen Server geht. Eine Antwort, die kein MP3 ist, etwa eine Anmeldeseite von einem Proxy vor dem Server oder WAV von einem Server, der das angeforderte Format ignoriert, zählt als fehlgeschlagener Clip und wird nicht gecacht.
+
+`openai()` nutzt mit oder ohne `baseUrl` den OpenAI-Provider des AI SDK. Füge deshalb `@ai-sdk/openai` zu deinem Projekt hinzu (`npm install @ai-sdk/openai`). Fehlt das Paket, bricht `blume build` ab, bevor Vite startet, und nennt das Paket.
+
+| Option | Standard | Beschreibung |
+| --- | --- | --- |
+| `model` |  | Erforderlich. Ein Sprachsynthesemodell: `gpt-4o-mini-tts`, `tts-1` oder `tts-1-hd` bei OpenAI oder die ID, die dein Server bereitstellt. |
+| `baseUrl` |  | Die OpenAI-kompatible Basis-URL des Servers, einschließlich `/v1`. Ohne sie kommen die Clips von OpenAI oder, falls `OPENAI_BASE_URL` gesetzt ist, von dem dort angegebenen Server, wie bei den SDKs von OpenAI selbst. |
+| `voice` | `alloy` | Die Stimme des Modells. |
+| `instructions` |  | Wie die Stimme klingen soll, bei Modellen, die Anweisungen annehmen (`gpt-4o-mini-tts`). |
+| `apiKeyEnv` | `OPENAI_API_KEY` ohne `baseUrl` | Die Umgebungsvariable mit dem Schlüssel, der als Bearer-Token gesendet wird. Mit einer `baseUrl` wird nur ein Schlüssel gesendet, den du hier angibst, damit dein `OPENAI_API_KEY` nie einen anderen Server erreicht. Gibst du keinen an, gehen die Anfragen ohne Bearer-Token raus (ein `Authorization`-Header, den du in `headers` setzt, wird trotzdem gesendet). |
+| `headers` |  | Statische Header, die mit jeder Anfrage gesendet werden. |
+| `providerOptions` |  | Wird unverändert an `generateSpeech` aus dem AI SDK weitergegeben. Die Speech-API von OpenAI liest daraus `speed`: `{ openai: { speed: 1.1 } }`. |
+
+Die Speech-API von OpenAI nimmt keine Sprache an. Deshalb sendet `openai()` die Sprache der Seite nicht mit, und ein Satz, der in mehreren Sprachen vorkommt, wird nur einmal generiert. Die Modelle von OpenAI erkennen die Sprache am Text, viele selbst gehostete Server richten sich aber nach der Stimme. Wähle also eine, die die Sprache deiner Inhalte spricht.
+
+### Caching
+
+Clips werden in `node_modules/.cache/blume/narration` gecacht. Der Cache-Schlüssel besteht aus allem, was ihren Klang bestimmt: dem Satz, seiner Sprache (bei `gateway()`, das sie mitsendet), dem Modell, der Stimme, den Anweisungen, den `providerOptions` und bei `openai()` dem aufgerufenen Server. Zeigt `baseUrl` auf einen anderen Server, wird jeder Clip neu generiert, auch bei gleichem Modell und gleicher Stimme. Bei einem neuen Build zahlst du nur für geänderte Sätze, und ein Satz, der auf vielen Seiten steht, wird nur einmal generiert. Vercel und Netlify stellen `node_modules` aus ihrem Build-Cache wieder her, deshalb wird dort bei einem Deployment nur neu generiert, was sich geändert hat. Bei anderen CI-Systemen cachest du das Verzeichnis zwischen den Läufen selbst.
+
+### Fallbacks
+
+Wo es keine Clips gibt, greifen generierte Stimmen auf Browserstimmen zurück:
+
+- In `blume dev`, weil dort nie Audio generiert wird. Führe `blume build` und `blume preview` aus, um die generierte Stimme lokal zu hören.
+- Wenn der Schlüssel beim Build nicht gesetzt ist. Der Build gibt dann eine Warnung aus und generiert nichts Neues, aber Seiten, deren Clips alle im Cache liegen, bekommen sie trotzdem. `openai()` mit einer `baseUrl` und ohne `apiKeyEnv` sendet keinen Schlüssel und generiert deshalb trotzdem.
+- Wenn die Generierung fehlschlägt, auch weil der Build einen Server nicht erreicht. Die Generierung bricht beim ersten fehlgeschlagenen Clip ab, weil das AI SDK ihn schon erneut versucht hat. Der Build läuft dann mit einer Warnung weiter und behält alle bereits gecachten Clips.
+
+## Sprachen [#languages]
+
+Jede Seite wird in ihrer Inhaltssprache vorgelesen. Auf einer [internationalisierten](/docs/content/i18n) Site bekommt so jede Locale ihre eigene Stimme. Bei `openai()` hängt das vom Modell und von der Stimme ab, siehe [OpenAI und selbst gehostete Stimmen](#openai-and-self-hosted-voices). Die gesprochenen Hinweise und die Beschriftungen des Players sind in alle integrierten UI-Sprachen übersetzt. Du kannst sie pro Locale unter `narration` in [`i18n.ui`](/docs/content/i18n#translated-ui) überschreiben.
+
+## Für eine Seite ausschalten [#turning-it-off-for-a-page]
+
+Setze `narration: false` im [Frontmatter](/docs/content/frontmatter) einer Seite, wenn diese Seite keinen Player bekommen soll:
+
+```yaml
+---
+title: Changelog
+narration: false
+---
+```
+
+## Inhalte ausschließen [#keeping-content-out]
+
+Mit `data-blume-narration="skip"` schließt du ein Element samt seinem gesamten Inhalt vom Vorlesen aus. Genau so überspringt Blume seine eigenen Typtabellen und Vorschauen, und es funktioniert genauso bei deinen eigenen Komponenten und Islands:
+
+```html
+<div data-blume-narration="skip">
+  <PricingCalculator />
+</div>
+```
+
+## Analytics
+
+Wenn jemand mit dem Zuhören beginnt, sendet der Player ein `narration_play`-Event mit der `engine` (`audio` oder `browser`) und dem `path` der Seite. Läuft eine Seite bis zum Ende durch, sendet er `narration_complete`. Beide Events laufen wie die anderen benutzerdefinierten Events über deine [Analytics](/docs/configuration/analytics#custom-events)-Adapter.

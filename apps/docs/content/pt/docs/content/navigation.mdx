@@ -47,7 +47,13 @@ export default defineMeta({
 
 Veja [Meta de pasta](/docs/content/meta) para todos os campos e para computar meta no momento da varredura.
 
-O `meta.title` de uma pasta e o `title` do frontmatter da sua própria página `index` são resolvidos de forma independente — traduzir um sob i18n e esquecer o outro renderiza uma barra lateral correta, mas com um `<title>`/título desatualizado na própria página de destino. O Blume emite um aviso `BLUME_NAV_INDEX_TITLE_MISMATCH` quando eles divergem em uma página de índice que oculta a própria linha na barra lateral (`sidebar.hidden: true`), caso em que o título da pasta é o único rótulo que a página tem na barra lateral. Quando a linha do índice está visível, a barra lateral já mostra os dois títulos, então combinar um título de pasta com um título de página diferente ("CLI" acima de "Overview") não tem problema. Páginas não traduzidas preenchidas a partir do idioma de fallback são isentas — o título delas pertence ao idioma de fallback, e a correção é traduzir a página, não editar o frontmatter dela.
+O `meta.title` de uma pasta e o `title` do frontmatter da sua própria página `index` são resolvidos de forma independente — traduzir um sob i18n e esquecer o outro renderiza uma barra lateral correta, mas com um título desatualizado na própria página de destino. O Blume emite um aviso `BLUME_NAV_INDEX_TITLE_MISMATCH` quando eles divergem em uma página de índice que oculta a própria linha na barra lateral (`sidebar.hidden: true`), caso em que o título da pasta é o único rótulo que a página tem na barra lateral. A verificação lê o `title`, que é o que o título da página exibe; o `seo.title` substitui apenas o `<title>`, então não conta. Páginas não traduzidas preenchidas a partir do idioma de fallback são isentas — o título delas pertence ao idioma de fallback, e a correção é traduzir a página, não editar o frontmatter dela.
+
+Como todo aviso, ele faz o [`blume validate --strict`](/docs/cli/validate) falhar. Qualquer uma destas opções o resolve:
+
+- Altere o `title` da página ou o `meta.title` da pasta para que os dois coincidam.
+- Mantenha o título da página de propósito definindo o `sidebar.label` dela como o título da pasta, do mesmo jeito que qualquer página define um rótulo na barra lateral diferente do seu título.
+- Mostre a linha do índice de novo. A barra lateral passa a mostrar os dois títulos, então combinar um título de pasta com um título de página diferente ("CLI" acima de "Overview") não tem problema.
 
 Para agrupar páginas _sem_ adicionar um segmento de URL, use um nome de pasta entre parênteses — veja [Páginas](/docs/content#group-folders).
 
@@ -64,8 +70,8 @@ navigation: {
 ```
 
 - **`flat`** (padrão) — um cabeçalho não recolhível com suas páginas listadas abaixo. Páginas que não pertencem a nenhum grupo sempre aparecem primeiro, acima das seções de grupo, para que não sejam confundidas com filhos de um grupo.
-- **`group`** — um bloco recolhível `<details>` por grupo. Os grupos começam recolhidos por padrão; um grupo que contém a página atual sempre começa aberto, de modo que apenas a seção em que você está fica expandida. Defina `collapsed: false` no [meta de pasta](/docs/content/meta) para forçar um grupo a ficar aberto independentemente disso.
-- **`page`** — cada grupo é uma única linha que, ao ser clicada, desliza a barra lateral para um subpainel mostrando apenas os itens daquele grupo, com uma seta de voltar no topo. O painel reconhece a rota, então cair diretamente em uma página dentro do grupo abre direto nela.
+- **`group`** — um bloco recolhível `<details>` por grupo. Os grupos começam recolhidos por padrão; um grupo que contém a página atual sempre começa aberto, de modo que apenas a seção em que você está fica expandida. Um grupo que é a única linha no topo da barra lateral, como uma pasta que envolve todas as páginas, também começa aberto, para que a barra lateral nunca mostre uma única linha fechada. Defina `collapsed: false` no [meta de pasta](/docs/content/meta) para forçar um grupo a ficar aberto independentemente disso, ou `collapsed: true` para manter esse grupo solitário fechado.
+- **`page`** — cada grupo é uma única linha cujo chevron desliza a barra lateral para um subpainel mostrando apenas os itens daquele grupo, com uma seta de voltar no topo. Um grupo com uma página de índice liga o nome da linha a essa página, e um grupo sem ela faz o painel deslizar a partir de qualquer ponto da linha. O painel reconhece a rota, então cair diretamente em uma página dentro do grupo abre direto nela. Depois de usar a seta de voltar, a linha da seção em que você está continua destacada.
 
 :::tip
 O modo `page` mantém seções profundas organizadas — use-o quando os grupos tiverem muitos filhos e você preferir navegar dentro deles a rolar por eles.
@@ -101,11 +107,29 @@ O modo efetivo de um grupo gerado é resolvido da maior prioridade para a menor:
 3. O `navigation.sidebar.display` global
 4. O padrão do Blume (`flat`)
 
-O `display` de um grupo se aplica somente àquele grupo — subgrupos aninhados resolvem seu próprio valor pela mesma cadeia. Um grupo em modo `page` com uma página de índice ainda navega para o seu subpainel: a página de índice aparece como o primeiro item do painel, e cair na URL dela abre o painel diretamente.
+O `display` de um grupo se aplica somente àquele grupo — subgrupos aninhados resolvem seu próprio valor pela mesma cadeia. Um grupo em modo `page` com uma página de índice liga o nome da sua linha a essa página, então clicar no nome abre a página de destino com o subpainel já aberto, enquanto o chevron ao lado faz o painel deslizar sem sair da página atual. O título do painel leva de volta à página de destino, e a página de índice aparece como o primeiro item do painel, a menos que esteja [oculta](#hidden-pages). Um grupo em modo `page` sem página de índice não tem o que abrir, então a linha inteira faz o painel deslizar.
 
 `sidebar.display` não significa nada em nenhum outro lugar — em uma página que não seja de índice, na própria página `index` da raiz do conteúdo (a raiz não é um grupo; use `navigation.sidebar.display`) ou em qualquer página quando uma [barra lateral explícita](#explicit-sidebar) estiver configurada (seus itens são donos do modo de cada grupo) — então o Blume emite um aviso `BLUME_SIDEBAR_DISPLAY_IGNORED` em vez de descartá-lo silenciosamente. `collapsed` continua específico do modo `group`; ele fica inerte quando um grupo resolve para `flat` ou `page`.
 
 Um grupo em uma [barra lateral explícita](#explicit-sidebar) substitui o modo global com seu próprio `display`, exatamente como antes.
+
+## Listagens de diretório [#directory-listings]
+
+A página própria de um grupo pode listar as outras páginas do grupo abaixo do seu conteúdo, de modo que a página de destino de uma seção também serve como o seu sumário. Defina `directory` no [`meta.ts`](/docs/content/meta) da pasta:
+
+```ts guides/meta.ts lineNumbers
+import { defineMeta } from "blume";
+
+export default defineMeta({
+  directory: "card",
+});
+```
+
+- **`card`** mostra cada página e subgrupo como um card com o seu ícone e a sua descrição.
+- **`accordion`** lista as páginas como linhas, e cada subgrupo como uma seção que se abre para mostrar as suas páginas.
+- **`none`** não lista nada. Esse é o padrão.
+
+Só um grupo com página própria tem onde mostrar a listagem: a página `index` de uma pasta ou o `root` de um grupo explícito. A configuração é herdada pelas pastas aninhadas, então um único `directory` no `meta.ts` da raiz do conteúdo dá uma listagem a todas as seções, e uma pasta pode definir o seu próprio valor (inclusive `none`) para substituir o que herda. Uma [barra lateral explícita](#explicit-sidebar) define `directory` nos seus grupos da mesma forma.
 
 ## Ordenação [#ordering]
 
@@ -136,7 +160,9 @@ sidebar:
   hidden: true
 ```
 
-A página `index` de uma pasta aparece tanto como o link da linha do grupo quanto como a primeira linha dentro do grupo. Oculte a página de índice para manter apenas o cabeçalho com link: a linha do grupo continua abrindo a página de destino, e os links de anterior/próximo continuam passando por ela.
+Uma página oculta também fica de fora do sitemap e do `llms.txt`, e também da busca do site, a menos que [`search.indexing.includeHiddenPages`](/docs/configuration/search#excluding-pages) esteja ativado.
+
+A página `index` de uma pasta aparece tanto como o link da linha do grupo quanto como a primeira linha dentro do grupo. Oculte a página de índice para manter apenas o cabeçalho com link: a linha do grupo continua abrindo a página de destino, e os links de anterior/próximo continuam passando por ela. Como a navegação continua apontando para a página, ela não é tratada como oculta em nenhum outro lugar: continua no sitemap, na busca do site e no `llms.txt`. O mesmo vale para a página inicial do site, a página `index` da raiz: ocultá-la remove a linha dela da barra lateral, mas ela continua sendo servida na URL raiz do site, então também continua listada.
 
 ## Abas [#tabs]
 
@@ -164,7 +190,7 @@ navigation: {
 }
 ```
 
-O `path` de uma aba é o prefixo da sua seção, e ele também serve como destino do link. Uma seção cujo `path` não é uma página própria — uma pasta sem `index.mdx` — apontaria para um 404, então a aba recorre à primeira página da seção. Uma [página personalizada](/docs/advanced/custom-pages) estática no `path` da aba conta como a página própria da seção: com `pages/guides.astro`, uma aba `/guides` cai nessa página enquanto a pasta `guides/` preenche a sua barra lateral. O mesmo vale para o índice de [changelog](/docs/advanced/changelog) gerado, então uma aba `/changelog` abre a linha do tempo em vez da entrada mais recente.
+O `path` de uma aba é o prefixo da sua seção, e ele também serve como destino do link. Uma seção cujo `path` não é uma página própria — uma pasta sem `index.mdx` — apontaria para um 404, então a aba recorre à primeira página da seção. Isso inclui uma aba em `path: "/"` em um site sem `index.mdx` na raiz: ela aponta para a primeira página da barra lateral. Uma [página personalizada](/docs/advanced/custom-pages) estática no `path` da aba conta como a página própria da seção: com `pages/guides.astro`, uma aba `/guides` cai nessa página enquanto a pasta `guides/` preenche a sua barra lateral. O mesmo vale para o índice de [changelog](/docs/advanced/changelog) gerado, então uma aba `/changelog` abre a linha do tempo em vez da entrada mais recente.
 
 Defina `href` quando quiser que uma aba leve a outro lugar — uma página específica da seção, digamos:
 
@@ -236,6 +262,8 @@ Cada item recebe um `label`, um `path` e, opcionalmente, `icon`, `description` e
 
 Com [versionamento](/docs/content/versioning) configurado, o Blume renderiza um seletor de versão automaticamente — declarar aqui o seu próprio seletor `kind: "version"` substitui o automático, então configurações feitas à mão continuam funcionando.
 
+Em telas estreitas demais para a barra lateral do desktop, os seletores, o seletor de versão e o [alternador de idioma](/docs/content/i18n#the-language-switcher) saem do cabeçalho e vão para o topo da gaveta de navegação móvel, onde cada um ocupa toda a largura da gaveta.
+
 ## Links em destaque [#featured-links]
 
 Fixe links no topo da barra lateral, acima de todas as seções — um blog, um changelog, uma página de contato ou suporte que deva estar sempre a um clique de distância. Diferentemente da árvore gerada, os links em destaque **não são delimitados por aba**: eles aparecem em todas as rotas, em todos os breakpoints.
@@ -249,7 +277,7 @@ navigation: {
 }
 ```
 
-Cada link recebe um `label`, um `href` e um `icon` opcional (um nome de [ícone integrado](/docs/content/components#icon), caminho/URL de imagem ou SVG inline — o mesmo que em qualquer outro lugar). Um `href` pode apontar para qualquer lugar: uma URL externa abre em uma nova aba, enquanto uma rota interna (`/contact`) é validada contra as suas páginas no momento da build, avisando você se nada corresponder.
+Cada link recebe um `label`, um `href` e um `icon` opcional (um nome de [ícone integrado](/docs/content/components#icon), caminho/URL de imagem ou SVG inline — o mesmo que em qualquer outro lugar). Um `href` pode apontar para qualquer lugar: uma URL externa abre em uma nova aba, enquanto uma rota interna (`/contact`) é validada contra as suas páginas no momento da build e pelo [`blume doctor`](/docs/cli/doctor), avisando você se nada corresponder. Um caminho para um arquivo em `public/` (`/spec.pdf`) ou para um que o Blume gera (`/llms.txt`) também corresponde.
 
 ## Barra lateral explícita [#explicit-sidebar]
 
@@ -269,7 +297,7 @@ navigation: {
 }
 ```
 
-Cada item é uma rota de página (uma string), um grupo (`label` + `items`) ou um link (`label` + `href`). Grupos podem ser aninhados, substituir o [modo `display`](#display-modes) global e começar `collapsed`.
+Cada item é uma rota de página (uma string), um grupo (`label` + `items`) ou um link (`label` + `href`). Grupos podem ser aninhados, substituir o [modo `display`](#display-modes) global, começar `collapsed` e vincular uma página `root`, que pode listar as páginas do grupo com um [`directory`](#directory-listings).
 
 O Blume emite um aviso sobre um item que não consegue renderizar como foi escrito: uma rota que não corresponde a nenhuma página (o item fica de fora), um `root` que não corresponde a nenhuma página (o link dele levaria a um 404) ou um item sem rota, `href`, `root` ou `items` (fica de fora).
 
@@ -284,23 +312,27 @@ navigation: {
 }
 ```
 
+Assim como os rótulos das abas, um `label` aqui pode ser um mapa de código de idioma para texto em um site [multilíngue](/docs/content/i18n#per-locale-navigation).
+
+Uma ação é apenas um link, então um changelog vinculado dessa forma continua listando as suas entradas na barra lateral. Vincule-o com uma [aba](#tabs) para [mantê-las fora](/docs/advanced/changelog#keep-entries-out-of-the-sidebar).
+
 `cta` é singular de propósito — um cabeçalho de documentação tem espaço para exatamente uma coisa que se pede ao leitor que faça, e uma fileira de botões não pede nada. Links secundários pertencem a `actions`, ou a [`featured`](#featured-links) se devem ficar junto à barra lateral.
 
 Um href `http(s)` ou relativo ao protocolo abre em uma nova aba; uma rota permanece na aba e é validada contra as suas páginas no momento da build, como um link `featured` — então uma página servida por outro app no mesmo host (`/signup` no produto, digamos) deve ser escrita como uma URL absoluta. As `actions` ficam ocultas abaixo do breakpoint `sm`, onde o cabeçalho tem espaço para o logo e o alternador de navegação e nada mais. O `cta` também se oculta ali, exceto em uma página sem alternador de navegação — uma landing page em `PageLayout` sem abas — onde ele permanece, já que nada mais pode exibi-lo em um celular.
 
 ## Link do repositório [#repository-link]
 
-Quando você define [`github`](/docs/configuration) na sua configuração, o Blume mostra um ícone do GitHub no cabeçalho — ao lado do alternador de tema — que leva ao seu repositório. Ele vem ativado por padrão; oculte-o com `navigation.repo`:
+Quando você define [`github`](/docs/configuration) na sua configuração, o Blume mostra um ícone do GitHub no [rodapé](/docs/configuration#footer), antes dos seus perfis sociais, que leva ao seu repositório. Ele vem ativado por padrão; oculte-o com `navigation.repo`:
 
 ```ts blume.config.ts lineNumbers
 navigation: {
-  repo: false, // hide the header GitHub link (default: true)
+  repo: false, // hide the footer's GitHub link (default: true)
 }
 ```
 
 O link só aparece quando `github` está configurado, então projetos sem repositório não são afetados de nenhuma forma.
 
-`repo` também aceita uma URL absoluta, que aponta a marca do cabeçalho para qualquer lugar no GitHub:
+`repo` também aceita uma URL absoluta, que aponta a marca do GitHub para qualquer lugar no GitHub:
 
 ```ts blume.config.ts lineNumbers
 navigation: {
@@ -308,25 +340,25 @@ navigation: {
 }
 ```
 
-Isso é para um projeto cujo repositório de documentação é privado. O `github` controla junto o link de edição de cada página, a marca do cabeçalho e o repositório do [manifesto de agente](/docs/discoverability/agent-discovery), então um projeto assim precisa deixar `github` sem definir — e uma URL é o que permite que ele ainda exiba uma marca apontando para algo público. O ícone continua sendo a marca do GitHub, então um link para outro host pertence a [`actions`](#header-actions).
+Isso é para um projeto cujo repositório de documentação é privado. O `github` controla junto o link de edição de cada página, a marca do GitHub e o repositório do [manifesto de agente](/docs/discoverability/agent-discovery), então um projeto assim precisa deixar `github` sem definir — e uma URL é o que permite que ele ainda exiba uma marca apontando para algo público. Uma URL em `footer.socials.github` toma o lugar da marca, e um link para outro host pertence aos `links` do rodapé ou a [`actions`](#header-actions).
 
 ## Trilhas de navegação e paginação [#breadcrumbs-and-pagination]
 
 Elas vêm de graça a partir da árvore da barra lateral — sem configuração:
 
 - **Trilhas de navegação** mostram o grupo pai da página atual acima do título.
-- **Links de anterior e próximo** no rodapé de cada página seguem a ordem da barra lateral, pulando páginas ocultas.
+- **Links de anterior e próximo** no rodapé de cada página seguem a ordem da barra lateral, pulando páginas ocultas. Defina [`pagination: false`](/docs/content/frontmatter) no frontmatter de uma página para removê-los dessa página.
 
 ## Nesta página [#on-this-page]
 
-Um sumário na coluna direita é gerado automaticamente a partir dos títulos de cada página — `##` e `###` por padrão — para que páginas longas continuem fáceis de escanear. Defina [`toc`](/docs/configuration#table-of-contents) para mudar o intervalo de títulos ou desativar o sumário. Em telas mais estreitas, onde a coluna direita fica oculta, ele se recolhe em um dropdown “Nesta página” acima do conteúdo.
+Um sumário na coluna direita é gerado automaticamente a partir dos títulos de cada página — `##` e `###` por padrão — para que páginas longas continuem fáceis de escanear. Defina [`toc`](/docs/configuration#table-of-contents) para mudar o intervalo de títulos ou desativar o sumário. Em telas mais estreitas, onde a coluna direita fica oculta, ele se recolhe em um dropdown “Nesta página” acima do conteúdo, que também reúne as [ações da página](#page-actions).
 
 ## Ações da página [#page-actions]
 
-Abaixo do sumário, toda página exibe um conjunto de ações rápidas:
+Abaixo do sumário, toda página exibe um conjunto de ações rápidas. Em janelas com pelo menos 1.280px de largura, elas ficam na coluna da direita junto com o sumário. Em janelas mais estreitas e em celulares, elas ficam na parte de baixo do dropdown “Nesta página” acima do conteúdo, que aparece também em páginas sem títulos:
 
-- **Editar no GitHub** — leva direto ao arquivo-fonte. Aparece assim que você define [`github`](/docs/configuration) na sua configuração.
-- **Voltar ao topo** — retorna suavemente ao topo de páginas longas.
+- **Editar no GitHub** — leva direto ao arquivo-fonte. Aparece assim que você define [`github`](/docs/configuration) na sua configuração, em toda página cujo arquivo está no repositório: um arquivo que o git ignora, como uma referência de API gerada escrita em uma pasta ignorada pelo git, não ganha link de edição, já que o GitHub não tem arquivo para abrir.
+- **Voltar ao topo** — retorna suavemente ao topo de páginas longas. Fica apenas na coluna da direita, já que o dropdown já está no topo da página.
 
 Outras entregam a página a ferramentas de IA — **Copiar como Markdown** e **Abrir no chat** — abordadas em [Markdown para agentes](/docs/discoverability/markdown#copy-as-markdown).
 

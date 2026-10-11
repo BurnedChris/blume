@@ -17,7 +17,7 @@ import {
   readPage,
   searchDocs,
 } from "../src/ai/ask-tools.ts";
-import { openaiCompatible, resolveAskBackend } from "../src/ai/ask.ts";
+import { openai, resolveAskBackend } from "../src/ai/ask.ts";
 import { askEndpointTemplate } from "../src/astro/templates.ts";
 import { blumeConfigSchema } from "../src/core/schema.ts";
 
@@ -62,11 +62,11 @@ describe(searchDocs, () => {
   it("returns excerpts headed by title and route, within the reader's locale", async () => {
     const english = readerScope(DATA, byRoute, { path: "/docs/narration" });
     const result = await searchDocs(DATA, english, "highlights sentence");
-    expect(result).toContain("## Narration (/docs/narration)");
+    expect(result).toContain("## [Narration](/docs/narration)");
     expect(result).not.toContain("Erzählung");
     const german = readerScope(DATA, byRoute, { path: "/de/docs/narration" });
     expect(await searchDocs(DATA, german, "Player Seiten")).toContain(
-      "## Erzählung (/de/docs/narration)"
+      "## [Erzählung](/de/docs/narration)"
     );
   });
 
@@ -78,17 +78,76 @@ describe(searchDocs, () => {
   });
 });
 
+const localeFrom = (data: AskData, path?: string) =>
+  readerScope(data, byRoute, path === undefined ? undefined : { path }).filters
+    .locale;
+
+describe(readerScope, () => {
+  /** The same snapshot on a site whose default locale is English. */
+  const I18N: AskData = { ...DATA, defaultLocale: "en" };
+
+  it("keeps a question from outside the docs to the default locale", () => {
+    // The homepage and a custom page aren't in the snapshot, and a
+    // cross-origin caller may send no page at all.
+    expect(localeFrom(I18N, "/")).toBe("en");
+    expect(localeFrom(I18N, "/pricing")).toBe("en");
+    expect(localeFrom(I18N)).toBe("en");
+    // A single-locale site has nothing to filter.
+    expect(localeFrom({ ...DATA, documents: DATA.documents.slice(0, 1) })).toBe(
+      undefined
+    );
+  });
+
+  it("takes the locale a path outside the docs names", () => {
+    expect(localeFrom(I18N, "/de")).toBe("de");
+    expect(localeFrom(I18N, "/DE/preise/")).toBe("de");
+    expect(localeFrom(DATA, "/de")).toBe("de");
+  });
+
+  it("scopes the model's own searches the same way", async () => {
+    const home = createAskTools(I18N)({ path: "/" });
+    const options = { context: {}, messages: [], toolCallId: "1" };
+    const english = await home.search_docs?.execute?.(
+      { query: "Narration Erzählung" },
+      options
+    );
+    expect(english).toContain("## [Narration](/docs/narration)");
+    expect(english).not.toContain("/de/docs/narration");
+    const german = await createAskTools(I18N)({
+      path: "/de",
+    }).search_docs?.execute?.({ query: "Narration Erzählung" }, options);
+    expect(german).toContain("## [Erzählung](/de/docs/narration)");
+    expect(german).not.toContain("(/docs/narration)");
+  });
+});
+
 describe(readPage, () => {
   it("reads a page by route, path, or full URL", () => {
     expect(readPage(DATA, byRoute, "/docs/narration")).toStartWith(
-      "## Narration (/docs/narration)\n# Narration"
+      "## [Narration](/docs/narration)\n# Narration"
     );
     expect(readPage(DATA, byRoute, "docs/narration/#voices")).toStartWith(
-      "## Narration (/docs/narration)"
+      "## [Narration](/docs/narration)"
     );
     expect(
       readPage(DATA, byRoute, "https://docs.example.com/docs/narration?x=1")
-    ).toStartWith("## Narration (/docs/narration)");
+    ).toStartWith("## [Narration](/docs/narration)");
+    // A route as its heading cites it, percent-encoded where it needs it.
+    const beta = {
+      content: "# Setup",
+      description: "",
+      locale: "en",
+      route: "/docs/setup (beta)",
+      title: "Setup",
+    };
+    expect(
+      readPage(DATA, new Map([[beta.route, beta]]), "/docs/setup%20%28beta%29")
+    ).toStartWith("## [Setup](/docs/setup%20%28beta%29)");
+    // A `%` in the route itself is escaped too, so it doesn't decode away.
+    const literal = { ...beta, route: "/docs/50%20off", title: "Sale" };
+    expect(
+      readPage(DATA, new Map([[literal.route, literal]]), "/docs/50%2520off")
+    ).toStartWith("## [Sale](/docs/50%2520off)");
   });
 
   it("cuts a long page and names a missing one", () => {
@@ -108,6 +167,9 @@ describe(readPage, () => {
     ).toContain("There is no page at");
     expect(readPage(DATA, byRoute, "https://docs.example.com")).toBe(
       "There is no page at /. Use search_docs to find the right one."
+    );
+    expect(readPage(DATA, byRoute, "/docs/100%")).toBe(
+      "There is no page at /docs/100%. Use search_docs to find the right one."
     );
   });
 });
@@ -240,12 +302,15 @@ afterAll(async () => {
   );
 });
 
+const resolve = (specifier: string): string =>
+  JSON.stringify(pathToFileURL(Bun.resolveSync(specifier, PKG_ROOT)).href);
+
 const loadRoute = async (): Promise<AskRoute> => {
   const parsed = blumeConfigSchema.parse({
     ai: {
       assistant: {
         enabled: true,
-        provider: openaiCompatible({
+        provider: openai({
           apiKeyEnv: "TEST_KEY",
           baseUrl: `http://localhost:${upstream.port}/v1`,
           model: "m",
@@ -261,8 +326,6 @@ const loadRoute = async (): Promise<AskRoute> => {
   dirs.push(dir);
   const dataFile = join(dir, "ask-data.json");
   await writeFile(dataFile, JSON.stringify(DATA), "utf-8");
-  const resolve = (specifier: string): string =>
-    JSON.stringify(pathToFileURL(Bun.resolveSync(specifier, PKG_ROOT)).href);
   const source = askEndpointTemplate(backend, {
     tools: parsed.ai.assistant?.tools,
   })
@@ -311,6 +374,6 @@ describe("the generated assistant route with tools", () => {
     const toolMessage = requests[1]?.messages.find(
       (message) => message.role === "tool"
     );
-    expect(toolMessage?.content).toContain("## Narration (/docs/narration)");
+    expect(toolMessage?.content).toContain("## [Narration](/docs/narration)");
   });
 });

@@ -1,0 +1,605 @@
+---
+// Live React component demos in MDX: checked against the islands,
+// customization, components (Component, type tables), and Markdown-for-agents
+// docs, and the source on main: island and example discovery
+// (astro/islands.ts, astro/examples.ts), hydration wrappers
+// (astro/component-slots.ts), components.ts analysis and its warnings
+// (core/component-overrides.ts), BLUME_UNKNOWN_COMPONENT
+// (core/component-diagnostics.ts), the user mdx map spread over the built-ins
+// (astro/templates.ts), the Tailwind scan roots (astro/generate.ts: the site
+// sheet scans .astro/.jsx/.mdx/.ts/.tsx, not .vue/.svelte, since 45625811;
+// preview frames scan all of them),
+// Component.astro and Tabs.astro, the Markdown downlevel
+// (ai/component-markdown.ts), AutoTypeTable extraction, and the preview
+// command's server-build refusal (cli/commands/preview.ts). Ran in a scratch
+// fixture: tsc over the Switch, SwitchDemo, ReducedMotionNote, and example
+// files; react-dom/server renders of both islands; extractTypeTable on
+// ui/Switch.tsx; downlevelComponents with the SwitchDemo serializer; and the
+// Playwright keyboard test (Playwright 1.63.0, Chromium) against a harness
+// that server-renders SwitchDemo and hydrates it the way @astrojs/react does.
+// Not yet run end to end in a Blume project (no blume dev or build).
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("react-examples-mdx-documentation")}>
+  <p>
+    To show a working component beside its usage code, write a small React
+    demo and put it on the page in one of two ways. Save it in an{" "}
+    <code>islands/</code> folder and use it by name in any MDX page, next to a
+    fenced code block. Or save it in <code>examples/</code> and render it with
+    the built-in <code>&lt;Component path="…" /&gt;</code>, which shows a live
+    preview and the file's source in Preview and Code tabs. Either way, Blume
+    turns React on for you, and the demo's JavaScript loads only on the pages
+    that use it.
+  </p>
+  <p>
+    By the end, you have a switch component documented on its own page: a live
+    demo that works with a mouse and a keyboard, the code to copy, a props
+    table, a text description for readers and agents that can't run the demo,
+    and a Playwright test that checks it against the production build.
+  </p>
+  <p>
+    Blume renders the demo you write; it doesn't generate one from your
+    component. If your component doesn't respond to input, you don't need a
+    demo at all: a static override renders as HTML with
+    no JavaScript. And if you want a workbench that renders every state of
+    every component with generated prop controls, a tool like Storybook fits
+    better.
+  </p>
+
+  <h2>Choose an island, an example, or an override</h2>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Option</th>
+        <th scope="col">Where it lives</th>
+        <th scope="col">What readers get</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Island</td>
+        <td>
+          <code>islands/SwitchDemo.tsx</code>, or a <code>components.ts</code>{" "}
+          entry with a <code>client</code> mode
+        </td>
+        <td>The live component inline in the page, beside whatever code you write</td>
+      </tr>
+      <tr>
+        <td>Example</td>
+        <td><code>examples/switch/basic.tsx</code></td>
+        <td>
+          Preview and Code tabs from one file, with the preview in an isolated
+          frame
+        </td>
+      </tr>
+      <tr>
+        <td>Static override</td>
+        <td>
+          A <code>components.ts</code> entry with no <code>client</code> mode
+        </td>
+        <td>HTML rendered at build time, with no JavaScript</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Use an island when you want the demo and a hand-picked snippet on screen
+    together. Use an example when the code readers copy should be exactly the
+    code that runs: it's one file, so the two can't drift apart. This guide
+    builds the island first, then shows the same demo as an example.
+  </p>
+
+  <h2>Build the component</h2>
+  <p>
+    The component being documented is a switch built on a native{" "}
+    <code>&lt;button&gt;</code> with <code>role="switch"</code>. A native
+    button already takes focus and responds to Space and Enter, so the
+    component needs no key handlers. In a real project it lives in your
+    component package. Here it sits in <code>ui/</code> at the project root so
+    the example is self-contained.
+  </p>
+  <CodeBlock
+    code={`export interface SwitchProps {
+  /** Whether the switch is on. */
+  checked: boolean;
+  /** The visible label, which is also the switch's accessible name. */
+  label: string;
+  /** Called with the new value when the reader toggles the switch. */
+  onCheckedChange: (checked: boolean) => void;
+  /**
+   * Stops the switch from responding to clicks and keys.
+   * @default false
+   */
+  disabled?: boolean;
+}
+
+export function Switch({
+  checked,
+  disabled = false,
+  label,
+  onCheckedChange,
+}: SwitchProps) {
+  return (
+    <button
+      aria-checked={checked}
+      className="group inline-flex items-center gap-3 rounded-blume text-foreground text-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground disabled:opacity-50"
+      disabled={disabled}
+      onClick={() => onCheckedChange(!checked)}
+      role="switch"
+      type="button"
+    >
+      <span
+        aria-hidden="true"
+        className="flex h-6 w-11 shrink-0 items-center rounded-full bg-muted p-0.5 ring-1 ring-border ring-inset transition-colors group-aria-checked:bg-action motion-reduce:transition-none"
+      >
+        <span className="size-5 rounded-full bg-background shadow-sm transition-transform group-aria-checked:translate-x-5 motion-reduce:transition-none" />
+      </span>
+      {label}
+    </button>
+  );
+}`}
+    lang="tsx"
+    title="ui/Switch.tsx"
+  />
+  <p>
+    The classes use Blume's theme tokens, like <code>bg-muted</code> and{" "}
+    <code>bg-action</code>, so the switch follows the site's colors in light and
+    dark mode. Blume generates Tailwind classes from the <code>.tsx</code> and{" "}
+    <code>.jsx</code> files in your project, so there's nothing to configure.
+    React ships with Blume and switches on when your project has a{" "}
+    <code>.tsx</code> or <code>.jsx</code> file. For type checking in your
+    editor, add React's types with <code>npm install -D @types/react</code>.
+  </p>
+
+  <h2>Register the demo as an island</h2>
+  <p>
+    The demo holds the state, so the page can show the switch working. Create{" "}
+    <code>islands/SwitchDemo.tsx</code>:
+  </p>
+  <CodeBlock
+    code={`import { useState } from "react";
+import { Switch } from "../ui/Switch";
+
+export default function SwitchDemo({ label = "Email alerts" }: { label?: string }) {
+  const [checked, setChecked] = useState(false);
+
+  return (
+    <div className="not-prose my-6 flex items-center justify-between gap-4 rounded-blume border border-border p-4">
+      <Switch checked={checked} label={label} onCheckedChange={setChecked} />
+      <code className="font-mono text-muted-foreground text-xs">
+        checked: {String(checked)}
+      </code>
+    </div>
+  );
+}`}
+    lang="tsx"
+    title="islands/SwitchDemo.tsx"
+  />
+  <p>
+    Blume picks up every <code>.tsx</code> and <code>.jsx</code> file in{" "}
+    <code>islands/</code> and names the MDX component after the file:{" "}
+    <code>SwitchDemo.tsx</code> becomes <code>&lt;SwitchDemo /&gt;</code>, on
+    every page, with no import. The file name must be a PascalCase identifier,
+    and the component must be the file's default export. Vue and Svelte islands
+    work the same way once you install their Astro integration, though the
+    site's Tailwind scan skips <code>.vue</code> and <code>.svelte</code>{" "}
+    files.
+  </p>
+  <p>
+    The <code>not-prose</code> class matters. MDX pages render inside the docs'
+    typography styles, which would otherwise restyle the demo's text and code.
+    The <code>checked:</code> readout shows readers the value their callback
+    receives.
+  </p>
+  <p>
+    If you'd rather keep demos out of <code>islands/</code>, register them in{" "}
+    <code>components.ts</code>. The <code>client</code> mode is what makes an
+    entry an island:
+  </p>
+  <CodeBlock
+    code={`import { defineComponents } from "blume";
+
+export default defineComponents({
+  mdx: {
+    SwitchDemo: { component: "./demos/SwitchDemo.tsx", client: "visible" },
+  },
+});`}
+    lang="ts"
+    title="components.ts"
+  />
+  <p>
+    Leave out <code>client</code> and the component renders as static HTML: the
+    switch shows up but never responds, and Blume warns about it.
+  </p>
+  <Callout type="warning">
+    Name demos after what they show, like <code>SwitchDemo</code>. An island
+    named <code>Tabs.tsx</code> or <code>Card.tsx</code> replaces Blume's
+    built-in Tabs or Card on every page.
+  </Callout>
+
+  <h2>Place it beside the usage code</h2>
+  <p>
+    Create the page. Put the context first, then the demo, then the code
+    readers copy:
+  </p>
+  <CodeBlock
+    code={`---
+title: Switch
+description: A two-state control for settings that take effect at once.
+---
+
+Use a switch for a setting that applies as soon as it changes. Readers can click it, or Tab to it and press Space or Enter. It reports its state to assistive technology through \`aria-checked\`.
+
+<SwitchDemo />
+
+\`\`\`tsx
+import { useState } from "react";
+import { Switch } from "@acme/ui";
+
+export function NotificationSettings() {
+  const [alerts, setAlerts] = useState(false);
+
+  return (
+    <Switch checked={alerts} label="Email alerts" onCheckedChange={setAlerts} />
+  );
+}
+\`\`\`
+
+## Props
+
+<AutoTypeTable path="./ui/Switch.tsx" name="SwitchProps" />`}
+    lang="mdx"
+    title="docs/components/switch.mdx"
+  />
+  <p>
+    The snippet imports from <code>@acme/ui</code>, the package your readers
+    install, while the demo imports the local file. That's the trade-off of an
+    island: you choose exactly what the snippet shows, and you keep the two in
+    step yourself.
+  </p>
+  <p>
+    Props you pass in MDX reach the component, so{" "}
+    <code>&lt;SwitchDemo label="Marketing emails" /&gt;</code> relabels the
+    demo. They're written into the page for hydration, so they must be
+    serializable: strings, numbers, and plain objects, not functions.
+  </p>
+  <p>
+    <code>AutoTypeTable</code> reads the <code>SwitchProps</code> interface
+    with the TypeScript compiler at build time. Descriptions come from the
+    JSDoc comments, and <code>@default</code> sets the default value. It
+    documents the type you name, not the component, so export a props type and
+    keep its comments current.
+  </p>
+
+  <h3>Keep the demo and its code in one file</h3>
+  <p>To show the exact code that runs, put the demo in <code>examples/</code>:</p>
+  <CodeBlock
+    code={`import { useState } from "react";
+import { Switch } from "../../ui/Switch";
+
+export default function Basic() {
+  const [checked, setChecked] = useState(false);
+
+  return (
+    <Switch checked={checked} label="Email alerts" onCheckedChange={setChecked} />
+  );
+}`}
+    lang="tsx"
+    title="examples/switch/basic.tsx"
+  />
+  <p>
+    Then render it with the built-in <code>Component</code>, using its path
+    under <code>examples/</code> without the extension:
+  </p>
+  <CodeBlock code={`<Component path="switch/basic" />`} lang="mdx" />
+  <p>
+    Readers get a Preview tab and a Code tab that shows this file. The preview
+    renders in its own frame with Tailwind and Blume's theme tokens but none of
+    the docs' prose styles, so it doesn't need <code>not-prose</code>. Because
+    the Code tab shows the file as written, import the component the way your
+    readers will, from your package, once your docs project can resolve it.
+    The{" "}
+    <a href="/guides/monorepo-documentation-site">monorepo guide</a> covers
+    docs that sit beside the package.
+  </p>
+
+  <h2>Choose when it hydrates</h2>
+  <p>
+    Hydration is when the demo's JavaScript loads and takes over the HTML Blume
+    rendered at build time. Islands and examples default to{" "}
+    <code>visible</code>: the switch is in the page's HTML from the start and
+    becomes interactive when it scrolls into view. To change that, export a
+    mode from the file, beside the default export:
+  </p>
+  <CodeBlock code={`export const client = "load";`} lang="tsx" />
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Mode</th>
+        <th scope="col">Hydrates</th>
+        <th scope="col">Use it for</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>visible</code> (default)</td>
+        <td>When scrolled into view</td>
+        <td>Most demos</td>
+      </tr>
+      <tr>
+        <td><code>load</code></td>
+        <td>As soon as the page loads</td>
+        <td>A demo at the top of the page that readers use right away</td>
+      </tr>
+      <tr>
+        <td><code>idle</code></td>
+        <td>When the browser is idle</td>
+        <td>A demo that can wait</td>
+      </tr>
+      <tr>
+        <td><code>only</code></td>
+        <td>In the browser only, never rendered on the server</td>
+        <td>Components that can't render on the server</td>
+      </tr>
+      <tr>
+        <td><code>media</code></td>
+        <td>When a media query matches</td>
+        <td>
+          Demos that only work at some screen sizes (a{" "}
+          <code>components.ts</code> entry only, with a <code>media</code> query)
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Blume reads the <code>client</code> line as text rather than running the
+    file, so write the mode as a string literal. An unknown mode falls back to{" "}
+    <code>visible</code> with a warning.
+  </p>
+  <p>
+    Server rendering is also where browser-only code breaks. If a component
+    reads <code>window</code>, <code>document</code>, or{" "}
+    <code>localStorage</code> while it renders, the page fails to render on the
+    server, because none of those exist there. Move that code into an effect,
+    which runs only in the browser:
+  </p>
+  <CodeBlock
+    code={`import { useEffect, useState } from "react";
+
+export default function ReducedMotionNote() {
+  const [reduced, setReduced] = useState(false);
+
+  // Effects run only in the browser, so window is safe to read here.
+  useEffect(() => {
+    setReduced(window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }, []);
+
+  return (
+    <p className="not-prose text-muted-foreground text-sm">
+      {reduced
+        ? "Your system asks for reduced motion, so the thumb moves without sliding."
+        : "The thumb slides when the switch changes."}
+    </p>
+  );
+}`}
+    lang="tsx"
+    title="islands/ReducedMotionNote.tsx"
+  />
+  <p>
+    If a library touches <code>window</code> as soon as it's imported, an
+    effect can't help, because the import itself runs on the server. Add{" "}
+    <code>export const client = "only";</code> so the component renders only in
+    the browser. The cost is that its space stays empty until the JavaScript
+    loads, and readers without JavaScript see nothing there.
+  </p>
+
+  <h2>Explain it for readers who can't run it</h2>
+  <p>
+    Treat the demo as an illustration, not the documentation. Some readers load
+    the page with scripts blocked, and agents read the page's Markdown version,
+    where nothing runs. The page should still say what the demo shows:
+  </p>
+  <ul>
+    <li>
+      <strong>The prose carries the behavior.</strong> The sentence above{" "}
+      <code>&lt;SwitchDemo /&gt;</code> says what the switch does and which
+      keys work, so it stands on its own.
+    </li>
+    <li>
+      <strong>The server-rendered HTML shows the starting state.</strong> In
+      any mode but <code>only</code>, readers without JavaScript see the switch
+      in its off position, though it doesn't respond.
+    </li>
+    <li>
+      <strong>The Markdown version needs a description.</strong> In a page's{" "}
+      <code>.md</code> version, an <code>examples/</code> preview becomes its
+      source code automatically, but an island stays as a bare{" "}
+      <code>&lt;SwitchDemo /&gt;</code> tag.
+    </li>
+  </ul>
+  <p>Give the island a Markdown form in your config:</p>
+  <CodeBlock
+    code={`import type { ComponentMarkdown } from "blume";
+import { defineConfig } from "blume";
+
+const switchDemo: ComponentMarkdown = ({ props }) =>
+  \`*Interactive demo: a switch labeled "\${props.label ?? "Email alerts"}" that starts off. Clicking it, or pressing Space or Enter while it has focus, turns it on.*\`;
+
+export default defineConfig({
+  agents: {
+    markdownComponents: {
+      SwitchDemo: switchDemo,
+    },
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    The same description replaces the tag in <code>llms-full.txt</code> and in
+    the MCP server's page tool. <code>AutoTypeTable</code> stays as written in
+    the Markdown version, because it needs the type checker. If agents reading
+    your props matter more than the table staying in sync with the source, write
+    the rows in a <code>TypeTable</code>, which converts to a Markdown table.
+  </p>
+
+  <h2>Test it from the keyboard</h2>
+  <p>
+    Run <code>npx blume dev</code>, open the page, and put the mouse away.
+    Check that:
+  </p>
+  <ul>
+    <li>Tab reaches the switch, and a focus ring shows around it.</li>
+    <li>Space and Enter both toggle it, and the readout changes.</li>
+    <li>The next Tab moves past the demo, so focus never gets stuck.</li>
+    <li>
+      Your browser's accessibility inspector, or a screen reader, reports a
+      switch named "Email alerts" whose state changes.
+    </li>
+    <li>
+      On an example, the arrow keys move between the Preview and Code tabs, and
+      Tab moves from the selected tab into the preview.
+    </li>
+  </ul>
+  <p>
+    Then automate the check. Install Playwright and its browser:
+  </p>
+  <CodeBlock
+    code={`npm install -D @playwright/test@1.63.0
+npx playwright install chromium`}
+    lang="bash"
+  />
+  <p>Point it at a production build, since that's what readers get:</p>
+  <CodeBlock
+    code={`import { defineConfig } from "@playwright/test";
+
+export default defineConfig({
+  testDir: "tests",
+  use: { baseURL: "http://localhost:4321" },
+  webServer: {
+    command: "npx blume build && npx blume preview --port 4321",
+    url: "http://localhost:4321/components/switch",
+    reuseExistingServer: !process.env.CI,
+    timeout: 180_000,
+  },
+});`}
+    lang="ts"
+    title="playwright.config.ts"
+  />
+  <CodeBlock
+    code={`import { expect, test } from "@playwright/test";
+
+test("the switch demo works from the keyboard", async ({ page }) => {
+  await page.goto("/components/switch");
+  const toggle = page.getByRole("switch", { name: "Email alerts" });
+  await toggle.scrollIntoViewIfNeeded();
+
+  // Astro removes the island's ssr attribute once it has hydrated.
+  const island = page.locator("astro-island", { has: toggle });
+  await expect(island).not.toHaveAttribute("ssr");
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+
+  await toggle.focus();
+  await page.keyboard.press("Space");
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+});`}
+    lang="ts"
+    title="tests/switch.spec.ts"
+  />
+  <p>
+    Run it with <code>npx playwright test</code>. The wait for hydration
+    matters: a key press that lands on the server-rendered button before its
+    JavaScript arrives does nothing, and the test would fail for the wrong
+    reason.
+  </p>
+
+  <h2>Check the production build</h2>
+  <p>
+    Island problems mostly surface as build warnings, so read the output as
+    well as the exit code:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+npx blume preview`}
+    lang="bash"
+  />
+  <p>In the build output, look for:</p>
+  <ul>
+    <li>
+      A warning that an island was skipped for its file name, or{" "}
+      <code>BLUME_UNKNOWN_COMPONENT</code> naming a page that uses a tag Blume
+      doesn't know.
+    </li>
+    <li>
+      A warning that a <code>components.ts</code> entry renders as static HTML
+      with no interactivity.
+    </li>
+    <li>
+      <code>BLUME_EXAMPLE_NOT_FOUND</code>, when a{" "}
+      <code>&lt;Component path&gt;</code> names no file under{" "}
+      <code>examples/</code>, such as after you rename an example.
+    </li>
+    <li>
+      For a Vue or Svelte island, <code>BLUME_DEPENDENCY_MISSING</code>, which
+      fails the build until you install the framework's Astro integration.
+    </li>
+  </ul>
+  <p>
+    Then open the page in the preview. Check that the demo works, that the page
+    still reads correctly with JavaScript turned off in your browser, and that{" "}
+    <code>/components/switch.md</code> shows your description where the demo
+    was. <code>blume preview</code> can't serve a Vercel or Netlify server
+    build. On those, run the checks against <code>npx blume dev</code>, or
+    deploy a preview.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The demo shows up but doesn't respond</h3>
+  <p>
+    A <code>components.ts</code> entry without <code>client</code> renders as
+    static HTML, and Blume warns that it has no hydration mode. Add one. If the
+    entry is right, open the browser console: an error thrown while the island
+    hydrates leaves the server-rendered HTML in place.
+  </p>
+  <h3>Blume says the tag isn't a known component</h3>
+  <p>
+    <code>BLUME_UNKNOWN_COMPONENT</code> means no built-in, island, or{" "}
+    <code>components.ts</code> entry matches the tag. Check that the file is in{" "}
+    <code>islands/</code> at the project root, that its name is PascalCase with
+    only letters, digits, and underscores (<code>switch-demo.tsx</code> is
+    skipped with a warning), and that the tag matches it exactly. When two
+    islands share a name, Blume keeps the first by file path and warns about
+    the other.
+  </p>
+  <h3>The build fails with "window is not defined"</h3>
+  <p>
+    Browser-only code ran during server rendering. Move it into an effect, or
+    use <code>client = "only"</code> for a library that touches the browser on
+    import (see <a href="#choose-when-it-hydrates">Choose when it hydrates</a>).
+  </p>
+  <h3>A built-in component changed on every page</h3>
+  <p>
+    An island named like a built-in, such as <code>Badge.tsx</code>, replaces
+    it everywhere. Rename the file, for example to <code>BadgeDemo.tsx</code>,
+    and update the tags that use it.
+  </p>
+  <h3>The demo's styles look wrong</h3>
+  <p>
+    Stray margins, fonts, or code styling come from the docs' typography: add{" "}
+    <code>not-prose</code> to the island's outer element. Missing classes mean
+    Tailwind never scanned the file that uses them. The site's stylesheet scans
+    your project's <code>.tsx</code>, <code>.jsx</code>, <code>.ts</code>,{" "}
+    <code>.mdx</code>, and <code>.astro</code> files, so a class used only in a{" "}
+    <code>.vue</code> or <code>.svelte</code> island is never generated: add{" "}
+    <code>@source "./islands";</code> to your <code>theme.css</code>. A
+    component in a sibling package needs an <code>@source</code> line for that
+    package, in <code>theme.css</code> or, for preview frames, in the
+    stylesheet your <code>examples.css</code> config points at, as the{" "}
+    <a href="/docs/content/components#component">Component docs</a> describe.
+  </p>
+</GuidePage>

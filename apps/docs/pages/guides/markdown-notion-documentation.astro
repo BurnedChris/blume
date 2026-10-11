@@ -1,0 +1,466 @@
+---
+// Markdown and Notion in one site: checked against the content sources and
+// Notion source docs, the navigation (tabs), CLI, and validate docs, and on
+// main against the notion() adapter (core/sources/notion.ts: the Status gate,
+// slugs), route mapping (core/sources/normalize.ts), duplicate-route detection
+// (core/graph.ts), draft filtering and redirect checks
+// (core/project-graph.ts), the snapshot cache (core/sources/cache.ts), and
+// strict handling in cli/prepare.ts. Ran scanProject and validateLinks over a
+// scratch project with a mocked @notionhq/client (bun test) to confirm the
+// routes, every Status case in the table, both collision messages, that a
+// draft collision only shows in dev and preview, that a Git file under the
+// Notion prefix joins its sidebar group silently, and broken-link reports in
+// both directions. Notion permission levels and connection capabilities, and
+// GitHub CODEOWNERS, checked against their official docs (September 2026).
+// Rechecked the missing-token error (core/sources/notion.ts) and the exact
+// redirect warning (redirectPageDiagnostics in core/project-graph.ts). Not
+// yet run end to end against a real Notion workspace.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("markdown-notion-documentation")}>
+  <p>
+    Blume can build one docs site from two sources at once: a folder of
+    Markdown that engineers change through pull requests, and a Notion database
+    that the rest of the team edits in Notion. Every build reads both, so
+    readers get one sidebar, one set of header tabs, and one search index
+    across the whole site.
+  </p>
+  <p>
+    The way to make it work is to split by section, not by page. Each section
+    belongs to exactly one source, and nothing syncs between them: Blume reads
+    Notion at build time and never writes back, and Markdown pages never show
+    up in Notion. In this guide, engineers own a Setup section in Git, the
+    support team owns a User handbook section in Notion, and you add the
+    checks that keep their URLs from colliding and their drafts from leaking.
+  </p>
+  <p>
+    If everyone who writes docs is comfortable in Git, one Markdown source is
+    simpler. If the Notion side only needs a public page, Notion's own web
+    publishing covers it. This guide assumes you already have a Notion
+    connection token and a database ID; the{" "}
+    <a href="/guides/notion-documentation-website#connect-notion"
+      >Notion guide</a
+    > walks through getting both.
+  </p>
+
+  <h2>Give each section one owner</h2>
+  <p>
+    Decide which URLs each source owns before you write any config. For the
+    Acme docs at <code>docs.acme.example</code>, the split looks like this:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Section</th>
+        <th scope="col">URLs</th>
+        <th scope="col">Source</th>
+        <th scope="col">Goes live when</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Home and Setup</td>
+        <td><code>/</code>, <code>/setup/…</code></td>
+        <td><code>docs/</code> in Git, owned by engineering</td>
+        <td>A pull request merges</td>
+      </tr>
+      <tr>
+        <td>User handbook</td>
+        <td><code>/handbook/…</code></td>
+        <td>A Notion database, owned by support</td>
+        <td>Status is Done and the site rebuilds</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Each side then enforces ownership with its own permissions.
+  </p>
+
+  <h3>In Git: code owners</h3>
+  <p>
+    A <code>CODEOWNERS</code> file routes every pull request to the team that
+    owns the files it touches:
+  </p>
+  <CodeBlock
+    code={`# The site config and dependencies affect both sections
+/blume.config.ts @acme/docs-maintainers
+/package.json    @acme/docs-maintainers
+
+# The Setup section
+/docs/setup/     @acme/platform
+
+# The handbook lives in Notion, so nothing should be added here
+/docs/handbook/  @acme/docs-maintainers`}
+    lang="text"
+    title=".github/CODEOWNERS"
+  />
+  <p>
+    Turn on <strong>Require review from Code Owners</strong> in the branch
+    protection rule or ruleset for your main branch, so an owner has to
+    approve. The last line guards a folder that should never exist; you'll see
+    why under <a href="#keep-the-routes-apart">Keep the routes apart</a>.
+  </p>
+
+  <h3>In Notion: database permissions</h3>
+  <p>Share the handbook database with three levels of access:</p>
+  <ul>
+    <li>
+      <strong>Can edit content</strong> for the support writers. They can
+      create pages and set property values, but they can't change the
+      database's properties, so nobody renames Status by accident.
+    </li>
+    <li>
+      <strong>Full access</strong> for one docs maintainer, who makes any
+      change to the database's properties together with the matching change
+      to <code>blume.config.ts</code>.
+    </li>
+    <li><strong>Can comment</strong> for reviewers.</li>
+  </ul>
+  <p>
+    Anyone who can edit a page can change its Status, so Status is a publish
+    switch, not an approval step. If handbook pages need sign-off, agree on
+    who sets Done.
+  </p>
+
+  <h2>Add both sources</h2>
+  <p>The Git side is a normal Blume content folder:</p>
+  <CodeBlock
+    code={`.
+├── blume.config.ts
+├── package.json
+└── docs/
+    ├── index.mdx
+    └── setup/
+        ├── index.mdx
+        ├── install.mdx
+        └── configure.mdx`}
+    lang="text"
+  />
+  <p>
+    The Notion database needs a title property, plus Slug (text), Order
+    (number), Status (status), and optionally Description (text). Give one
+    page the Slug <code>index</code> and the title User handbook: it becomes
+    the page at <code>/handbook</code> itself, so the section has a landing
+    page. Install the Notion SDK the source uses:
+  </p>
+  <CodeBlock code="npm install @notionhq/client@5.26.0" lang="bash" />
+  <p>Then list both sources in your config:</p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { filesystem, notion } from "blume/sources";
+
+export default defineConfig({
+  title: "Acme Docs",
+  content: {
+    sources: [
+      // Git: the home page and everything under /setup
+      filesystem({ root: "docs" }),
+      // Notion: everything under /handbook
+      notion({
+        database: "8f2c1e0a4b7d4f3c9e6a5d2b1c0f9e8d",
+        prefix: "handbook",
+        publishedValue: "Done",
+      }),
+    ],
+  },
+  navigation: {
+    tabs: [
+      { label: "Setup", path: "/setup" },
+      { label: "User handbook", path: "/handbook" },
+    ],
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    A <code>sources</code> array replaces Blume's default content folder, so
+    the <code>filesystem()</code> entry is what keeps your Markdown on the
+    site. <code>prefix</code> puts every Notion page under{" "}
+    <code>/handbook</code>. <code>publishedValue</code> names the Status
+    option that means published, and the tabs give each section its own
+    header tab and its own sidebar.
+  </p>
+  <p>
+    The source reads its token from <code>NOTION_TOKEN</code>. Put it in{" "}
+    <code>.env.local</code>, which Blume loads for you, and keep that file out
+    of Git:
+  </p>
+  <CodeBlock
+    code={`echo "NOTION_TOKEN=paste-your-token-here" >> .env.local
+echo ".env.local" >> .gitignore
+npx blume dev`}
+    lang="bash"
+  />
+  <p>
+    The Setup tab shows your Markdown pages, and the User handbook tab shows
+    the Notion pages sorted by Order. A Slug with a slash, like{" "}
+    <code>billing/plans</code>, puts the page in a Billing group inside the
+    handbook. Search finds pages from both sections.
+  </p>
+
+  <h2>Keep the routes apart</h2>
+  <p>
+    Blume builds each URL from the source's prefix and the page's path.{" "}
+    <code>docs/setup/install.mdx</code> is served at{" "}
+    <code>/setup/install</code>. A Notion page with the Slug{" "}
+    <code>exports</code> is served at <code>/handbook/exports</code>, and one
+    without a Slug at its title, lowercased and hyphenated. A Notion Slug
+    can't leave the prefix: <code>/setup/install</code> and{" "}
+    <code>../setup/install</code> both land at{" "}
+    <code>/handbook/setup/install</code>.
+  </p>
+  <p>So two pages can only claim the same URL in three ways:</p>
+  <ul>
+    <li>
+      A Markdown file under <code>docs/handbook/</code> with the same path as
+      a Notion page.
+    </li>
+    <li>Two Notion pages with the same Slug, or the same title and no Slug.</li>
+    <li>
+      A <code>notion()</code> source with no <code>prefix</code>, whose pages
+      then share the root with <code>docs/</code>.
+    </li>
+  </ul>
+  <p>
+    Each one is a <code>BLUME_DUPLICATE_ROUTE</code> error that names both
+    pages, with the Notion one under the source's prefix:
+  </p>
+  <CodeBlock
+    code="Two files resolve to /handbook/exports: filesystem:handbook/exports.mdx and handbook:exports.mdx"
+    lang="text"
+  />
+  <p>
+    <code>blume build</code> stops on it. <code>blume dev</code> reports it and
+    keeps serving. Fix it in the section that shouldn't have the page: delete
+    the stray Markdown file, or change one Notion page's Slug.
+  </p>
+
+  <h3>What the check doesn't catch</h3>
+  <p>
+    A Markdown file under <code>docs/handbook/</code> that doesn't match a
+    Notion page collides with nothing. It builds, and it joins the handbook's
+    sidebar group as if support had written it. That's what the{" "}
+    <code>/docs/handbook/</code> line in <code>CODEOWNERS</code> is for.
+  </p>
+  <p>
+    Drafts are the other gap. A production build drops drafts before it checks
+    routes, so a Notion draft that will collide passes today's build and
+    breaks the one after someone sets it to Done. <code>blume dev</code> and
+    any run with <code>--preview</code> include drafts, so they report the
+    collision now. The CI check below uses that.
+  </p>
+
+  <h2>Know what Status publishes</h2>
+  <p>
+    The Status property decides which handbook pages reach production. With{" "}
+    <code>publishedValue: "Done"</code>:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">The page's Status</th>
+        <th scope="col">In a production build</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Done</td>
+        <td>Published</td>
+      </tr>
+      <tr>
+        <td>Not started, In progress, or any other option</td>
+        <td>A draft, left out</td>
+      </tr>
+      <tr>
+        <td>An option spelled differently, like <code>done</code></td>
+        <td>A draft: the match is exact, capitals included</td>
+      </tr>
+      <tr>
+        <td>No value</td>
+        <td>Published</td>
+      </tr>
+      <tr>
+        <td>No property named Status (renamed or deleted)</td>
+        <td>Every page published</td>
+      </tr>
+      <tr>
+        <td>Status is a checkbox, multi-select, or other type</td>
+        <td>Every page published</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Blume only reads a Status of the status or select type. Leave out{" "}
+    <code>publishedValue</code> and Blume looks for <code>Published</code>,
+    which Notion's default options don't have: every page with a status
+    becomes a draft, and only pages with no status go live.
+  </p>
+  <Callout type="warning">
+    Renaming the Status property publishes every draft in the database on the
+    next build, and renaming the Done option unpublishes the whole handbook.
+    If you rename either, update <code>publishedValue</code> or{" "}
+    <code>properties.status</code> in <code>blume.config.ts</code> at the same
+    time.
+  </Callout>
+
+  <h2>Review drafts before they go live</h2>
+  <p>
+    Setup pages go through pull requests, reviewed by their code owners, with
+    your host's preview deployment for each branch. Handbook pages stay In
+    progress while writers work and reviewers comment in Notion, and go live
+    when someone sets them to Done.
+  </p>
+  <p>
+    To see handbook drafts rendered, use the dev server: it shows drafts like
+    any other page. It serves a snapshot of Notion, so pull the latest first,
+    and a running server reloads:
+  </p>
+  <CodeBlock code="npx blume sync" lang="bash" />
+  <p>
+    To share a rendered copy with drafts, run{" "}
+    <code>npx blume build --preview</code> and deploy that output only behind{" "}
+    <a href="/docs/deployment#private-docs">access protection</a>, never to
+    your public domain.
+  </p>
+
+  <h3>Check both sections in CI</h3>
+  <p>
+    Add <code>NOTION_TOKEN</code> as a repository secret, then run two checks
+    on every pull request and every hour, since Notion edits never open a
+    pull request:
+  </p>
+  <CodeBlock
+    code={`name: Check docs
+
+on:
+  pull_request:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      NOTION_TOKEN: \${{ secrets.NOTION_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx blume validate
+      - run: npx blume check --preview --strict`}
+    lang="yaml"
+    title=".github/workflows/check-docs.yml"
+  />
+  <p>
+    <code>blume validate</code> reads the site the way a production build
+    does and checks every internal link in both sections. It catches a Setup
+    page that links to a handbook page that's still a draft or whose Slug
+    changed, and a Notion page that links to a Setup page that moved.{" "}
+    <code>blume check --preview --strict</code> includes drafts and fails on
+    any content error, so a draft collision fails here before it can fail a
+    deploy.
+  </p>
+
+  <h2>Publish both through one build</h2>
+  <p>
+    Every <code>blume build</code> fetches the Notion database fresh, reads{" "}
+    <code>docs/</code>, and writes one site with one navigation and one search
+    index. A merge to your main branch starts that build on your host. A
+    Notion edit doesn't, so give Notion a way to start one: a deploy hook
+    called from a Notion automation or a scheduled workflow. The Notion guide
+    covers{" "}
+    <a href="/guides/notion-documentation-website#rebuild-when-notion-changes"
+      >both options</a
+    >.
+  </p>
+  <p>
+    One build also means one failure: if the Notion fetch fails, a Setup
+    change can't deploy either. On a host that deploys atomically, like
+    Vercel, the failed build doesn't replace the live site.
+  </p>
+
+  <h2>Nothing syncs between the sources</h2>
+  <p>
+    The Notion connection needs only the <strong>Read content</strong>{" "}
+    capability, because Blume never writes to Notion. It writes each Notion
+    page as an MDX file inside <code>.blume/</code> and regenerates that
+    folder on every build, so editing those files changes nothing that lasts.
+  </p>
+  <p>
+    To move a page from one section to the other, do it by hand. Say the API
+    keys page moves from the handbook to Setup:
+  </p>
+  <ol>
+    <li>Write it as <code>docs/setup/api-keys.mdx</code>.</li>
+    <li>
+      Set the Notion page's Status to an option other than Done, like a new
+      Archived option.
+    </li>
+    <li>Redirect the old URL to the new one.</li>
+  </ol>
+  <CodeBlock
+    code={`redirects: [
+  { from: "/handbook/api-keys", to: "/setup/api-keys", status: 308 },
+],`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Archive the Notion page in the same change. While it's still published,
+    the redirect takes over its URL, so the page never publishes, and the
+    build warns with <code>BLUME_REDIRECT_MATCHES_PAGE</code>.{" "}
+    <code>blume dev</code> shows drafts, so it keeps that warning until the
+    Notion page is gone.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The build fails with BLUME_DUPLICATE_ROUTE</h3>
+  <p>
+    Two pages claim one URL. The message names both: a{" "}
+    <code>filesystem:</code> path is a file in <code>docs/</code>, and a{" "}
+    <code>handbook:</code> path is a Notion page. If both are Notion pages,
+    two rows share a Slug or a title. Rename one, or remove the file that
+    doesn't belong in that section.
+  </p>
+  <h3>Every handbook page disappeared</h3>
+  <p>
+    No page's Status matches <code>publishedValue</code>. Check the spelling
+    and capitals against the option in Notion, and whether someone renamed
+    the Done option. In dev, run <code>npx blume sync</code> after a change in
+    Notion, since the server serves its snapshot until you do.
+  </p>
+  <h3>Handbook drafts went live</h3>
+  <p>
+    Blume couldn't read a Status. The property was renamed, deleted, or
+    changed to a type other than status or select, or the drafts have no
+    status at all. Restore the property, or point{" "}
+    <code>properties.status</code> at its new name.
+  </p>
+  <h3>A Setup pull request fails on the Notion source</h3>
+  <p>
+    A fresh CI runner has no snapshot of Notion to fall back on, so a missing
+    token stops the run with <code>BLUME_MISSING_SECRET</code>, and a failed
+    fetch with <code>BLUME_SOURCE_FETCH_FAILED</code> and Notion's own error.
+    Check that <code>NOTION_TOKEN</code> is set as a repository secret. GitHub
+    doesn't pass secrets to workflows run from a fork, so pull requests from
+    forks can't run these checks.
+  </p>
+  <h3>A link between the sections is broken</h3>
+  <p>
+    <code>blume validate</code> reports <code>BLUME_BROKEN_LINK</code> when a
+    link points at a page the production build doesn't have. A handbook link
+    usually broke because the page is still a draft or its Slug changed.
+    Links inside Notion should use site paths like{" "}
+    <code>/setup/install</code>: a link to another Notion page opens Notion,
+    not your site.
+  </p>
+</GuidePage>

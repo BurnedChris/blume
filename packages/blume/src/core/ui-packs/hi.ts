@@ -33,6 +33,7 @@ export const hi: UIStringsOverride = {
     error: "क्षमा करें, कुछ गलत हो गया।",
     explainCode: "इस कोड को समझाइए।",
     label: "एक प्रश्न पूछें",
+    open: "सहायक खोलें",
     placeholder: "एक प्रश्न पूछें…",
     rateLimited: "आपने बहुत सारे प्रश्न पूछे हैं। कुछ मिनट बाद फिर से प्रयास करें।",
     removeCode: "कोड हटाएँ",
@@ -47,6 +48,7 @@ export const hi: UIStringsOverride = {
   banner: { dismiss: "घोषणा बंद करें" },
   changelog: {
     description: "उत्पाद अपडेट और रिलीज़ नोट्स।",
+    empty: "परिवर्तन लॉग में अभी कोई प्रविष्टि नहीं है।",
     title: "परिवर्तन लॉग",
   },
   consent: {
@@ -68,6 +70,7 @@ export const hi: UIStringsOverride = {
     preview: "पूर्वावलोकन",
     prop: "प्रॉप",
     selectTab: "टैब चुनें",
+    selectView: "व्यू चुनें",
     showLess: "कम दिखाएँ",
     showMore: "और दिखाएँ",
     stars: "स्टार",

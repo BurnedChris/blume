@@ -1,0 +1,31 @@
+---
+// Guides in a grid: two columns from `sm`, three from `lg`. Each item rises
+// into view in turn when a `data-reveal` container around the grid scrolls in
+// (see Motion.astro). Shared by the homepage row, the /guides index, and a
+// guide's "keep going" row.
+import GuideCard from "./GuideCard.astro";
+import type { Guide } from "./guides.ts";
+
+interface Props {
+  guides: Guide[];
+  /** The titles' level, to fit the page's outline. */
+  level?: "h2" | "h3";
+}
+
+const { guides, level } = Astro.props;
+---
+
+<ul class="grid gap-x-4 gap-y-12 sm:grid-cols-2 lg:grid-cols-3" role="list">
+  {
+    guides.map((guide, index) => (
+      <li>
+        <GuideCard
+          class="reveal-rise"
+          guide={guide}
+          level={level}
+          style={`--reveal-delay: ${(index % 3) * 80}ms`}
+        />
+      </li>
+    ))
+  }
+</ul>

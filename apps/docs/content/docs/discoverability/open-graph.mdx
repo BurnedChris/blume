@@ -3,13 +3,28 @@ title: Open Graph images
 description: Generated 1200×630 social cards for every page — branding, card layers, fonts for non-Latin scripts, and per-page overrides.
 ---
 
-Blume can render a 1200×630 social card for every page at build time — no headless browser, thanks to [Takumi](https://takumi.kane.tw), so builds stay fast. On by default once [`deployment.site`](/docs/deployment) is set or auto-detected (the `og:image` URL has to be absolute to be useful to crawlers), and off otherwise. Set `enabled` to override that either way:
+Blume can render a 1200×630 social card for every page at build time — no headless browser, thanks to [Takumi](https://takumi.kane.tw), so builds stay fast. On by default once [`deployment.site`](/docs/deployment) is set or auto-detected (the `og:image` URL has to be absolute to be useful to crawlers), and off otherwise or when a [default image](#default-image) replaces the cards. Set `enabled` to override that either way:
 
 ```ts blume.config.ts lineNumbers
 seo: {
   og: { enabled: true }, // or false to opt out even with a site set
 }
 ```
+
+## Default image
+
+Set `seo.og.image` to share one image across every page instead of a generated card, or give each locale its own:
+
+```ts blume.config.ts lineNumbers
+seo: {
+  og: {
+    image: { en: "/og/default-en.png", fr: "/og/default-fr.png" },
+    // Or image: "https://example.com/og/default.png"
+  },
+}
+```
+
+A page's `seo.image`, or a custom page's `ogImage` prop, wins over the default. A locale missing from the map takes the default locale's image. The default covers custom pages rendered with `PageLayout` and the generated changelog index too, so Blume stops generating cards once it's set, unless `enabled` is `true`. Root-relative paths resolve under the deployment base. Blume declares image dimensions only for generated cards. Whichever image a page ends up with also goes into its [JSON-LD](/docs/discoverability/structured-data) as the page's `image`.
 
 ## Brand the generated card
 
@@ -49,7 +64,7 @@ seo:
 ```
 
 :::note
-Every palette color accepts any CSS color — hex, `oklch(…)`, `rgb(…)`, and so on. The accent also accepts a named preset (`blue`, `teal`, …), matching [`theme.accent`](/docs/configuration/theming#accent). A color the renderer can't parse fails the build rather than silently shipping a default-colored card.
+Every palette color accepts any CSS color — hex, `oklch(…)`, `rgb(…)`, and so on. The accent also accepts a named preset (`blue`, `teal`, …), matching [`theme.accent`](/docs/configuration/theming#accent). A color the renderer can't parse fails the build rather than silently shipping a default-colored card, and one that isn't a CSS color at all also warns `BLUME_THEME_COLOR_INVALID` with the line that sets it, before the card renders.
 :::
 
 Emoji in a page title or site title render as [Twemoji](https://github.com/jdecked/twemoji) glyphs, fetched from a CDN while the card renders — so a build whose titles contain emoji needs network access. Each glyph is fetched once per build, however many pages use it.

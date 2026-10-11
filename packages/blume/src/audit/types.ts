@@ -13,6 +13,7 @@ import type {
 export type AuditTier = "static" | "network" | "external";
 
 export type AuditCategory =
+  | "accessibility"
   | "content"
   | "duplicates"
   | "indexability"
@@ -248,6 +249,8 @@ export interface AuditContext {
   robots: RobotsDoc | null;
   llms: LlmsDoc | null;
   thresholds: AuditThresholds;
+  /** Outbound URLs the external tier doesn't probe (`--ignore`). */
+  ignore: (url: string) => boolean;
 }
 
 /** One category's checks. Modules, not per-check closures — see catalog.ts. */

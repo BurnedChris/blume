@@ -33,6 +33,7 @@ export const bn: UIStringsOverride = {
     error: "দুঃখিত, কিছু একটা ভুল হয়েছে।",
     explainCode: "এই কোডটি ব্যাখ্যা করুন।",
     label: "একটি প্রশ্ন করুন",
+    open: "সহকারী খুলুন",
     placeholder: "একটি প্রশ্ন করুন…",
     rateLimited: "আপনি অনেক প্রশ্ন করেছেন। কয়েক মিনিট পরে আবার চেষ্টা করুন।",
     removeCode: "কোড সরান",
@@ -47,6 +48,7 @@ export const bn: UIStringsOverride = {
   banner: { dismiss: "ঘোষণা বন্ধ করুন" },
   changelog: {
     description: "পণ্য আপডেট এবং রিলিজ নোট।",
+    empty: "পরিবর্তন লগে এখনও কোনো এন্ট্রি নেই।",
     title: "পরিবর্তন লগ",
   },
   consent: {
@@ -67,6 +69,7 @@ export const bn: UIStringsOverride = {
     preview: "প্রিভিউ",
     prop: "প্রপ",
     selectTab: "ট্যাব নির্বাচন করুন",
+    selectView: "ভিউ নির্বাচন করুন",
     showLess: "কম দেখান",
     showMore: "আরও দেখান",
     stars: "স্টার",

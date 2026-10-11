@@ -1,3 +1,5 @@
+import type { Locator, Page } from "@playwright/test";
+
 import { expect, test } from "./fixtures";
 
 test.describe("navigation", () => {
@@ -33,6 +35,27 @@ test.describe("navigation", () => {
       return getComputedStyle(image).cursor;
     });
     expect(cursor).toBe("zoom-in");
+  });
+
+  test("reduced motion keeps the image-zoom transition", async ({ page }) => {
+    // medium-zoom finishes opening and closing on the image's
+    // `transitionend`; a reduced-motion `transition: none` never fires it, so
+    // a zoomed image could never close again (issue #323).
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/docs");
+    const transition = await page.evaluate(() => {
+      const image = document.createElement("img");
+      image.className = "medium-zoom-image";
+      document.body.append(image);
+      const style = getComputedStyle(image);
+      return {
+        duration: style.transitionDuration,
+        property: style.transitionProperty,
+      };
+    });
+    expect(transition.property).toBe("transform");
+    expect(transition.duration).not.toBe("0s");
+    expect(transition.duration).not.toBe("0.3s");
   });
 });
 
@@ -187,12 +210,37 @@ test.describe("custom pages", () => {
   });
 });
 
+// Connect to MCP in the rail, where its menu floats.
+const mcpDropdown = (page: Page) =>
+  page
+    .locator("[data-blume-toc] [data-blume-page-actions] details")
+    .filter({ has: page.locator("[data-mcp-copy-url]") });
+
+// Every edge of the menu is hit-testable. Where the rail clips it, the probe
+// hits what's behind it instead: the article, the header, or nothing.
+const showsInFull = (menu: Locator) =>
+  menu.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    const edges: [number, number][] = [
+      [box.left + 2, y],
+      [box.right - 2, y],
+      [x, box.top + 2],
+      [x, box.bottom - 2],
+    ];
+    return edges.every(([px, py]) =>
+      element.contains(document.elementFromPoint(px, py))
+    );
+  });
+
 test.describe("dropdowns", () => {
   test("page actions close on an outside click and on Escape", async ({
     page,
   }) => {
     await page.goto("/docs/quickstart");
-    const actions = page.locator("[data-blume-page-actions]");
+    // In the rail at this width (below it, the block moves into "On this page").
+    const actions = page.locator("[data-blume-toc] [data-blume-page-actions]");
     const dropdown = actions.locator("details").first();
     const open = actions.locator("details[open]");
 
@@ -219,7 +267,8 @@ test.describe("dropdowns", () => {
     page,
   }) => {
     await page.goto("/docs/quickstart");
-    const actions = page.locator("[data-blume-page-actions]");
+    // In the rail at this width (below it, the block moves into "On this page").
+    const actions = page.locator("[data-blume-toc] [data-blume-page-actions]");
     const dropdown = actions.locator("details").first();
     const open = actions.locator("details[open]");
 
@@ -236,6 +285,136 @@ test.describe("dropdowns", () => {
     await expect(open).toHaveCount(0);
   });
 
+  for (const dir of ["ltr", "rtl"]) {
+    test(`a page actions menu with longer labels shows in full (${dir})`, async ({
+      page,
+    }) => {
+      await page.goto("/docs/quickstart");
+      await page.evaluate((value) => {
+        document.documentElement.setAttribute("dir", value);
+      }, dir);
+      const dropdown = mcpDropdown(page);
+      const menu = dropdown.locator("[data-blume-menu]");
+      const label = menu.locator("[data-mcp-url-label]");
+      // Longer than the rail has room for, with a word too long for one line.
+      await label.evaluate((element) => {
+        element.textContent =
+          "Kopiera io.github.modelcontextprotocol.servers-URL";
+      });
+      await dropdown.locator("summary").click();
+      await expect.poll(() => showsInFull(menu)).toBe(true);
+      // The label wraps inside it rather than running past its edge, and its
+      // icon stays beside the first line.
+      expect(
+        await label.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          // One line tall, so it's centered on the label's first line.
+          const icon = element.previousElementSibling?.getBoundingClientRect();
+          return {
+            fits: element.scrollWidth <= element.clientWidth,
+            iconOnFirstLine:
+              icon !== undefined && Math.abs(icon.top - box.top) < 0.5,
+            wraps: icon !== undefined && box.height > icon.height * 1.5,
+          };
+        })
+      ).toStrictEqual({ fits: true, iconOnFirstLine: true, wraps: true });
+    });
+  }
+
+  test("Connect to MCP shows in full with Portuguese labels", async ({
+    page,
+  }) => {
+    // Its translated labels are longer than the English ones the rail fits.
+    await page.goto("/pt/docs/quickstart");
+    const dropdown = mcpDropdown(page);
+    const menu = dropdown.locator("[data-blume-menu]");
+    await dropdown.locator("summary").click();
+    await expect.poll(() => showsInFull(menu)).toBe(true);
+    expect(
+      await menu.evaluate((element) =>
+        [...element.querySelectorAll(".flex-1")].every(
+          (label) => label.scrollWidth <= label.clientWidth
+        )
+      )
+    ).toBe(true);
+  });
+
+  test("a page actions menu opens upward only into the rail's room", async ({
+    page,
+  }) => {
+    await page.goto("/docs/quickstart");
+    const dropdown = mcpDropdown(page);
+    const menu = dropdown.locator("[data-blume-menu]");
+    const summary = dropdown.locator("summary");
+    const { railBottom, railTop, triggerBottom, triggerTop } =
+      await summary.evaluate((element) => {
+        const rail = element
+          .closest("[data-blume-toc]")
+          ?.getBoundingClientRect();
+        const trigger = element.getBoundingClientRect();
+        return {
+          railBottom: rail?.bottom ?? 0,
+          railTop: rail?.top ?? 0,
+          triggerBottom: trigger.bottom,
+          triggerTop: trigger.top,
+        };
+      });
+    const open = async (height: number) => {
+      await menu.evaluate((element, value) => {
+        element.style.minHeight = `${value}px`;
+      }, height);
+      // Too tall to open downward in either case.
+      expect(triggerBottom + height).toBeGreaterThan(railBottom);
+      await summary.click();
+    };
+
+    // Room for it above the trigger, under the header: it opens upward.
+    await open(triggerTop - railTop - 48);
+    await expect(menu).toHaveClass(/\bbottom-full\b/u);
+    await expect.poll(() => showsInFull(menu)).toBe(true);
+    await summary.click();
+
+    // Room above only by the viewport's top, behind the header, where the rail
+    // clips it: it opens downward, into the rail's scroll.
+    await open(triggerTop - railTop / 2 - 8);
+    await expect(menu).toHaveClass(/\btop-full\b/u);
+  });
+
+  test("page actions move into the On this page dropdown below 1,280px", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ height: 800, width: 480 });
+    await page.goto("/docs/quickstart");
+    // The page renders the block once, and below the rail's breakpoint the
+    // script moves it into the dropdown's mount.
+    const actions = page.locator("[data-blume-page-actions]");
+    await expect(actions).toHaveCount(1);
+    await expect(
+      page.locator("[data-blume-page-actions-mount] [data-blume-page-actions]")
+    ).toHaveCount(1);
+    await page.locator("#blume-content > details > summary").click();
+    await expect(actions.locator("[data-blume-scroll-top]")).toBeHidden();
+
+    // Its groups expand in place, one at a time, and stay open on an outside
+    // press.
+    const groups = actions.locator("details");
+    const open = actions.locator("details[open]");
+    await groups.first().locator("summary").click();
+    await groups.nth(1).locator("summary").click();
+    await expect(open).toHaveCount(1);
+    await expect(groups.nth(1)).toHaveAttribute("open");
+    await page.locator("#blume-content h1").click();
+    await expect(open).toHaveCount(1);
+
+    // Back at the rail's width, it is the rail's floating dropdowns again.
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await expect(
+      page.locator("[data-blume-toc] [data-blume-page-actions]")
+    ).toHaveCount(1);
+    await expect(open).toHaveCount(0);
+    await expect(groups.first()).toHaveAttribute("data-blume-dropdown", "");
+  });
+
   test("the header language switcher closes on an outside click", async ({
     page,
   }) => {
@@ -247,5 +426,41 @@ test.describe("dropdowns", () => {
     await expect(switcher).toHaveAttribute("open");
     await page.locator("#blume-content h1").click();
     await expect(switcher).not.toHaveAttribute("open");
+  });
+
+  test("Connect to MCP lists every built-in client by default", async ({
+    page,
+  }) => {
+    await page.goto("/docs/quickstart");
+    const menu = page
+      .locator("[data-blume-toc] [data-blume-page-actions] details")
+      .filter({ has: page.locator("[data-mcp-copy-url]") })
+      .locator("[data-blume-menu]");
+    // The commands to copy, a rule, then the install links.
+    expect(
+      await menu.evaluate((element) =>
+        [...element.children].map(
+          (row) =>
+            row
+              .getAttributeNames()
+              .find((name) => name.startsWith("data-mcp-")) ?? row.localName
+        )
+      )
+    ).toStrictEqual([
+      "data-mcp-copy-url",
+      "data-mcp-copy-claude",
+      "data-mcp-copy-codex",
+      "hr",
+      "data-mcp-cursor",
+      "data-mcp-vscode",
+    ]);
+    await expect(menu.locator("[data-mcp-cursor]")).toHaveAttribute(
+      "href",
+      /^cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install\?/u
+    );
+    await expect(menu.locator("[data-mcp-vscode]")).toHaveAttribute(
+      "href",
+      /^vscode:mcp\/install\?/u
+    );
   });
 });

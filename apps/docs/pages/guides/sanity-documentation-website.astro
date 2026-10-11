@@ -1,0 +1,656 @@
+---
+// Sanity as a docs CMS: checked against the Sanity, custom sources, and
+// content sources docs, the deployment docs, the sanity() adapter
+// (sources/sanity.ts), its engine and Portable Text lowering
+// (core/sources/sanity.ts, portable-text.ts, lower.ts), snapshot keys
+// (core/sources/resolve.ts), the secret and dependency checks, and the init
+// scaffold on main; Sanity's Query API, perspectives, webhooks, and dataset
+// access docs, the @sanity/code-input README, and the Sanity CLI's own help;
+// Vercel's deploy hooks, Deployment Protection, and system environment
+// variable docs (September 2026). Ran: validated the Studio schema with
+// `sanity schemas validate` on sanity 6.16.0, evaluated the GROQ query over
+// the sample NDJSON with groq-js, ran sanitySource with this config's
+// serializers over the sample documents (a stub client in place of
+// @sanity/client, both perspectives), compiled the output with @mdx-js/mdx,
+// and typechecked blume.config.ts. Review: aligned preview and rebuild steps
+// with the other CMS guides, and corrected the missing-token and
+// missing-client troubleshooting against cli/prepare.ts and
+// core/sources/cache.ts. Later: switched the callout serializer to
+// escapeMarkdownText from blume/sources/lower.ts, which the custom sources
+// docs now document (reran sanitySource with a stub client over the sample
+// guide for the output shown), and rechecked the engine's SDK and empty-result
+// checks in core/sources/sanity.ts. Not yet run end to end against a live
+// Sanity project or a deployment.
+import Callout from "blume/components/content/Callout.astro";
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+
+const blumeConfigTsCode = `import { defineConfig } from "blume";
+import { custom, filesystem } from "blume/sources";
+import { escapeMarkdownText } from "blume/sources/lower.ts";
+import { sanitySource } from "blume/sources/sanity.ts";
+
+const TONES = ["note", "tip", "warning", "danger"];
+
+// A string field on a custom block, or "" when it's missing.
+const field = (block: Record<string, unknown>, name: string) => {
+  const value = block[name];
+  return typeof value === "string" ? value : "";
+};
+
+// A fenced code block that outlasts any backticks inside the code.
+const fence = (code: string, language: string) => {
+  const runs = code.match(/\`+/g) ?? [];
+  const ticks = "\`".repeat(Math.max(3, ...runs.map((run) => run.length + 1)));
+  return \`\${ticks}\${language}\\n\${code}\\n\${ticks}\`;
+};
+
+export default defineConfig({
+  title: "Acme Docs",
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      custom(
+        sanitySource({
+          name: "guides",
+          prefix: "guides",
+          projectId: "abc123",
+          dataset: "production",
+          query: \`*[_type == "guide" && defined(slug.current)]{
+            _id, _updatedAt, title, summary, slug, content
+          }\`,
+          fields: { description: "summary", body: "content" },
+          serializers: {
+            // @sanity/code-input stores { code, language }.
+            code: (block) => fence(field(block, "code"), field(block, "language")),
+            // The callout type from the Studio schema: { tone, text }.
+            callout: (block) => {
+              const tone = field(block, "tone");
+              const directive = TONES.includes(tone) ? tone : "note";
+              return \`:::\${directive}\\n\${escapeMarkdownText(field(block, "text"))}\\n:::\`;
+            },
+          },
+        })
+      ),
+    ],
+  },
+});`;
+---
+
+<GuidePage guide={guideById("sanity-documentation-website")}>
+  <p>
+    To build a Sanity documentation website with Blume, add Blume's Sanity
+    content source. When the site builds, it runs a GROQ query against your
+    dataset, turns each document's Portable Text into a Markdown page, and
+    serves those pages under a prefix beside the Markdown files your
+    developers keep in Git. Editors write and publish in Sanity Studio,
+    developers review their pages in pull requests, and readers get one site
+    with one sidebar and one search index.
+  </p>
+  <p>
+    By the end, you have a Studio schema for guides, a docs project that reads
+    them, code blocks and callouts from Sanity rendered as Blume's own, drafts
+    that appear only in protected preview builds, and a production rebuild
+    every time an editor publishes.
+  </p>
+  <p>
+    Blume reads Sanity at build time, so an edit reaches readers on the next
+    build, and a preview is a rebuilt site. If your editors need Sanity's live,
+    click-to-edit visual editing, Blume isn't the right fit. If everyone on
+    your team is happy writing Markdown in Git, you don't need a CMS at all:
+    Blume's default docs folder already covers that.
+  </p>
+
+  <h2>Define the guide schema</h2>
+  <p>
+    Work in your Studio project, or start one with{" "}
+    <code>npm create sanity@latest</code> and the clean template. Guides use
+    Sanity's code input plugin for code blocks:
+  </p>
+  <CodeBlock code="npm install @sanity/code-input@7" lang="bash" />
+  <p>
+    Add a callout type, the custom block editors use for notes and warnings:
+  </p>
+  <CodeBlock
+    code={`import {defineField, defineType} from 'sanity'
+
+export const callout = defineType({
+  name: 'callout',
+  title: 'Callout',
+  type: 'object',
+  fields: [
+    defineField({
+      name: 'tone',
+      type: 'string',
+      options: {list: ['note', 'tip', 'warning', 'danger'], layout: 'radio'},
+      initialValue: 'note',
+      validation: (rule) => rule.required(),
+    }),
+    defineField({
+      name: 'text',
+      type: 'text',
+      rows: 3,
+      validation: (rule) => rule.required(),
+    }),
+  ],
+  preview: {select: {title: 'text', subtitle: 'tone'}},
+})`}
+    lang="ts"
+    title="schemaTypes/callout.ts"
+  />
+  <p>Then the guide document itself:</p>
+  <CodeBlock
+    code={`import {defineArrayMember, defineField, defineType} from 'sanity'
+
+export const guide = defineType({
+  name: 'guide',
+  title: 'Guide',
+  type: 'document',
+  fields: [
+    defineField({name: 'title', type: 'string', validation: (rule) => rule.required()}),
+    defineField({
+      name: 'slug',
+      type: 'slug',
+      options: {source: 'title'},
+      validation: (rule) => rule.required(),
+    }),
+    defineField({
+      name: 'summary',
+      type: 'text',
+      rows: 2,
+      description: 'Shown under the title and in search results.',
+    }),
+    defineField({
+      name: 'content',
+      type: 'array',
+      of: [
+        defineArrayMember({
+          type: 'block',
+          // The title is the page's heading, so sections start at h2.
+          styles: [
+            {title: 'Normal', value: 'normal'},
+            {title: 'Heading 2', value: 'h2'},
+            {title: 'Heading 3', value: 'h3'},
+            {title: 'Quote', value: 'blockquote'},
+          ],
+          marks: {
+            decorators: [
+              {title: 'Strong', value: 'strong'},
+              {title: 'Emphasis', value: 'em'},
+              {title: 'Code', value: 'code'},
+              {title: 'Strike', value: 'strike-through'},
+            ],
+            annotations: [
+              defineArrayMember({
+                name: 'link',
+                type: 'object',
+                title: 'Link',
+                fields: [
+                  defineField({
+                    name: 'href',
+                    type: 'url',
+                    title: 'URL or site path',
+                    validation: (rule) =>
+                      rule.uri({allowRelative: true, scheme: ['http', 'https', 'mailto']}),
+                  }),
+                ],
+              }),
+            ],
+          },
+        }),
+        defineArrayMember({
+          type: 'image',
+          fields: [defineField({name: 'alt', type: 'string', title: 'Alternative text'})],
+        }),
+        defineArrayMember({type: 'code'}),
+        defineArrayMember({type: 'callout'}),
+      ],
+    }),
+  ],
+})`}
+    lang="ts"
+    title="schemaTypes/guide.ts"
+  />
+  <p>Register both types and the plugin:</p>
+  <CodeBlock
+    code={`import {callout} from './callout'
+import {guide} from './guide'
+
+export const schemaTypes = [guide, callout]`}
+    lang="ts"
+    title="schemaTypes/index.ts"
+  />
+  <CodeBlock
+    code={`import {defineConfig} from 'sanity'
+import {structureTool} from 'sanity/structure'
+import {visionTool} from '@sanity/vision'
+import {codeInput} from '@sanity/code-input'
+import {schemaTypes} from './schemaTypes'
+
+export default defineConfig({
+  name: 'default',
+  title: 'Acme Docs',
+  projectId: 'abc123',
+  dataset: 'production',
+  plugins: [structureTool(), visionTool(), codeInput()],
+  schema: {types: schemaTypes},
+})`}
+    lang="ts"
+    title="sanity.config.ts"
+  />
+  <p>
+    Replace <code>abc123</code> with your project ID. Each choice in the schema
+    matches what Blume can render. Headings start at h2 because the title is
+    already the page heading. The decorators are the four marks Blume carries
+    over. Links accept site paths like <code>/authentication</code>, so editors
+    can point at pages developers own. Images get an alt field, which Blume
+    uses as the alt text. Run <code>npx sanity schemas validate</code> to check
+    the schema.
+  </p>
+
+  <h2>Import sample content</h2>
+  <p>
+    Three guides give you something to build against: two published, and one
+    whose <code>_id</code> starts with <code>drafts.</code>, which makes it a
+    draft that has never been published.
+  </p>
+  <CodeBlock
+    code={`{"_id":"guide-first-message","_type":"guide","title":"Send your first message","slug":{"_type":"slug","current":"send-your-first-message"},"summary":"Install the SDK and send a transactional email.","content":[{"_type":"block","_key":"b1","style":"normal","markDefs":[{"_type":"link","_key":"l1","href":"/authentication"}],"children":[{"_type":"span","_key":"s1","text":"Every request needs an API key. See ","marks":[]},{"_type":"span","_key":"s2","text":"Authentication","marks":["l1"]},{"_type":"span","_key":"s3","text":" to create one.","marks":[]}]},{"_type":"block","_key":"b2","style":"h2","markDefs":[],"children":[{"_type":"span","_key":"s4","text":"Install the SDK","marks":[]}]},{"_type":"code","_key":"b3","language":"sh","code":"npm install @acme/messages"},{"_type":"callout","_key":"b4","tone":"warning","text":"Keep the key out of client code. Anyone with it can send {messages} as you."}]}
+{"_id":"guide-templates","_type":"guide","title":"Use message templates","slug":{"_type":"slug","current":"use-message-templates"},"summary":"Write a message once and fill in names and links per recipient.","content":[{"_type":"block","_key":"b1","style":"normal","markDefs":[],"children":[{"_type":"span","_key":"s1","text":"A template holds the subject and the body.","marks":[]}]},{"_type":"callout","_key":"b2","tone":"tip","text":"Preview a template in the dashboard before you send it."}]}
+{"_id":"drafts.guide-webhooks","_type":"guide","title":"Receive delivery webhooks","slug":{"_type":"slug","current":"receive-delivery-webhooks"},"summary":"Get a request on your server when a message is delivered.","content":[{"_type":"block","_key":"b1","style":"normal","markDefs":[],"children":[{"_type":"span","_key":"s1","text":"This guide is still a draft.","marks":[]}]}]}`}
+    lang="json"
+    title="guides.ndjson"
+  />
+  <p>From the Studio folder, signed in with <code>npx sanity login</code>:</p>
+  <CodeBlock
+    code="npx sanity datasets import guides.ndjson --dataset production"
+    lang="bash"
+  />
+
+  <h2>Write the GROQ query</h2>
+  <p>Blume runs one query and turns each document it returns into a page:</p>
+  <CodeBlock
+    code={`*[_type == "guide" && defined(slug.current)]{
+  _id, _updatedAt, title, summary, slug, content
+}`}
+    lang="groq"
+  />
+  <p>
+    The filter skips guides without a slug, which Blume would otherwise serve
+    at a path built from their <code>_id</code>. The projection fetches only
+    the fields Blume maps. Try the query in the Studio's Vision tab, or against
+    the Query API. For a public dataset, no token is needed:
+  </p>
+  <CodeBlock
+    code={`curl -G "https://abc123.apicdn.sanity.io/v2024-01-01/data/query/production" \\
+  --data-urlencode 'query=*[_type == "guide" && defined(slug.current)]{title, "slug": slug.current}' \\
+  --data-urlencode 'perspective=published'`}
+    lang="bash"
+  />
+  <p>
+    The <code>result</code> array lists the two published guides. The draft
+    isn't there: unauthenticated requests never see drafts. For a private
+    dataset, add{" "}
+    <code>-H "Authorization: Bearer $SANITY_TOKEN"</code> with the token from
+    the <a href="#preview-drafts">preview section</a>.
+  </p>
+
+  <h2>Add the Sanity source</h2>
+  <p>
+    In a new folder, run <code>npx blume init</code>, and when it asks where
+    your content lives, pick both <code>filesystem</code> and{" "}
+    <code>sanity</code>. That keeps a <code>docs/</code> folder for your
+    developers' Markdown and adds <code>@sanity/client</code>, the SDK the
+    source loads, to your dependencies. In an existing Blume project, install
+    it yourself:
+  </p>
+  <CodeBlock code="npm install @sanity/client@8" lang="bash" />
+  <p>Point the source at your dataset:</p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { filesystem, sanity } from "blume/sources";
+
+export default defineConfig({
+  title: "Acme Docs",
+  content: {
+    sources: [
+      filesystem({ root: "docs" }),
+      sanity({
+        prefix: "guides",
+        projectId: "abc123",
+        dataset: "production",
+        query: \`*[_type == "guide" && defined(slug.current)]{
+          _id, _updatedAt, title, summary, slug, content
+        }\`,
+        fields: { description: "summary", body: "content" },
+      }),
+    ],
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>fields</code> maps your schema onto the page. Each value is a dot
+    path into what the query returns, and you only list the ones that differ
+    from the defaults:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Page</th>
+        <th scope="col">Default path</th>
+        <th scope="col">In this schema</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Title</td>
+        <td><code>title</code></td>
+        <td><code>title</code></td>
+      </tr>
+      <tr>
+        <td>Description</td>
+        <td><code>description</code></td>
+        <td><code>summary</code></td>
+      </tr>
+      <tr>
+        <td>URL, under the prefix</td>
+        <td><code>slug.current</code></td>
+        <td><code>slug.current</code></td>
+      </tr>
+      <tr>
+        <td>Body, as Portable Text</td>
+        <td><code>body</code></td>
+        <td><code>content</code></td>
+      </tr>
+      <tr>
+        <td>Last modified</td>
+        <td><code>_updatedAt</code></td>
+        <td><code>_updatedAt</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Other fields never reach the site. The sample guide links to a page your
+    developers own, so add it:
+  </p>
+  <CodeBlock
+    code={`---
+title: Authentication
+description: Create an API key and send it with every request.
+---
+
+Send your key as a bearer token in the \`Authorization\` header.`}
+    lang="mdx"
+    title="docs/authentication.mdx"
+  />
+  <p>
+    Run <code>npx blume dev</code>. The two published guides appear at{" "}
+    <code>/guides/send-your-first-message</code> and{" "}
+    <code>/guides/use-message-templates</code>, in a sidebar group of their
+    own, sorted by title since the source maps no order field. The draft isn't
+    there, and neither are the install command or the warning in the first
+    guide.
+  </p>
+
+  <h2>Map the custom blocks</h2>
+  <p>
+    That gap is the edge of what Blume converts for you. It handles standard
+    Portable Text blocks: paragraphs, headings, quotes, bulleted and numbered
+    lists (nested too), bold, italic, inline code, strikethrough, and{" "}
+    <code>link</code> annotations. It also handles images, which link to
+    Sanity's CDN without their crop or hotspot. Every other block type,
+    including <code>code</code> and <code>callout</code>, becomes a comment
+    that renders nothing, with no warning. Other annotations keep their text
+    and lose the link.
+  </p>
+  <p>
+    You map the rest with serializers, one function per block type. They're
+    set on <code>sanitySource</code>, the engine behind <code>sanity()</code>,
+    which you pass to <code>custom()</code>. Replace the config:
+  </p>
+  <CodeBlock
+    code={blumeConfigTsCode}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    <code>sanitySource</code> is the engine the{" "}
+    <a href="/docs/content/sources/custom">custom sources</a> page documents.
+    A serializer returns MDX, and setting any serializer writes the source's
+    pages as MDX, so a <code>:::warning</code> directive renders as a callout.
+    Blume escapes the text it converts itself, but a serializer's output goes
+    into the page as written. An editor's <code>{"{"}</code> would break the
+    page and a <code>&lt;b&gt;</code> would render as HTML, so pass their text
+    through <code>escapeMarkdownText</code>, the escaper Blume's own
+    conversion uses. <code>fence</code> writes a fence longer than any run of
+    backticks inside the code. The first guide now becomes:
+  </p>
+  <CodeBlock
+    code={`Every request needs an API key. See [Authentication](/authentication) to create one.
+
+## Install the SDK
+
+\`\`\`sh
+npm install @acme/messages
+\`\`\`
+
+:::warning
+Keep the key out of client code. Anyone with it can send \\{messages\\} as you.
+:::`}
+    lang="mdx"
+  />
+  <p>
+    <code>custom()</code> gives up some of <code>sanity()</code>'s checks. It
+    declares no package or secret, so <code>blume doctor</code> and the
+    build's up-front checks no longer look for <code>@sanity/client</code> or{" "}
+    <code>SANITY_TOKEN</code>. The engine still stops with{" "}
+    <code>BLUME_SOURCE_SDK_MISSING</code> when the client isn't installed, and
+    still warns when a query finds nothing without a token. And the dev
+    server's cached copy is kept per preview mode, not per config, so it
+    doesn't notice config changes. After you edit a serializer or the query,
+    run <code>npx blume sync</code>.
+  </p>
+
+  <h2>Preview drafts</h2>
+  <p>
+    Drafts are private in Sanity, so reading them takes a token. From the
+    Studio folder, create one with read-only access and put it in the docs
+    project's <code>.env.local</code>, which Blume loads for you and{" "}
+    <code>blume init</code> already listed in <code>.gitignore</code>:
+  </p>
+  <CodeBlock
+    code={`npx sanity tokens add "Blume docs" --role=viewer`}
+    lang="bash"
+  />
+  <CodeBlock
+    code={`echo "SANITY_TOKEN=paste-your-token-here" >> .env.local`}
+    lang="bash"
+  />
+  <p>
+    Run <code>npx blume dev --preview</code>. Receive delivery webhooks appears,
+    and a published guide with unpublished edits shows the draft instead.
+    Without the flag, even the dev server shows only published content. The
+    dev server serves a snapshot, so after an edit in Sanity, run{" "}
+    <code>npx blume sync --preview</code>. Keep the flag: a plain{" "}
+    <code>blume sync</code> regenerates the site from published content. To
+    re-fetch on its own, add <code>pollInterval: 30</code> (seconds) to{" "}
+    <code>sanitySource</code>. Preview and published content are cached
+    separately, so a production build never falls back to drafts.
+  </p>
+  <p>Builds follow the same flag:</p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col"></th>
+        <th scope="col"><code>blume build</code></th>
+        <th scope="col"><code>blume build --preview</code></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Sanity content</td>
+        <td>Published documents only</td>
+        <td>Drafts in place of published versions, and unpublished drafts</td>
+      </tr>
+      <tr>
+        <td>Sanity endpoint</td>
+        <td>The API CDN</td>
+        <td>The live API</td>
+      </tr>
+      <tr>
+        <td>Token</td>
+        <td>Only for a private dataset</td>
+        <td>Always</td>
+      </tr>
+      <tr>
+        <td>Markdown with <code>draft: true</code></td>
+        <td>Left out</td>
+        <td>Included</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Deploy with protected previews</h2>
+  <p>
+    Blume reads Sanity while the site builds. This guide uses Vercel, where
+    production can run the normal build and preview deployments can run the
+    preview build behind a sign-in, so editors review drafts without running
+    Blume themselves. Add a script that picks between them using Vercel's{" "}
+    <code>VERCEL_ENV</code> variable:
+  </p>
+  <CodeBlock
+    code={`{
+  "scripts": {
+    "dev": "blume dev",
+    "build": "blume build",
+    "build:vercel": "if [ \\"$VERCEL_ENV\\" = \\"preview\\" ]; then blume build --preview; else blume build; fi"
+  }
+}`}
+    lang="json"
+    title="package.json"
+  />
+  <ol>
+    <li>Push the project to a GitHub repository and import it in Vercel.</li>
+    <li>
+      Set the build command to <code>npm run build:vercel</code>, the output
+      directory to <code>dist</code>, and Node.js to 22 or later.
+    </li>
+    <li>
+      Under <strong>Environment Variables</strong>, add{" "}
+      <code>SANITY_TOKEN</code> for the Preview environment. Add it to
+      Production too only if your dataset is private.
+    </li>
+    <li>
+      Under <strong>Deployment Protection</strong>, turn on Vercel
+      Authentication with <strong>Standard Protection</strong>, which protects
+      every deployment except your production domains.
+    </li>
+  </ol>
+  <p>
+    Blume reads the token while the site builds, so it never reaches readers.
+    To give editors a review copy with a fixed address, push a branch named{" "}
+    <code>preview</code>. Vercel deploys it as a preview deployment, and its
+    branch URL stays the same from one build to the next. For other hosts,
+    the <a href="/docs/deployment#private-docs">private docs</a> section lists
+    their protection options.
+  </p>
+  <Callout type="warning">
+    A preview build is an ordinary static site. Drafts land in its pages,
+    search index, Markdown copies, and <code>llms.txt</code>, and Blume adds no
+    password or <code>noindex</code>. Deploy it only behind access protection,
+    never to your public domain.
+  </Callout>
+
+  <h2>Rebuild when an editor publishes</h2>
+  <p>
+    Production only changes when it rebuilds. In your Vercel project's
+    settings, open <strong>Git</strong>, and under{" "}
+    <strong>Deploy Hooks</strong> create a hook for your production branch.
+    Vercel gives you a URL that starts a build when it receives a{" "}
+    <code>POST</code> request. Anyone with its URL can start a build, so treat
+    it like a password.
+  </p>
+  <p>
+    In <a href="https://www.sanity.io/manage">sanity.io/manage</a>, open your
+    project, go to <strong>API</strong>, and create a webhook:
+  </p>
+  <ul>
+    <li><strong>URL</strong>: the deploy hook URL</li>
+    <li><strong>Dataset</strong>: <code>production</code></li>
+    <li><strong>Trigger on</strong>: create, update, and delete</li>
+    <li><strong>Filter</strong>: <code>_type == "guide"</code></li>
+    <li><strong>HTTP method</strong>: POST</li>
+  </ul>
+  <p>
+    Sanity's webhooks ignore drafts by default, so publishing, unpublishing,
+    or deleting a guide starts a build, and saving a draft doesn't. The site
+    keeps serving the previous deployment until the build finishes, and a
+    failed build leaves it in place.
+  </p>
+  <p>
+    A preview deployment shows drafts as they were when it built. To refresh
+    it, create a second deploy hook for the <code>preview</code> branch and
+    call it when a draft is ready for review, with{" "}
+    <code>curl -X POST "$PREVIEW_DEPLOY_HOOK"</code>. Calling it on every
+    draft save would start a build per edit, and Vercel accepts at most 60
+    hook calls an hour per project.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>A code block or callout is missing from the page</h3>
+  <p>
+    No serializer matches that block's <code>_type</code>, so Blume replaced it
+    with an <code>unsupported Portable Text block</code> comment, which renders
+    nothing. Add a serializer keyed by that exact type name, then run{" "}
+    <code>npx blume sync</code> if the dev server is running.
+  </p>
+  <h3>A Sanity page fails to build with an MDX error</h3>
+  <p>
+    An error like <code>Could not parse expression with acorn</code> means a
+    serializer returned an editor's text unescaped, and a <code>{"{"}</code>{" "}
+    or <code>&lt;</code> in it read as code. Wrap the text in{" "}
+    <code>escapeMarkdownText</code>.
+  </p>
+  <h3>Drafts don't show up with --preview</h3>
+  <p>
+    Unauthenticated requests never see drafts, so check that{" "}
+    <code>SANITY_TOKEN</code> is set where the build runs and belongs to the
+    same project. In dev, run <code>npx blume sync --preview</code> to replace
+    the cached copy.
+  </p>
+  <h3>A preview build warns that previewDrafts was renamed</h3>
+  <p>
+    The Sanity client prints this when Blume asks for the{" "}
+    <code>previewDrafts</code> perspective, which Sanity has renamed to{" "}
+    <code>drafts</code>. Sanity still accepts both, so drafts load as usual.
+  </p>
+  <h3>No Sanity pages, and a warning that SANITY_TOKEN is not set</h3>
+  <p>
+    <code>sanity()</code> raises <code>BLUME_MISSING_SECRET</code> whenever the
+    variable is unset. A public dataset's production build doesn't need it, so
+    there the warning is safe to ignore. A private dataset does: Sanity answers
+    a query without a token with an empty result rather than an error, so the
+    build succeeds with no Sanity pages and a second warning that the query
+    found no documents while the token was unset. Set the token, and redeploy,
+    since a changed variable only applies to new builds.
+  </p>
+  <h3>The build can't load the source</h3>
+  <p>
+    <code>BLUME_SOURCE_FETCH_FAILED</code> carries Sanity's own error for a
+    wrong project ID or dataset. When <code>@sanity/client</code> isn't
+    installed, the source stops before any request with{" "}
+    <code>BLUME_SOURCE_SDK_MISSING</code> instead. When a snapshot exists,
+    Blume serves it with a <code>BLUME_SOURCE_OFFLINE</code> warning instead,
+    but a fresh build machine has none, so there the build stops and your last
+    deployment stays live.
+  </p>
+  <h3>Two pages claim the same URL</h3>
+  <p>
+    <code>BLUME_DUPLICATE_ROUTE</code> means a file in <code>docs/guides/</code>{" "}
+    and a Sanity guide resolve to the same path. Keep Sanity's prefix out of
+    the docs folder, or give the source another <code>prefix</code>.
+  </p>
+</GuidePage>

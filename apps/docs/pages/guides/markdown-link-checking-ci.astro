@@ -1,0 +1,558 @@
+---
+// Catch broken Markdown links in GitHub Actions: checked against the validate
+// and audit docs and their source on main (cli/commands/validate.ts,
+// core/links.ts, core/probe.ts, extractLinks in core/sources/normalize.ts,
+// cli/commands/audit.ts, audit/checks/links.ts, audit/checks/network.ts,
+// audit/catalog.ts, audit/terms.ts), the custom anchors and redirects docs,
+// GitHub's docs on workflow commands, the schedule event, and required status
+// checks, and GitHub's Actions workshop. Ran in a scratch fixture with the
+// local CLI build: `blume validate`, `--strict`, and `--json` against the
+// good, breaking, and fixed commits (the output below is copied from it), the
+// annotation and summary scripts under `bash -e`, `blume validate --external`
+// against a 404, a 429, an unresolvable host, and a live URL, and
+// `blume audit --only` with the ids below (accepted, then "No build found").
+// validate has since learned reference-style links, autolinks, raw `<a>`
+// tags, and link labels that wrap onto a second line. validate and audit
+// have since taken a repeatable `--ignore <glob>` (cli/args.ts), run with the
+// local CLI build against a local server: matched URLs were never requested
+// and weren't reported. The workflows,
+// `blume build`, and a full `blume audit` were not run. Review: rechecked the
+// grading (core/probe.ts), the link scanner (MD_LINK and COMPONENT_HREF in
+// core/sources/normalize.ts), and the audit ids and --fail-on gate; built
+// metadata checks stay in documentation-seo-audit-ci. Not yet run end to end.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("markdown-link-checking-ci")}>
+  <p>
+    To make a pull request fail when it breaks a docs link, run{" "}
+    <code>blume validate --strict</code> in a GitHub Actions workflow on every
+    pull request, and make that check required. It reads your Markdown and
+    MDX, resolves each internal link and <code>#fragment</code> against the
+    pages and headings your site actually has, and exits non-zero on a miss.
+    Don't leave out <code>--strict</code>: a broken anchor is a warning, and
+    warnings alone don't fail the command.
+  </p>
+  <p>
+    By the end, you have a small repository whose pull request fails on a
+    renamed page and a reworded heading, with each broken link annotated on its
+    line, and passes once they're fixed. A second check reads the built HTML,
+    and a weekly job probes external URLs without blocking anyone's merge.
+  </p>
+  <p>
+    This covers docs built with Blume. If the Markdown you want checked is
+    READMEs spread across a repository rather than a docs site, a general link
+    checker such as{" "}
+    <a href="https://github.com/lycheeverse/lychee">Lychee</a> fits better,
+    because <code>blume validate</code> only reads your site's content.
+  </p>
+
+  <h2>Set up the example</h2>
+  <p>
+    The example is a three-page docs site for Acme's CLI, laid out the way{" "}
+    <code>npx blume init</code> scaffolds it, at the root of the repository:
+  </p>
+  <CodeBlock
+    code={`docs/
+  configuration.mdx
+  index.mdx
+  installation.mdx
+blume.config.ts
+package.json
+package-lock.json`}
+    lang="txt"
+  />
+  <p>Two pages link to a section of the configuration page:</p>
+  <CodeBlock
+    code={`---
+title: Acme docs
+description: Send transactional email and SMS with the Acme Messages API.
+---
+
+Start by [installing the CLI](/installation), then [create an API key](/configuration#api-keys).`}
+    lang="mdx"
+    title="docs/index.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Installation
+description: Install the Acme CLI on macOS, Linux, or Windows.
+---
+
+## Install the CLI
+
+Install the CLI with your package manager, then [set your API key](./configuration#api-keys).`}
+    lang="mdx"
+    title="docs/installation.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Configuration
+description: Configure the Acme CLI with an API key and a default region.
+---
+
+## API keys
+
+Create a key in the dashboard and export it as \`ACME_API_KEY\`.
+
+## Regions
+
+Pick the region closest to your users.`}
+    lang="mdx"
+    title="docs/configuration.mdx"
+  />
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme",
+  description: "Send transactional email and SMS with the Acme Messages API.",
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Commit this to <code>main</code>, then run the check once. It prints{" "}
+    <code>No broken links found.</code> and exits 0.
+  </p>
+  <CodeBlock code="npx blume validate --strict" lang="bash" />
+
+  <h2>Break a link and an anchor</h2>
+  <p>
+    Now make the kind of change that breaks links in real repositories. On a
+    branch, rename the installation page:
+  </p>
+  <CodeBlock
+    code={`git switch -c rename-install
+git mv docs/installation.mdx docs/install.mdx`}
+    lang="bash"
+  />
+  <p>
+    Then reword the heading the other pages link to: change{" "}
+    <code>## API keys</code> to <code>## Authentication</code> in{" "}
+    <code>docs/configuration.mdx</code>. Commit both changes and run the check
+    without <code>--strict</code>:
+  </p>
+  <CodeBlock
+    code={`git commit -am "Rename the install page and the API keys section"
+npx blume validate`}
+    lang="bash"
+  />
+  <CodeBlock
+    code={`BLUME_BROKEN_LINK Broken link to /installation: no page resolves to /installation.
+  at docs/index.mdx:6:31
+  fix: Check the path, or create the target page.
+  docs: https://useblume.dev/docs/cli/validate
+BLUME_BROKEN_ANCHOR No anchor target on /configuration matches #api-keys.
+  at docs/index.mdx:6:72
+  docs: https://useblume.dev/docs/cli/validate
+BLUME_BROKEN_ANCHOR No anchor target on /configuration matches #api-keys.
+  at docs/install.mdx:8:68
+  docs: https://useblume.dev/docs/cli/validate
+
+1 error(s), 2 warning(s)`}
+    lang="txt"
+  />
+  <p>
+    The rename left a link to a route no page serves, which is an error. The
+    new heading generates the id <code>authentication</code>, so both links to{" "}
+    <code>#api-keys</code> now land at the top of the page instead of the
+    section. That's a warning, because the page itself still loads. Each
+    finding names the file, line, and column to fix.
+  </p>
+  <p>
+    Here's why <code>--strict</code> matters. Fix only the page link and the
+    command exits 0 with two warnings. With <code>--strict</code>, warnings
+    fail it too. Info-level notes never do, like{" "}
+    <code>BLUME_ASSETS_UNCHECKED</code>, which says asset links went unchecked
+    because there's no <code>public/</code> folder.
+  </p>
+  <p>
+    A link counts as valid when it lands on a Markdown page, a custom{" "}
+    <code>.astro</code> page, the generated changelog, or the{" "}
+    <code>from</code> of a configured redirect.
+  </p>
+
+  <h2>Source checks and built-site checks</h2>
+  <p>
+    Blume has two link checkers, and they read different things.{" "}
+    <code>blume validate</code> reads your content files.{" "}
+    <code>blume audit</code> reads the HTML in <code>dist/</code> after{" "}
+    <code>blume build</code>.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col"></th>
+        <th scope="col"><code>blume validate</code></th>
+        <th scope="col"><code>blume audit</code></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Reads</td>
+        <td>Markdown and MDX source</td>
+        <td>The built site</td>
+      </tr>
+      <tr>
+        <td>Needs a build</td>
+        <td>No</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>Broken page link</td>
+        <td><code>BLUME_BROKEN_LINK</code>, error</td>
+        <td><code>BLUME_AUDIT_LINK_TO_BROKEN</code>, error</td>
+      </tr>
+      <tr>
+        <td>Broken anchor</td>
+        <td><code>BLUME_BROKEN_ANCHOR</code>, warning</td>
+        <td><code>BLUME_AUDIT_ANCHOR_BROKEN</code>, warning</td>
+      </tr>
+      <tr>
+        <td>Points you to</td>
+        <td>File, line, and column</td>
+        <td>Page URL and source file</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    <code>validate</code> checks inline links written as{" "}
+    <code>[text](target)</code>, even when a formatter wraps the label onto a
+    second line, reference-style links (<code>[text][ref]</code>), autolinks
+    (<code>&lt;https://…&gt;</code>), image embeds, a component's string{" "}
+    <code>href</code>, and lowercase HTML <code>&lt;a href&gt;</code> tags. It
+    doesn't see <code>{"href={…}"}</code> expressions or a bare URL written
+    without link syntax, and it doesn't check your navigation config either;{" "}
+    <code>blume doctor</code> does.
+  </p>
+  <p>
+    <code>audit</code> sees every <code>&lt;a href&gt;</code> the build
+    rendered, including all of those and the sidebar and header links. It
+    reports a broken navigation entry once, not once per page. The cost is a
+    build, and findings that name a page rather than a line. Run both:{" "}
+    <code>validate</code> first because it's fast and exact, then{" "}
+    <code>audit</code> as the backstop.
+  </p>
+
+  <h2>Add the pull request check</h2>
+  <p>This workflow runs on every pull request and every push to <code>main</code>:</p>
+  <CodeBlock
+    code={`name: Docs links
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  links:
+    name: Links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Check links in the source
+        run: |
+          status=0
+          npx blume validate --strict --json > links.json || status=$?
+          jq -r '
+            .diagnostics[]
+            | (if .severity == "info" then "notice" else .severity end) as $level
+            | ([ (if .file then "file=\\(.file)" else empty end),
+                 (if .line then "line=\\(.line)" else empty end),
+                 (if .column then "col=\\(.column)" else empty end),
+                 "title=\\(.code)" ] | join(",")) as $props
+            | "::\\($level) \\($props)::\\(.message)"
+          ' links.json
+          exit "$status"
+      - run: npx blume build
+      - name: Check links in the built site
+        run: npx blume audit --only link_to_broken,anchor_broken --fail-on warning`}
+    lang="yaml"
+    title=".github/workflows/docs-links.yml"
+  />
+  <p>
+    The source step saves the exit code, then uses <code>jq</code> (installed
+    on GitHub's Ubuntu runners) to turn each finding in the JSON report into an{" "}
+    <code>::error</code> or <code>::warning</code> workflow command with its
+    file, line, and column. GitHub shows those as annotations on the lines they
+    name. The step then exits with the saved code, so it still fails. On the
+    breaking commit, it prints:
+  </p>
+  <CodeBlock
+    code={`::error file=docs/index.mdx,line=6,col=31,title=BLUME_BROKEN_LINK::Broken link to /installation: no page resolves to /installation.
+::warning file=docs/index.mdx,line=6,col=72,title=BLUME_BROKEN_ANCHOR::No anchor target on /configuration matches #api-keys.
+::warning file=docs/install.mdx,line=8,col=68,title=BLUME_BROKEN_ANCHOR::No anchor target on /configuration matches #api-keys.`}
+    lang="txt"
+  />
+  <p>
+    The paths are relative to the Blume project. If your docs live in a
+    subfolder of the repository, set <code>working-directory</code> on the
+    steps and add that folder to the front of <code>file=</code>, so the
+    annotations land on the right files.
+  </p>
+  <p>
+    The audit step narrows the report to its two link checks.{" "}
+    <code>--fail-on warning</code> is what makes the anchor check fail, since
+    it's a warning like its <code>validate</code> counterpart. The rest of
+    what the audit checks, like titles, descriptions, canonicals, and the
+    sitemap, belongs to{" "}
+    <a href="/guides/documentation-seo-audit-ci">the SEO audit guide</a>. If
+    you add its workflow, its full audit already runs these two checks, so
+    drop the build and audit steps here and keep the source check. That way
+    each pull request builds the site once.
+  </p>
+  <p>
+    Push the branch and open a pull request. Once the workflow has run, add
+    the <code>Links</code> check under "Require status checks to pass before
+    merging" in your branch protection rule for <code>main</code>. The workflow
+    has no <code>paths</code> filter on purpose: a required check whose
+    workflow is skipped stays pending and blocks the merge.
+  </p>
+
+  <h2>Probe external links on a schedule</h2>
+  <p>
+    External links need the network, and their results depend on other
+    people's servers. A pull request that touched no links can fail because
+    another site is down or unreachable from the runner. So keep them out of
+    the required check and probe them on a schedule instead. Blume grades each
+    response
+    rather than treating every failure as a dead link:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Response</th>
+        <th scope="col">Severity</th>
+        <th scope="col">What it usually means</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>404 or 410</td>
+        <td>Error</td>
+        <td>The page is gone. Fix or remove the link.</td>
+      </tr>
+      <tr>
+        <td>The host name doesn't resolve</td>
+        <td>Error</td>
+        <td>The domain is gone, or the link has a typo in it.</td>
+      </tr>
+      <tr>
+        <td>Any other error status, like 401, 403, 429, or a 5xx</td>
+        <td>Warning</td>
+        <td>Rate limiting, bot protection, or an outage. Not proof of anything.</td>
+      </tr>
+      <tr>
+        <td>The connection is refused or dropped</td>
+        <td>Warning</td>
+        <td>The site is down, or the runner's network had a problem.</td>
+      </tr>
+      <tr>
+        <td>No answer within 10 seconds</td>
+        <td>Warning</td>
+        <td>A slow or overloaded server.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Blume requests each distinct URL once, eight at a time. It sends a{" "}
+    <code>HEAD</code> request and retries with <code>GET</code> when the
+    server rejects <code>HEAD</code> (405 or 501) or drops the connection, and
+    it follows redirects. This workflow runs every Monday at 06:00 UTC, and on
+    demand:
+  </p>
+  <CodeBlock
+    code={`name: External links
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  external:
+    name: External links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Probe external links
+        run: |
+          status=0
+          npx blume validate --external --json > links.json || status=$?
+          {
+            echo "| Result | Finding | Source |"
+            echo "| --- | --- | --- |"
+            jq -r '
+              .diagnostics[]
+              | select(.code == "BLUME_DEAD_LINK")
+              | (if .severity == "error" then "Broken" else "Check later" end) as $result
+              | "| \\($result) | \\(.message) | \\(.file):\\(.line) |"
+            ' links.json
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"`}
+    lang="yaml"
+    title=".github/workflows/external-links.yml"
+  />
+  <p>
+    Leave <code>--strict</code> off here. Without it, the job fails only on
+    errors, so a 429 adds a "Check later" row to the run's summary and the run
+    stays green. With it, every rate limit turns the job red, and people learn
+    to ignore it.
+  </p>
+  <p>
+    When a run fails, open each "Broken" URL yourself before you change
+    anything. A 404 in your browser is a real dead link, and so is a domain
+    that doesn't load anywhere. If one loads for you, rerun the workflow from
+    the Actions tab and fix the links that fail twice. Scheduled runs use the latest commit on your
+    default branch, and in a public repository GitHub disables them after 60
+    days without activity.
+  </p>
+  <p>
+    <code>blume audit --external</code> probes the links in the built HTML
+    with the same grading, as <code>BLUME_AUDIT_EXTERNAL_LINK_BROKEN</code>.
+    Use it instead if the scheduled job builds the site anyway.
+  </p>
+
+  <h2>Fix and rerun</h2>
+  <p>Back on the branch, fix the anchor at its source. Pin the heading's id:</p>
+  <CodeBlock
+    code={`## Authentication [#api-keys]
+
+Create a key in the dashboard and export it as \`ACME_API_KEY\`.`}
+    lang="mdx"
+    title="docs/configuration.mdx"
+  />
+  <p>
+    The <code>[#api-keys]</code> marker never renders, and the id stays{" "}
+    <code>api-keys</code> whatever the heading says next year. That fixes both
+    links at once, plus any on other sites. Pin every heading people are likely
+    to link to. See{" "}
+    <a href="/docs/content/syntax#custom-anchors">Custom anchors</a>.
+  </p>
+  <p>
+    Then point the home page at the new URL, and add a redirect so bookmarks
+    and links from outside keep working:
+  </p>
+  <CodeBlock
+    code={`Start by [installing the CLI](/install), then [create an API key](/configuration#api-keys).`}
+    lang="mdx"
+    title="docs/index.mdx"
+  />
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme",
+  description: "Send transactional email and SMS with the Acme Messages API.",
+  redirects: [{ from: "/installation", to: "/install", status: 308 }],
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    Because a redirect's <code>from</code> counts as a valid target, the
+    redirect alone would satisfy <code>validate</code>. Update your own links
+    anyway: a full <code>blume audit</code> reports internal links that go
+    through a redirect as <code>BLUME_AUDIT_LINK_TO_REDIRECT</code>. For moving
+    many URLs at once,
+    see{" "}
+    <a href="/guides/documentation-url-migration-redirects">the URL migration guide</a>.
+  </p>
+  <p>Rerun the check locally, then push:</p>
+  <CodeBlock
+    code={`npx blume validate --strict
+git commit -am "Fix links after the rename"
+git push`}
+    lang="bash"
+  />
+  <p>
+    The command prints <code>No broken links found.</code> and exits 0, the
+    new push runs the workflow again, and the pull request can merge once the
+    check passes.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>A broken anchor doesn't fail the check</h3>
+  <p>
+    Anchors are warnings in both commands. Add <code>--strict</code> to{" "}
+    <code>blume validate</code>, and <code>--fail-on warning</code> to{" "}
+    <code>blume audit</code>.
+  </p>
+  <h3>A link you know is broken isn't reported</h3>
+  <p>
+    If <code>validate</code> passes, the link is probably one of the forms it
+    doesn't read: an <code>{"href={…}"}</code> expression, or a bare URL
+    written without link syntax. The audit step after the build catches it.
+    Rewriting it as an inline link or a string <code>href</code> moves it back
+    into the fast check.
+  </p>
+  <h3>A link to a custom page is reported as broken</h3>
+  <p>
+    Blume can't list the paths a dynamic route like{" "}
+    <code>pages/compare/[tool].astro</code> serves, so <code>validate</code>{" "}
+    reports links to them as broken. Give each path its own static file, as{" "}
+    <a href="/docs/advanced/custom-pages">Custom pages</a> describes.
+  </p>
+  <h3>An example URL fails the external check</h3>
+  <p>
+    A placeholder domain like <code>api.acme.example</code>, or an internal
+    host that only resolves on your network, doesn't resolve on the runner, so{" "}
+    <code>--external</code> reports it as an error. A link to{" "}
+    <code>localhost</code> is refused, a warning that still fails the check
+    under <code>--strict</code>. Skip them with <code>--ignore</code>, which
+    takes a glob matched against the link's full URL. Repeat it once per
+    pattern, and quote each one so the shell doesn't expand it. In the
+    scheduled workflow, the probe line becomes:
+  </p>
+  <CodeBlock
+    code={`npx blume validate --external --json --ignore "https://api.acme.example/**" --ignore "http://localhost:*/**" > links.json || status=$?`}
+    lang="bash"
+  />
+  <p>
+    <code>*</code> matches within one part of the path and <code>**</code>{" "}
+    across parts, so the first pattern covers every link to that host.
+    Blume never requests a URL that matches, and it doesn't appear in the
+    report. <code>blume audit --external</code> takes the same flag. It only
+    applies to external links: internal links are always checked.
+  </p>
+  <h3>The audit step says there's no build</h3>
+  <p>
+    <code>No build found at …/dist. Run blume build first.</code> means{" "}
+    <code>blume audit</code> ran without a build next to it. Keep it in the
+    same job, after <code>npx blume build</code>.
+  </p>
+  <h3>The audit rejects the check names</h3>
+  <p>
+    Check ids use underscores: <code>link_to_broken</code>, not{" "}
+    <code>link-to-broken</code>. An unknown name fails the run and suggests the
+    closest match, so a typo can't empty the report and pass.{" "}
+    <code>npx blume audit --list-checks</code> prints every id.
+  </p>
+  <h3>The strict check fails on something that isn't a link</h3>
+  <p>
+    <code>validate</code> also reports problems it finds while reading your
+    content, like a page that fails to parse, and <code>--strict</code> fails
+    on those warnings too. Frontmatter that isn't valid YAML, such as an
+    unquoted value holding <code>: </code>, is an error on its own:{" "}
+    <code>BLUME_FRONTMATTER_INVALID</code> at the file and line. Fix them
+    where the finding points: a page that doesn't parse is a page whose links
+    weren't checked.
+  </p>
+</GuidePage>

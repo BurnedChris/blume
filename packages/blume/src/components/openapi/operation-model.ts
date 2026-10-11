@@ -2,7 +2,9 @@ import { withServerDefaults } from "../../openapi/model.ts";
 import {
   declaredExample,
   exampleValue,
+  mediaExample,
   objectProperties,
+  parameterDescription,
   resolveSchema,
   toJson,
 } from "./helpers.ts";
@@ -142,7 +144,7 @@ const modelParams = (
     const required = where === "path" ? true : param.required === true;
     const schema = resolveSchema(schemas, param.schema);
     params.push({
-      description: param.description,
+      description: parameterDescription(param, schemas),
       enum: schema.enum?.map(String),
       in: where,
       name: param.name,
@@ -171,7 +173,9 @@ const jsonContentType = (
 /**
  * Typed field inputs when the body schema is a flat object of primitives —
  * anything nested (object/array properties) falls back to the raw JSON editor,
- * where structure is easier to edit than in exploded form fields.
+ * where structure is easier to edit than in exploded form fields. A
+ * `readOnly` property gets no field: the server sets it, so a request
+ * doesn't send it, as the request body's schema table leaves it out.
  */
 const bodyFields = (
   schema: SchemaLike | undefined,
@@ -183,13 +187,13 @@ const bodyFields = (
     return undefined;
   }
   const { properties, required } = objectProperties(resolved, schemas);
-  if (properties.length === 0) {
-    return undefined;
-  }
   const defaults = isExampleObject(example) ? example : undefined;
   const fields: PlaygroundBodyField[] = [];
   for (const [name, property] of properties) {
     const propertySchema = resolveSchema(schemas, property);
+    if (property.readOnly === true || propertySchema.readOnly === true) {
+      continue;
+    }
     const type = scalarType(property, schemas);
     if (
       !(type in PRIMITIVE_TYPES) ||
@@ -202,17 +206,12 @@ const bodyFields = (
       description: propertySchema.description,
       enum: propertySchema.enum?.map(String),
       name,
-      // A `readOnly` property's `required` binds responses only: a request
-      // shouldn't send the server-generated field at all.
-      required:
-        required.has(name) &&
-        property.readOnly !== true &&
-        propertySchema.readOnly !== true,
+      required: required.has(name),
       type,
       value: inputValue(defaults?.[name]),
     });
   }
-  return fields;
+  return fields.length > 0 ? fields : undefined;
 };
 
 /**
@@ -231,9 +230,7 @@ const modelBody = (
     return undefined;
   }
   const [contentType, mediaType] = media;
-  const exampleData =
-    declaredExample(mediaType, components) ??
-    exampleValue(mediaType.schema, schemas);
+  const exampleData = mediaExample(mediaType, schemas, "request", components);
   const encoding = bodyEncoding(contentType);
   const raw = encoding === "raw";
   const body: PlaygroundBody = {
@@ -330,6 +327,50 @@ const authInput = (
   }
 };
 
+/**
+ * The playground's credential inputs for an operation's security: the first
+ * alternative only — the spec's preferred way to authorize, matching what the
+ * static samples always showed.
+ */
+export const playgroundAuth = (
+  security: OperationSecurity
+): PlaygroundAuthInput[] =>
+  (security.alternatives[0] ?? []).flatMap((resolved) => {
+    const input = authInput(resolved);
+    return input ? [input] : [];
+  });
+
+/** A response, `$ref` resolved: the media types its body comes in. */
+interface ResponseLike {
+  content?: Record<string, MediaTypeLike>;
+}
+
+/**
+ * The `Accept` header a request sends: the first JSON media type among the
+ * operation's responses, success responses first, without its parameters.
+ * A request with none reads as a browser's to frameworks like Laravel, so an
+ * unauthenticated call got a 500 from the login redirect it tried instead
+ * of the 401 the API documents. `undefined` when no response is JSON.
+ */
+export const acceptHeader = (
+  responses?: Record<string, ResponseLike>
+): string | undefined => {
+  const entries = Object.entries(responses ?? {});
+  const success = ([status]: [string, ResponseLike]): boolean =>
+    status.startsWith("2");
+  for (const [, response] of [
+    ...entries.filter(success),
+    ...entries.filter((entry) => !success(entry)),
+  ]) {
+    for (const type of Object.keys(response.content ?? {})) {
+      if (bodyEncoding(type) === "json") {
+        return (type.split(";")[0] ?? type).trim();
+      }
+    }
+  }
+  return undefined;
+};
+
 /** Derive the playground request model for one operation, at build time. */
 export const operationModel = (args: {
   method: string;
@@ -337,26 +378,31 @@ export const operationModel = (args: {
   /** Pre-merged/resolved (`mergeParameters` output). */
   parameters: ParameterLike[];
   requestBody?: { content?: Record<string, MediaTypeLike> };
+  /** The operation's responses, `$ref`s resolved: they set its `Accept`. */
+  responses?: Record<string, ResponseLike>;
   /** The operation's effective servers (`effectiveServers` output). */
   servers: ServerLike[];
   schemas: Record<string, SchemaLike>;
   /** The document's `components`, which `$ref`'d examples resolve against. */
   components?: ComponentsLike;
   security: OperationSecurity;
-}): PlaygroundModel => ({
-  // First alternative only — the spec's preferred way to authorize, matching
-  // what the static samples always showed.
-  auth: (args.security.alternatives[0] ?? []).flatMap((resolved) => {
-    const input = authInput(resolved);
-    return input ? [input] : [];
-  }),
-  authOptional: args.security.optional,
-  body: modelBody(args.requestBody, args.schemas, args.components),
-  method: args.method.toUpperCase(),
-  params: modelParams(args.parameters, args.schemas, args.components),
-  path: args.path,
-  // Variables resolve to their defaults: the samples and Send need a real URL.
-  servers: args.servers.map((server) =>
-    withServerDefaults(server.url ?? "", server.variables)
-  ),
-});
+}): PlaygroundModel => {
+  const model: PlaygroundModel = {
+    auth: playgroundAuth(args.security),
+    authOptional: args.security.optional,
+    body: modelBody(args.requestBody, args.schemas, args.components),
+    method: args.method.toUpperCase(),
+    params: modelParams(args.parameters, args.schemas, args.components),
+    path: args.path,
+    // Variables resolve to their defaults: the samples and Send need a real
+    // URL.
+    servers: args.servers.map((server) =>
+      withServerDefaults(server.url ?? "", server.variables)
+    ),
+  };
+  const accept = acceptHeader(args.responses);
+  if (accept) {
+    model.accept = accept;
+  }
+  return model;
+};

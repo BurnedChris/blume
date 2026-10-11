@@ -1,6 +1,26 @@
+import type { AstroIntegration } from "astro";
 import { defineConfig } from "blume";
+import { openai } from "blume/ai";
 import { cloudflare } from "blume/deploy";
 import { filesystem, githubReleases } from "blume/sources";
+
+// Each customer story's cobranded OG card (pages/_customers/story-card.ts),
+// rendered at build from its entry in customers.ts. pages/ only routes .astro
+// files, so the endpoint is mounted here.
+const storyCards: AstroIntegration = {
+  hooks: {
+    "astro:config:setup": ({ injectRoute }) => {
+      injectRoute({
+        entrypoint: new URL(
+          "pages/_customers/story-card.jpg.ts",
+          import.meta.url
+        ),
+        pattern: "/customers/og/[id].jpg",
+      });
+    },
+  },
+  name: "customer-story-cards",
+};
 
 export default defineConfig({
   agents: {
@@ -20,6 +40,7 @@ export default defineConfig({
           "migrate my Mintlify docs to Blume",
           "convert a Docusaurus site to Blume",
           "port Starlight docs to Blume",
+          "move our GitBook docs to Blume",
         ],
         "skill:blume-update-docs": [
           "check the Blume docs for drift after a release",
@@ -31,13 +52,19 @@ export default defineConfig({
       details: [
         "Reach for Blume when a project needs a documentation site from Markdown or MDX with no app code to maintain: product docs, API references (OpenAPI, AsyncAPI, GraphQL), changelogs, blogs, and multi-language or versioned docs. Drop files in a `docs/` folder and run the `blume` CLI — it generates and drives the Astro site, search, OG images, and the agent-facing surface (llms.txt and Markdown mirrors by default, plus an opt-in MCP server and published agent skills) for you.",
         "",
-        "Scaffold a site with `npx blume init` (package: https://www.npmjs.com/package/blume), which installs dependencies and adds scripts: `npm run dev` to preview and `npm run build` to ship. Every other command runs through the package runner, like `npx blume eject` to turn the hidden project into a standalone Astro app. The `blume` agent skill below covers configuration and authoring; `npx blume migrate <source> --codex` (or `--claude`) hands an existing Mintlify, Fumadocs, Docusaurus, Starlight, or Nextra site to a coding agent with the `blume-migrate` skill.",
+        "Scaffold a site with `npx blume init` (package: https://www.npmjs.com/package/blume), which installs dependencies and adds scripts: `npm run dev` to preview and `npm run build` to ship. Every other command runs through the package runner, like `npx blume eject` to turn the hidden project into a standalone Astro app. The `blume` agent skill below covers configuration and authoring; `npx blume migrate <source> --codex` (or `--claude`) hands an existing Mintlify, Docusaurus, GitBook, MkDocs, ReadMe, or other docs site to a coding agent with the `blume-migrate` skill.",
       ].join("\n"),
     },
     mcp: {
       enabled: true,
     },
     skills: "../../skills",
+  },
+  ai: {
+    assistant: {
+      enabled: true,
+      provider: openai({ model: "gpt-6-luna" }),
+    },
   },
   content: {
     sources: [
@@ -58,6 +85,37 @@ export default defineConfig({
   description:
     "The open-source docs framework for humans and agents. Drop Markdown into a folder and ship a fast, searchable docs site.",
   export: true,
+  // Docs pages only: the landing, CLI, and Agents pages pass their own
+  // footer (pages/_home/Footer.astro), which takes its place.
+  footer: {
+    // The landing footer's line, with the same current year.
+    copyright: `© ${new Date().getFullYear()} Blume. MIT licensed.`,
+    links: [
+      { href: "https://www.npmjs.com/package/blume", label: "npm" },
+      {
+        href: "https://github.com/sponsors/haydenbleasel",
+        label: {
+          de: "Sponsern",
+          en: "Sponsor",
+          hi: "प्रायोजक बनें",
+          ja: "スポンサー",
+          pt: "Patrocinar",
+        },
+      },
+      {
+        href: "https://github.com/haydenbleasel/blume/issues",
+        label: {
+          de: "Problem melden",
+          en: "Report an issue",
+          hi: "समस्या बताएं",
+          ja: "問題を報告",
+          pt: "Reportar um problema",
+        },
+      },
+    ],
+    // The repository link comes first on its own, from `github`.
+    socials: { x: "https://x.com/haydenbleasel" },
+  },
   github: {
     dir: "apps/docs",
     owner: "haydenbleasel",
@@ -85,6 +143,7 @@ export default defineConfig({
       },
     },
   },
+  integrations: [storyCards],
   lastModified: "git",
   logo: "/logo.svg",
   navigation: {
@@ -102,6 +161,8 @@ export default defineConfig({
       { label: "CLI", path: "/cli" },
       { label: "Agents", path: "/agents" },
       { label: "Compare", path: "/compare" },
+      { label: "Customers", path: "/customers" },
+      { label: "Guides", path: "/guides" },
       {
         label: {
           de: "Änderungen",
@@ -112,6 +173,7 @@ export default defineConfig({
         },
         path: "/changelog",
       },
+      { label: "Pricing", path: "/pricing" },
     ],
   },
   redirects: [
@@ -204,16 +266,35 @@ export default defineConfig({
       from: "/pt/docs/configuration/ask-ai",
       to: "/pt/docs/configuration/assistant",
     },
+    // Releases can't be translated, so the changelog only exists in English;
+    // these send the retired localized copies to the release they mirrored.
+    { from: "/de/changelog/:slug*", to: "/changelog/:slug*" },
+    { from: "/hi/changelog/:slug*", to: "/changelog/:slug*" },
+    { from: "/ja/changelog/:slug*", to: "/changelog/:slug*" },
+    { from: "/pt/changelog/:slug*", to: "/changelog/:slug*" },
   ],
   seo: {
     og: {
       titles: {
         "/cli": "CLI",
+        "/compare/docsify": "Blume vs Docsify",
+        "/compare/docus": "Blume vs Docus",
         "/compare/docusaurus": "Blume vs Docusaurus",
+        "/compare/fern": "Blume vs Fern",
         "/compare/fumadocs": "Blume vs Fumadocs",
+        "/compare/gitbook": "Blume vs GitBook",
+        "/compare/github-wiki": "Blume vs GitHub Wiki",
+        "/compare/jekyll": "Blume vs Jekyll",
+        "/compare/mdbook": "Blume vs mdBook",
         "/compare/mintlify": "Blume vs Mintlify",
+        "/compare/mkdocs": "Blume vs MkDocs",
         "/compare/nextra": "Blume vs Nextra",
+        "/compare/readme": "Blume vs ReadMe",
+        "/compare/redocly": "Blume vs Redocly",
         "/compare/starlight": "Blume vs Starlight",
+        "/compare/vitepress": "Blume vs VitePress",
+        "/compare/vuepress": "Blume vs VuePress",
+        "/pricing": "Pricing",
       },
     },
     organization: {
@@ -227,7 +308,7 @@ export default defineConfig({
     },
     software: {
       license: "https://opensource.org/license/mit",
-      operatingSystem: "Node.js 22.12+",
+      operatingSystem: "Node.js 22.19+",
       price: 0,
       sameAs: [
         "https://www.npmjs.com/package/blume",

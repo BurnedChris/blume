@@ -1,0 +1,476 @@
+---
+// Static or server-rendered documentation: checked against the deployment,
+// assistant, search, MCP, JSON API, Markdown, rate-limiting, and OpenAPI docs,
+// and against the source on main: core/server-features.ts (the list of
+// features that need server output), cli/prepare.ts and cli/commands/doctor.ts
+// (BLUME_SERVER_FEATURE_REQUIRED), cli/commands/build.ts (the summary box),
+// cli/commands/preview.ts, deploy/platforms/*, ai/mcp/server.ts, and the ask
+// route template (astro/templates.ts, ai/ask.ts). Ran the built CLI's
+// `blume doctor` on scratch copies of both configs below, on the server config
+// with the assistant and MCP moved to a static build (the error), and on a
+// Mixedbread plus playground-proxy config. Did not run `blume build`,
+// `blume preview`, or the curl checks. Not yet run end to end.
+import CodeBlock from "blume/components/content/CodeBlock.astro";
+import GuidePage from "../_guides/GuidePage.astro";
+import { guideById } from "../_guides/guides.ts";
+---
+
+<GuidePage guide={guideById("static-vs-server-documentation")}>
+  <p>
+    Most of a docs site never needs a backend. Pages, navigation, local search,
+    <code>llms.txt</code>, Markdown copies, redirects, and social cards are
+    files a build writes once and any static host serves. In Blume, four
+    features need a live endpoint on your own site: the built-in assistant, the
+    MCP server, the API playground's built-in proxy, and Mixedbread semantic
+    search. If you don't need any of them, the static build Blume makes by
+    default covers you.
+  </p>
+  <p>
+    This guide maps common requirements to static files or live endpoints, then
+    builds the same Acme docs twice, once static and once as a Node server,
+    with a checklist that shows what each build shipped. It ends with what you
+    take on when you run a server.
+  </p>
+  <p>
+    Server output adds endpoints, not dynamic pages: Blume prerenders every
+    docs page in both modes, and it has no sign-in of its own. If you need
+    pages that change per reader, such as content gated by a customer's plan,
+    that's an application, and Blume isn't the right tool for it.
+  </p>
+
+  <h2>Which features need a server</h2>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Requirement</th>
+        <th scope="col">Static build</th>
+        <th scope="col">Server output</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>
+          Pages, OG images, <code>llms.txt</code>, <code>.md</code> copies, the
+          JSON page index
+        </td>
+        <td>Files</td>
+        <td>Still prerendered files</td>
+      </tr>
+      <tr>
+        <td>Local search: Orama (default), FlexSearch, Pagefind</td>
+        <td>An index file the browser searches</td>
+        <td>Same</td>
+      </tr>
+      <tr>
+        <td>Hosted search: Algolia, Orama Cloud, Typesense</td>
+        <td>The browser queries the service with a public key</td>
+        <td>Same</td>
+      </tr>
+      <tr>
+        <td>Semantic search: Mixedbread</td>
+        <td>Not available</td>
+        <td><code>/api/search</code> holds the key</td>
+      </tr>
+      <tr>
+        <td>The assistant, built in</td>
+        <td>Not available</td>
+        <td><code>POST /api/ask</code> calls your model</td>
+      </tr>
+      <tr>
+        <td>The assistant, on your own backend</td>
+        <td>The chat panel posts to your <code>endpoint</code></td>
+        <td>Not needed</td>
+      </tr>
+      <tr>
+        <td><a href="/docs/discoverability/mcp">MCP server</a></td>
+        <td>Not available</td>
+        <td><code>/mcp</code></td>
+      </tr>
+      <tr>
+        <td>JSON API search</td>
+        <td>Not available</td>
+        <td><code>/api/docs/search</code></td>
+      </tr>
+      <tr>
+        <td>API playground, direct or through your own proxy URL</td>
+        <td>The browser calls your API or proxy</td>
+        <td>Same</td>
+      </tr>
+      <tr>
+        <td>API playground with <code>proxy: true</code></td>
+        <td>Not available</td>
+        <td><code>/_api-proxy</code> relays requests</td>
+      </tr>
+      <tr>
+        <td>Markdown at a page's own URL (<code>Accept: text/markdown</code>)</td>
+        <td>Agents fetch the <code>.md</code> URL instead</td>
+        <td>On Vercel and Cloudflare server builds</td>
+      </tr>
+      <tr>
+        <td>Redirects</td>
+        <td>
+          Redirect pages, plus <code>_redirects</code> or{" "}
+          <code>vercel.json</code> for hosts that read them
+        </td>
+        <td>Answered per request with your status code</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    PDF and EPUB export, narration, analytics, and page feedback need no
+    endpoint on your site: they run in the reader's browser, or, for generated
+    narration voices, at build time. They work on either build. Four
+    distinctions in that
+    table trip people up:
+  </p>
+  <ul>
+    <li>
+      <strong>Local and hosted search both stay static.</strong> Hosted search
+      moves the backend to the provider, or to your own Typesense cluster, and{" "}
+      <code>blume build</code> syncs the index with an admin key from the
+      environment. Only Mixedbread proxies queries through your site, because
+      its key can't go to the browser.
+    </li>
+    <li>
+      <strong>MCP needs a server, reading pages doesn't.</strong> Agents can
+      read <code>llms.txt</code>, <code>.md</code> copies, and{" "}
+      <code>/api/docs/pages.json</code> from any static host. The MCP endpoint
+      and the JSON API's search have to answer requests.
+    </li>
+    <li>
+      <strong>The assistant has two shapes.</strong> The built-in one is a route
+      on your site that holds your model key. With <code>endpoint</code>, the
+      panel talks to a backend you run, and the docs stay static.
+    </li>
+    <li>
+      <strong>The playground proxy is optional.</strong> Requests from the Try
+      it panel go straight from the browser to your API, which has to allow the docs origin
+      with CORS. Only <code>proxy: true</code> adds a server route. See{" "}
+      <a href="/guides/api-documentation-cors-errors">Fix CORS errors in an API
+      documentation playground</a> for that choice.
+    </li>
+  </ul>
+
+  <h2>Build the same docs both ways</h2>
+  <p>
+    Scaffold a project, then replace the pages in <code>docs/</code> with these
+    two:
+  </p>
+  <CodeBlock
+    code={`npx blume init acme-docs --yes
+cd acme-docs`}
+    lang="bash"
+  />
+  <CodeBlock
+    code={`---
+title: Acme docs
+description: Send transactional email and SMS with the Acme Messages API.
+---
+
+Acme sends transactional email and SMS through one API. Start with the
+[quickstart](/quickstart).`}
+    lang="mdx"
+    title="docs/index.mdx"
+  />
+  <CodeBlock
+    code={`---
+title: Quickstart
+description: Send your first message with the Acme Messages API.
+---
+
+Create an API key in the Acme dashboard, then send a message with
+POST /messages. Each message returns an ID you can look up later.`}
+    lang="mdx"
+    title="docs/quickstart.mdx"
+  />
+
+  <h3>The static build</h3>
+  <p>
+    The plain <code>deployment</code> object sets the site URL and keeps the
+    build static. The assistant points at a backend you run, so this build has
+    no server route:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+
+export default defineConfig({
+  title: "Acme",
+  deployment: { site: "https://docs.acme.example" },
+  ai: {
+    assistant: {
+      enabled: true,
+      endpoint: "https://api.acme.example/v1/docs/ask",
+    },
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>Build it and serve the result the way a static host would:</p>
+  <CodeBlock
+    code={`npx blume build
+npx blume preview`}
+    lang="bash"
+  />
+
+  <h3>The server build</h3>
+  <p>
+    Naming a{" "}
+    <a href="/docs/deployment#server-rendering">host adapter</a> switches the
+    build to server output. This one turns on the built-in assistant and the
+    MCP server, and uses <code>node()</code>, which ships with Blume, so
+    there's nothing to install:
+  </p>
+  <CodeBlock
+    code={`import { defineConfig } from "blume";
+import { node } from "blume/deploy";
+
+export default defineConfig({
+  title: "Acme",
+  deployment: node({ site: "https://docs.acme.example" }),
+  ai: {
+    assistant: { enabled: true },
+  },
+  agents: {
+    mcp: { enabled: true },
+  },
+});`}
+    lang="ts"
+    title="blume.config.ts"
+  />
+  <p>
+    With no <code>provider</code>, the assistant answers through the Vercel AI
+    Gateway and reads its key from <code>AI_GATEWAY_API_KEY</code>. Build, then
+    start the server:
+  </p>
+  <CodeBlock
+    code={`npx blume build
+node dist/server/entry.mjs`}
+    lang="bash"
+  />
+  <p>
+    It listens on <code>localhost:4321</code>. <code>npx blume preview</code>{" "}
+    serves the same build.
+  </p>
+
+  <h2>Check what each build shipped</h2>
+  <p>Run these checks against each build in turn.</p>
+  <ol>
+    <li>
+      <strong>Read the build summary.</strong> <code>blume build</code> ends
+      with a summary box. The static build reports <code>Output</code> as{" "}
+      <code>static</code> and <code>Server features</code> as{" "}
+      <code>none</code>. The server build reports <code>server</code>, adapter{" "}
+      <code>node</code>, and <code>Assistant, MCP server</code>. An assistant
+      with an <code>endpoint</code> isn't a server feature, so it isn't listed.
+    </li>
+    <li>
+      <strong>Ask <code>blume doctor</code>.</strong> Without building, it
+      prints the same output and adapter, plus an <code>Assistant</code> line:{" "}
+      <code>external endpoint</code> for the static config and{" "}
+      <code>gateway</code> for the server one. On the server config, it warns
+      with <code>BLUME_MISSING_SECRET</code> until{" "}
+      <code>AI_GATEWAY_API_KEY</code> is set.
+    </li>
+    <li>
+      <strong>Fetch the files both builds serve.</strong> Every line should
+      start with <code>200</code>:
+    </li>
+  </ol>
+  <CodeBlock
+    code={`for route in / /quickstart /quickstart.md /llms.txt /blume-search.json /api/docs/pages.json; do
+  printf '%s %s\\n' "$(curl -sL -o /dev/null -w '%{http_code}' "http://localhost:4321$route")" "$route"
+done`}
+    lang="bash"
+  />
+  <p>
+    On the server build, call the three endpoints the static build doesn't
+    have. The MCP server lists its tools (<code>search_docs</code>,{" "}
+    <code>get_page</code>, <code>list_pages</code>, and{" "}
+    <code>get_navigation</code>), and the JSON API's search returns matching
+    pages:
+  </p>
+  <CodeBlock
+    code={`curl -s http://localhost:4321/mcp \\
+  -H "content-type: application/json" \\
+  -H "accept: application/json, text/event-stream" \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+curl -s "http://localhost:4321/api/docs/search?q=quickstart"`}
+    lang="bash"
+  />
+  <p>Then ask the assistant a question:</p>
+  <CodeBlock
+    code={`curl -s -i http://localhost:4321/api/ask \\
+  -H "content-type: application/json" \\
+  -d '{"messages":[{"role":"user","content":"How do I send an SMS?"}]}'`}
+    lang="bash"
+  />
+  <p>
+    If the server started without the key, the route answers <code>503</code>{" "}
+    with <code>The assistant is not configured: set AI_GATEWAY_API_KEY</code>,
+    which still proves the route exists. Start the server with the key in its
+    environment and the answer streams back as plain text.
+  </p>
+  <p>
+    On the static build, open the assistant on any page and ask a question. The
+    browser's network panel shows a <code>POST</code> to{" "}
+    <code>https://api.acme.example/v1/docs/ask</code>. It fails here, because
+    that host doesn't exist. With your real backend, that's the request to
+    test.
+  </p>
+
+  <h2>Keep the docs static with an external assistant</h2>
+  <p>
+    If you want the assistant but not a server on the docs host,{" "}
+    <a href="/docs/configuration/assistant#external-endpoint"
+      ><code>endpoint</code></a
+    > is the middle path. The panel sends the conversation
+    and the reader's page:
+  </p>
+  <CodeBlock
+    code={`{
+  "messages": [{ "role": "user", "content": "How do I send an SMS?" }],
+  "page": { "path": "/quickstart" }
+}`}
+    lang="json"
+  />
+  <p>
+    Your backend answers with a plain UTF-8 text stream. On another origin, it
+    also handles CORS: accept <code>OPTIONS</code> and <code>POST</code>, allow
+    the <code>content-type</code> request header, and send the CORS headers on
+    both the preflight and the stream. A root-relative path works as the{" "}
+    <code>endpoint</code> too, for a backend served on the docs origin.
+  </p>
+  <p>
+    Everything the built-in route did becomes that backend's job: retrieval
+    from your docs, authentication, rate limiting, model access, and citations.
+    If you set a bot check with <code>captcha</code>, the panel still runs it
+    and sends the token as <code>captcha</code> in the body for your backend
+    to verify. For the built-in version, see{" "}
+    <a href="/guides/ai-assistant-for-documentation">Add an AI assistant that
+    answers from your documentation</a>.
+  </p>
+
+  <h2>What you run in each mode</h2>
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Responsibility</th>
+        <th scope="col">Static build</th>
+        <th scope="col">Server build</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <th scope="row">What you deploy</th>
+        <td>The <code>dist/</code> folder</td>
+        <td>
+          On Node, the project with its installed dependencies; on Vercel,
+          Netlify, or Cloudflare, the platform's functions or Worker
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">Where it runs</th>
+        <td>Any static host, bucket, or CDN</td>
+        <td>Vercel, Netlify, Cloudflare, or a Node process you keep running</td>
+      </tr>
+      <tr>
+        <th scope="row">Secrets per request</th>
+        <td>None</td>
+        <td>The assistant's model key, <code>MIXEDBREAD_API_KEY</code></td>
+      </tr>
+      <tr>
+        <th scope="row">Abuse control</th>
+        <td>Nothing to limit</td>
+        <td>
+          <a href="/docs/configuration/rate-limiting">Rate limiting</a>, on by
+          default; a shared store for exact limits on
+          serverless hosts; <code>allowedDomains</code> for a Node server
+          behind a proxy; a bot check for the assistant
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">Page requests</th>
+        <td>Served as files</td>
+        <td>Still served as prerendered files</td>
+      </tr>
+      <tr>
+        <th scope="row">Local preview</th>
+        <td><code>blume preview</code></td>
+        <td>
+          <code>blume preview</code> for <code>node()</code> and{" "}
+          <code>cloudflare()</code>; <code>blume dev</code> or a platform preview
+          deploy for <code>vercel()</code> and <code>netlify()</code>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Some things don't change. Build-time secrets, like a content source's token
+    or a hosted search admin key, are read where the site builds in both modes.
+    Private docs rely on your host's access protection either way. To deploy
+    the server build, see{" "}
+    <a href="/guides/self-host-documentation-docker">Docker and Node.js</a> or{" "}
+    <a href="/guides/cloudflare-workers-documentation">Cloudflare Workers</a>;
+    for the static one,{" "}
+    <a href="/guides/s3-cloudfront-documentation-site">S3 and CloudFront</a> or{" "}
+    <a href="/guides/markdown-docs-github-pages">GitHub Pages</a>. For what
+    each mode costs, see <a href="/pricing">pricing</a>, and{" "}
+    <a href="/customers/specific">Specific's story</a> shows one team running
+    the Node server with MCP on and one secret for the assistant.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <h3>The build fails with BLUME_SERVER_FEATURE_REQUIRED</h3>
+  <p>
+    A static build has a feature that needs a server, and the message names
+    each one, such as <code>Assistant, MCP server require server output</code>.
+    Name a host adapter from <code>blume/deploy</code>, or, if you already did,
+    drop its <code>output: "static"</code>. To stay static instead, give the
+    assistant an <code>endpoint</code>, give the playground a proxy URL of your
+    own, or pick a client-side search adapter. The MCP server has no static
+    form; agents can read <code>llms.txt</code> and the <code>.md</code> copies
+    instead.
+  </p>
+  <h3>blume preview stops after a Vercel or Netlify server build</h3>
+  <p>
+    Those adapters have no local preview server. Try the site with{" "}
+    <code>blume dev</code>, or deploy a preview with <code>vercel deploy</code>{" "}
+    or <code>netlify deploy</code>.
+  </p>
+  <h3>The assistant answers 503</h3>
+  <p>
+    The server can't see the model key, and the message names the variable it
+    reads. <code>.env.local</code> covers <code>blume dev</code>; set the
+    variable in the server's own environment, or your host's settings, for the
+    deployed site.
+  </p>
+  <h3>The Node server isn't reachable from other machines</h3>
+  <p>
+    It binds to <code>localhost:4321</code>. Set <code>HOST</code> and{" "}
+    <code>PORT</code> when you start it, as in{" "}
+    <code>HOST=0.0.0.0 PORT=8080 node dist/server/entry.mjs</code>. The server
+    also resolves its packages through your project's{" "}
+    <code>node_modules</code>, so deploy the installed project, not{" "}
+    <code>dist/</code> alone.
+  </p>
+  <h3>Redirects land on a page instead of a real redirect</h3>
+  <p>
+    A static build writes redirect pages plus the file your host reads. A
+    Git-connected Vercel project never reads the <code>vercel.json</code> in{" "}
+    <code>dist/</code>: copy its <code>redirects</code> into the{" "}
+    <code>vercel.json</code> at your project root, or use a{" "}
+    <code>vercel()</code> server build. On Netlify, name the host with{" "}
+    <code>netlify({"{ output: \"static\" }"})</code> so the rules are forced.
+  </p>
+  <h3>Agents get HTML at a page's URL</h3>
+  <p>
+    Content negotiation on <code>Accept: text/markdown</code> works in{" "}
+    <code>blume dev</code> and on Vercel and Cloudflare server builds. Other
+    deployments serve prerendered pages with no request-time hook, so agents
+    there fetch the <code>.md</code> URL. See{" "}
+    <a href="/guides/html-markdown-content-negotiation">Serve HTML and
+    Markdown from the same documentation URL</a>.
+  </p>
+</GuidePage>

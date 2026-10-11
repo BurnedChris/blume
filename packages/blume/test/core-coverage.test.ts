@@ -264,15 +264,15 @@ describe("config schema validators", () => {
     ).toContainEqual(["search", "provider", "options", "appId"]);
   });
 
-  it("requires a baseUrl for the openaiCompatible assistant adapter", () => {
+  it("requires the openai assistant adapter's baseUrl to be a URL", () => {
     const result = blumeConfigSchema.safeParse({
       ai: {
         assistant: {
           enabled: true,
           provider: {
-            kind: "openai-compatible",
-            options: { apiKeyEnv: "K", model: "m" },
-            requiredSecrets: ["K"],
+            kind: "openai",
+            options: { baseUrl: "gw.example", model: "m" },
+            requiredSecrets: ["OPENAI_API_KEY"],
             runtimeDeps: ["@ai-sdk/openai-compatible"],
           },
         },
