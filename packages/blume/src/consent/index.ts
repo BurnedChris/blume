@@ -1,6 +1,6 @@
 /** Consent providers share one c15t script runtime. */
 export { c15t } from "./c15t.ts";
-// c15t v3's mode factories, so `mode: hosted({ url })` reads as in c15t/astro.
+// c15t v3's mode factories, so `mode: hosted({ backendURL })` reads as in c15t/astro.
 export { hosted, manifest, offline } from "@c15t/astro";
 export type { C15tOptions, C15tAdapter, ConsentClientOptions } from "./c15t.ts";
 export type { AdapterDescriptor, JsonValue } from "../core/adapter.ts";

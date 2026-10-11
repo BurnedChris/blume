@@ -1,26 +1,14 @@
-import { createRequire } from "node:module";
-
 import { c15t as astroConsent } from "@c15t/astro";
 import type { C15tAstroOptions, Theme } from "@c15t/astro";
 import type { AstroIntegration } from "astro";
 
 import { analyticsClientModule } from "../analytics/c15t.ts";
 import type { AnalyticsAdapter } from "../analytics/schema.ts";
-import { nodeRequire } from "../core/node-require.ts";
 import { findConsentFile } from "../core/project.ts";
 import type { ConsentAdapter } from "./schema.ts";
 
 const ENTRY = "virtual:blume/consent-client";
 
-/**
- * The preference dialog's stylesheet, as a path Vite can load from any site.
- * `@c15t/ui` is c15t's dependency rather than Blume's, so it resolves from
- * `@c15t/astro`; a bare specifier would miss under an isolated linker.
- */
-const dialogStylesheet = (): string =>
-  createRequire(nodeRequire.resolve("@c15t/astro")).resolve(
-    "@c15t/ui/styles/dialog.css"
-  );
 /**
  * c15t's tokens drawn from Blume's own, so the banner and dialog share the
  * site's palette, corners, overlay and fonts. The `--blume-*` variables flip
@@ -81,10 +69,6 @@ export const blumeConsentIntegrations = (input: {
   const { consent } = input;
   const configured = consent.kind === "c15t" ? consent.options : undefined;
   const options: C15tAstroOptions = {
-    // A manifest site bundles its policy at build time, so the init route
-    // answers without waiting on the backend. `buildManifest: false` fetches
-    // it at runtime instead, for policy edits that must skip a rebuild.
-    buildManifest: configured?.mode?.type === "manifest",
     consentCategories: [
       "necessary",
       "functionality",
@@ -99,8 +83,8 @@ export const blumeConsentIntegrations = (input: {
     clientEntrypoint: ENTRY,
     // Blume's theme toggle owns `c15t-dark` (ConsentHead and the runtime).
     // c15t's "system" would re-add it on an OS change while the reader has
-    // pinned the site light; "light" leaves the class alone.
-    colorScheme: "light",
+    // pinned the site light; "none" leaves the class to the site.
+    colorScheme: "none",
     // Without geo/backend data, explicitly ask everywhere.
     mode:
       configured?.mode?.type === "hosted" ||
@@ -142,7 +126,6 @@ export const blumeConsentIntegrations = (input: {
     {
       hooks: {
         "astro:config:setup": ({ injectScript }) => {
-          // Must precede c15t's own `page-ssr` stylesheet; see c15t.css.
           injectScript("page-ssr", 'import "blume/consent/c15t.css";');
         },
       },
@@ -179,16 +162,6 @@ export default { ...extension, pageviews: [...pageviews, ...(extension.pageviews
               ],
             },
           });
-          // c15t's React and Svelte dialog islands import this stylesheet on
-          // their lazy chunk, but Astro 7 drops CSS reached only through a
-          // page script's dynamic import, so the dialog would open unstyled.
-          // c15t already carries it page-wide for its Vue islands.
-          if (options.styles !== false) {
-            injectScript(
-              "page-ssr",
-              `import ${JSON.stringify(dialogStylesheet())};`
-            );
-          }
           injectScript(
             "page",
             `import { startConsentRuntime } from "blume/consent/runtime"; import extension from "virtual:blume/consent-client"; startConsentRuntime(extension.scripts, extension.pageviews);`

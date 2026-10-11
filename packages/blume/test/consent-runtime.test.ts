@@ -173,8 +173,7 @@ it("connects preferences, theme, language and pageviews to one live c15t client 
     ],
     ["segment"]
   );
-  // `dark` keeps c15t's React dialog, which mirrors it, on the site theme.
-  expect([...classes].toSorted()).toEqual(["c15t-dark", "dark"]);
+  expect([...classes]).toEqual(["c15t-dark"]);
   expect(language).toHaveBeenCalledWith("de");
   expect(changes).toHaveBeenCalledTimes(1);
   kernel.set.externalPermissions({ measurement: true });
@@ -195,10 +194,10 @@ it("connects preferences, theme, language and pageviews to one live c15t client 
   root.lang = "";
   presentationChanged();
   expect(classes.size).toBe(0);
-  // c15t clears the class on a ClientRouter swap; Blume puts the theme back.
+  // A ClientRouter swap replaces `<html>`'s classes; Blume puts the theme back.
   root.dataset.theme = "dark";
   document.dispatchEvent(new Event("astro:after-swap"));
-  expect([...classes].toSorted()).toEqual(["c15t-dark", "dark"]);
+  expect([...classes]).toEqual(["c15t-dark"]);
   stop();
   const toggles = toggle.mock.calls.length;
   document.dispatchEvent(new Event("astro:after-swap"));

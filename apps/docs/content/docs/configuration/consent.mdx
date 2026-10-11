@@ -20,7 +20,7 @@ export default defineConsent({
 
 On its own, `consent.ts` runs c15t in offline mode with an opt-in policy everywhere. Choices are stored in the reader's browser, with no server-side record and no central policy. That suits trying things out; before production, decide whether you need a backend.
 
-To use one, set `consent` with c15t's `hosted()` mode, pointing at an [Inth](https://inth.com) project or a self-hosted c15t backend. Configure its policy rules and allowed origins for your site. `consent.ts` stays as it is.
+To use one, set `consent` with c15t's `hosted()` mode and the URL of an [Inth](https://inth.com) project or a self-hosted c15t backend. Configure its policy rules and allowed origins for your site. `consent.ts` stays as it is.
 
 ```ts blume.config.ts
 import { defineConfig } from "blume";
@@ -28,10 +28,13 @@ import { c15t, hosted } from "blume/consent";
 
 export default defineConfig({
   consent: c15t({
-    mode: hosted({ url: "https://consent.example.com" }),
+    backendURL: "https://consent.example.com",
+    mode: hosted(),
   }),
 });
 ```
+
+To keep the URL out of the config, leave `backendURL` out and set `PUBLIC_C15T_BACKEND_URL` (or `PUBLIC_INTH_PROJECT_URL`) in your project's `.env` instead.
 
 `blume/consent` also exports `offline()`, and `offline({ policyRules })` keeps the offline mode with your own rules.
 
@@ -46,7 +49,8 @@ import { vercel } from "blume/deploy";
 
 export default defineConfig({
   consent: c15t({
-    mode: manifest({ backendURL: "https://consent.example.com" }),
+    backendURL: "https://consent.example.com",
+    mode: manifest(),
   }),
   deployment: vercel(),
 });
@@ -55,9 +59,9 @@ export default defineConfig({
 Blume downloads the backend's policy when it builds and bundles it into the server, so the banner doesn't wait on a request to the backend. Readers' choices still go to the backend. Because the policy is fixed at build time:
 
 - Rebuild after changing policies, translations, or vendors in the backend.
-- The build fails if it can't reach the backend, and `blume dev` downloads the policy when it starts.
+- The build fails if it can't reach the backend. `blume dev` downloads the policy when it starts and only warns if it can't.
 
-To pick up policy changes without a rebuild, set `buildManifest: false` on `c15t()`. The server then downloads the policy when it first needs it and caches it. A static site can't use `manifest()`; use `hosted()` there.
+To pick up policy changes without a rebuild, use `manifest({ source: "runtime" })`. The server then downloads the policy when it first needs it and caches it. To let a build finish when the backend is unreachable, set `onBuildError: "runtime"` on `c15t()`, or `C15T_ON_BUILD_ERROR=runtime` for one build; the server then downloads the policy at runtime instead. A static site can't use `manifest()`; use `hosted()` there.
 
 ## Customize the banner
 

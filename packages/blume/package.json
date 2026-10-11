@@ -275,6 +275,10 @@
       "types": "./dist/types/integrations/vercel-analytics.d.ts",
       "default": "./src/integrations/vercel-analytics.ts"
     },
+    "./integrations/vercel-speed-insights": {
+      "types": "./dist/types/integrations/vercel-speed-insights.d.ts",
+      "default": "./src/integrations/vercel-speed-insights.ts"
+    },
     "./integrations/x-pixel": {
       "types": "./dist/types/integrations/x-pixel.d.ts",
       "default": "./src/integrations/x-pixel.ts"
@@ -296,10 +300,10 @@
     "@astrojs/node": "^11.1.5",
     "@astrojs/react": "^6.0.5",
     "@astrojs/vercel": "^11.0.10",
-    "@c15t/astro": "3.0.0-alpha.8",
-    "@c15t/core": "3.0.0-alpha.8",
-    "@c15t/integrations": "3.0.0-alpha.7",
-    "@c15t/react": "3.0.0-alpha.8",
+    "@c15t/astro": "3.0.0-alpha.12",
+    "@c15t/core": "3.0.0-alpha.11",
+    "@c15t/integrations": "3.0.0-alpha.11",
+    "@c15t/react": "3.0.0-alpha.12",
     "@clack/prompts": "^1.8.0",
     "@iconify-json/lucide": "^1.2.131",
     "@iconify/types": "^2.0.0",

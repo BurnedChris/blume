@@ -5,6 +5,7 @@
 // the reader's consent choices while their policy owes consent UI (see
 // `consentTrigger` below). Renders nothing when neither is set; a
 // `components.ts` `Footer` replaces it.
+import ConsentDialogLink from "@c15t/astro/components/consent-dialog-link.astro";
 import data from "blume:data";
 
 import type { BlumeDataConfig } from "../../core/data.ts";
@@ -39,14 +40,15 @@ const columns = footerColumns(footer?.links ?? [], {
 const consentSettings = data.config.consent
   ? { ...EN_UI.consent, ...ui?.consent }.settings
   : null;
-// The Cookie settings control is a c15t trigger surface: c15t's client hides
-// it while the visitor's policy owes no consent UI (a `none` rule with no
-// rights) and shows it for opt-in, opt-out, IAB, rights, or an external CMP.
-// Start from the server's answer so it does not flash; fall back to visible.
+// The Cookie settings control is c15t's `ConsentDialogLink`, a trigger
+// surface: c15t's client hides it while the visitor's policy owes no consent
+// UI (a `none` rule with no rights) and shows it for opt-in, opt-out, IAB,
+// rights, or an external CMP. Start from the server's answer so it does not
+// flash; fall back to visible.
 const consentUi = Astro.locals.c15t?.hasConsentUi ?? true;
 const hasLinks = socials.length > 0 || columns.length > 0;
-// When the control is the footer's only content, the whole footer is the
-// trigger, so hiding it leaves no empty bordered strip behind.
+// When the control is the footer's only content, the whole footer is a
+// trigger too, so hiding it leaves no empty bordered strip behind.
 const consentTrigger = {
   "data-c15t-surface": "trigger",
   hidden: consentUi ? undefined : true,
@@ -108,14 +110,9 @@ const linkClass =
           </ul>
             )}
             {consentSettings && (
-              <button
-                class:list={[linkClass, "text-sm"]}
-                data-blume-consent-open
-                type="button"
-                {...(hasLinks ? consentTrigger : {})}
-              >
+              <ConsentDialogLink class={`${linkClass} text-sm`}>
                 {consentSettings}
-              </button>
+              </ConsentDialogLink>
             )}
           </div>
         )}

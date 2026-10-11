@@ -42,7 +42,9 @@ it("preserves explicit consent authorities and hosted mode", () => {
     native(),
     osano({ configId: "b", customerId: "a" }),
     ethyca({ privacyCenter: "https://privacy.example.com" }),
-    c15t({ mode: { type: "hosted", url: "https://consent.example.com" } }),
+    c15t({
+      mode: { backendURL: "https://consent.example.com", type: "hosted" },
+    }),
   ]) {
     expect(
       blumeConfigSchema.parse({ analytics: [vercel()], consent }).consent
@@ -56,8 +58,9 @@ it("preserves explicit consent authorities and hosted mode", () => {
 });
 it("takes c15t v3's mode factories as the serializable mode", () => {
   for (const mode of [
-    hosted({ url: "https://consent.example.com" }),
-    manifest({ backendURL: "https://consent.example.com" }),
+    hosted({ backendURL: "https://consent.example.com" }),
+    manifest(),
+    manifest({ source: "runtime" }),
     offline(),
   ]) {
     expect(
@@ -195,14 +198,12 @@ it("runs every legacy adapter through the actual c15t SDK and preserves loader o
   );
 });
 
-it("declares Tailwind's layer order ahead of c15t's stylesheet", async () => {
+it("adds Blume's c15t token overrides as a page stylesheet", async () => {
   const integrations = blumeConsentIntegrations({
     analytics: [],
     consent: c15t(),
     root: "/site",
   });
-  // c15t injects its `@layer components` CSS as a page-ssr import; cascade
-  // layers rank by first mention, so the order statement must land first.
   expect(integrations.map((entry) => entry.name)).toEqual([
     "blume:consent-styles",
     "@c15t/astro",
@@ -251,6 +252,10 @@ const setupConsent = async (consent: ReturnType<typeof c15t>) => {
         .slice(0, -1)
     );
   return {
+    boot: injectScript.mock.calls
+      .filter(([stage]) => stage === "page")
+      .map(([, source]) => source)
+      .join("\n"),
     options: read(false),
     serverOptions: read(true),
     styles: injectScript.mock.calls
@@ -262,7 +267,7 @@ const setupConsent = async (consent: ReturnType<typeof c15t>) => {
 it("styles c15t from Blume's theme tokens and leaves dark mode to the site", async () => {
   // SAFETY: colorScheme is outside C15tOptions; this checks a JS config's value is overridden.
   const defaults = await setupConsent(c15t({ colorScheme: "dark" } as never));
-  expect(defaults.options.colorScheme).toBe("light");
+  expect(defaults.options.colorScheme).toBe("none");
   // No accent-colored action outranks the equal Reject/Accept pair.
   expect(defaults.options.presentation.prompt.primaryActions).toEqual([]);
   expect(defaults.options.theme).toMatchObject({
@@ -275,11 +280,10 @@ it("styles c15t from Blume's theme tokens and leaves dark mode to the site", asy
     radius: { lg: "var(--blume-radius)" },
     typography: { fontFamily: "var(--blume-font-body)" },
   });
-  // c15t's stylesheet, then the dialog's, which Astro 7 drops from the island.
-  expect(defaults.styles).toEqual([
-    expect.stringContaining("@c15t/astro/dist/styles.css"),
-    expect.stringContaining("@c15t/ui/dist/styles/dialog.css"),
-  ]);
+  // c15t inlines its first-paint rules through ConsentScript and links the
+  // dialog's stylesheet when the dialog opens, so no page stylesheet is added.
+  expect(defaults.styles).toEqual([]);
+  expect(defaults.boot).toContain("registerDialogStyles(");
 
   const custom = await setupConsent(
     c15t({
@@ -301,6 +305,7 @@ it("styles c15t from Blume's theme tokens and leaves dark mode to the site", asy
     consentBannerCard: "shadow-none",
   });
   expect(custom.styles).toEqual([]);
+  expect(custom.boot).not.toContain("registerDialogStyles(");
 });
 
 it("bundles the manifest at build time in manifest mode unless the site opts out", async () => {
@@ -312,18 +317,20 @@ it("bundles the manifest at build time in manifest mode unless the site opts out
   // SAFETY: c15t's build-time loader only calls fetch(url, init).
   globalThis.fetch = fetchMock as never;
   try {
-    const mode = manifest({ backendURL: "https://consent.example.com" });
-    const built = await setupConsent(c15t({ mode }));
+    const backendURL = "https://consent.example.com";
+    const built = await setupConsent(c15t({ backendURL, mode: manifest() }));
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "https://consent.example.com/manifest",
     ]);
     // The server gets the snapshot; the browser bundle never does.
-    expect(built.serverOptions.mode.manifest).toMatchObject(policy);
-    expect(built.options.mode.manifest).toBeUndefined();
+    expect(built.serverOptions.mode.snapshot).toMatchObject(policy);
+    expect(built.options.mode.snapshot).toBeUndefined();
 
     fetchMock.mockClear();
-    await setupConsent(c15t({ buildManifest: false, mode }));
-    await setupConsent(c15t({ mode: hosted({ url: "https://c.example" }) }));
+    await setupConsent(
+      c15t({ backendURL, mode: manifest({ source: "runtime" }) })
+    );
+    await setupConsent(c15t({ mode: hosted({ backendURL }) }));
     expect(fetchMock).not.toHaveBeenCalled();
   } finally {
     globalThis.fetch = realFetch;
@@ -371,13 +378,10 @@ it("wires the Astro client module, preserves callbacks, and suppresses legacy tr
           ? `import extension from ${JSON.stringify(path.join(withFile, "consent.ts"))};`
           : "const extension = {}"
       );
-      const [styles, page] = injectScript.mock.calls;
-      expect(styles?.[0]).toBe("page-ssr");
-      expect(styles?.[1]).toMatch(
-        /^import ".+\/@c15t\/ui\/dist\/styles\/dialog\.css";$/u
-      );
+      const [page, ...rest] = injectScript.mock.calls;
       expect(page?.[0]).toBe("page");
       expect(page?.[1]).toContain("startConsentRuntime");
+      expect(rest).toEqual([]);
     }
   }
   await rm(withFile, { force: true, recursive: true });

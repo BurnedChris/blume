@@ -112,12 +112,12 @@ describe("loadConfig", () => {
     expect(withFile.config.consent).toEqual(c15t());
 
     const hosted = await makeDir(
-      'export default { consent: { kind: "c15t", options: { mode: { type: "hosted", url: "https://consent.example.com" } }, runtimeDeps: [], requiredSecrets: [] } };'
+      'export default { consent: { kind: "c15t", options: { mode: { backendURL: "https://consent.example.com", type: "hosted" } }, runtimeDeps: [], requiredSecrets: [] } };'
     );
     await writeFile(join(hosted, "consent.ts"), "export default {};");
     const explicit = await loadConfig(hosted);
     expect(explicit.config.consent?.options).toEqual({
-      mode: { type: "hosted", url: "https://consent.example.com" },
+      mode: { backendURL: "https://consent.example.com", type: "hosted" },
     });
   });
 

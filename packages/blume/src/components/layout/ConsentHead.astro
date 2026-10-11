@@ -1,4 +1,6 @@
 ---
+import ConsentScript from "@c15t/astro/components/consent-script.astro";
+
 import { consentHead } from "../../consent/head.ts";
 import type { BlumeDataConfig } from "../../core/data.ts";
 interface Props { consent: NonNullable<BlumeDataConfig["consent"]>; }
@@ -7,6 +9,9 @@ const tags = consentHead(Astro.props.consent).filter((tag) => tag.content === nu
 ---
 <script is:inline>window.blumeConsent ??= { analytics: null, kind: "c15t" };
 // Runs right after the theme script, before paint: c15t's dark tokens key off
-// these classes, and Blume, not c15t, decides the theme (see runtime.ts).
-for (const name of ["c15t-dark", "dark"]) document.documentElement.classList.toggle(name, document.documentElement.dataset.theme === "dark");</script>
+// this class, and Blume, not c15t, decides the theme (see runtime.ts).
+document.documentElement.classList.toggle("c15t-dark", document.documentElement.dataset.theme === "dark");</script>
+{/* c15t's first-paint styles, Blume's theme tokens, and the server-resolved
+    consent config, so the banner boots without an `/init` round trip. */}
+<ConsentScript />
 {tags.map((tag) => <script is:inline {...tag.attributes} />)}

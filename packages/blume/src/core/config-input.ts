@@ -1477,7 +1477,7 @@ export interface BlumeConfig {
   /**
    * c15t owns scripts and consent. Defaults to an offline c15t banner when a
    * root `consent.ts` or analytics is present. Use c15t() for a backend
-   * (`mode: hosted({ url })`), native() as a compatibility alias, or
+   * (`mode: hosted({ backendURL })`), native() as a compatibility alias, or
    * osano()/ethyca() for an external CMP. Scripts go in `consent.ts`.
    * Vendor helpers may load before consent and receive denied-state callbacks.
    */

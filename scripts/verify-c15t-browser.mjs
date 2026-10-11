@@ -64,7 +64,8 @@ assert.equal(
   true
 );
 assert.equal(await page.evaluate(() => window.__gtmLoaded), 1);
-await page.locator("[data-blume-consent-open]").first().click();
+// The built-in footer renders c15t's `ConsentDialogLink`.
+await page.locator('[data-testid="consent-dialog-trigger"]').first().click();
 await page.getByRole("dialog").waitFor({ state: "visible" });
 const card = page.locator('[data-testid="consent-dialog-card"]');
 const cardStyle = () =>

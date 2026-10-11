@@ -4,7 +4,7 @@ This draft replaces Blume's consent state machine and vendor loaders with c15t's
 
 ## Dependencies
 
-Blume pins the published c15t v3 alphas exactly (`@c15t/astro`, `@c15t/core`, `@c15t/react` at `3.0.0-alpha.8`; `@c15t/integrations` at `3.0.0-alpha.7`, the latest publish of that package from the same release train). `@c15t/integrations` replaced `@c15t/scripts`, which is now a deprecated re-export. They include the external consent source and event dispatcher from [c15t/c15t#1204](https://github.com/c15t/c15t/pull/1204). Prerelease ranges would float to later alphas whose API may differ, so bump the pins deliberately and rerun the checks below.
+Blume pins the published c15t v3 alphas exactly (`@c15t/astro` and `@c15t/react` at `3.0.0-alpha.12`; `@c15t/core` and `@c15t/integrations` at `3.0.0-alpha.11`, the latest publishes of those packages from the same release train). `@c15t/integrations` replaced `@c15t/scripts`, which is now a deprecated re-export. They include the external consent source and event dispatcher from [c15t/c15t#1204](https://github.com/c15t/c15t/pull/1204). Prerelease ranges would float to later alphas whose API may differ, so bump the pins deliberately and rerun the checks below.
 
 To upgrade, change the four versions in `packages/blume/package.json`, then:
 
@@ -49,24 +49,16 @@ The browser check uses the docs app's Playwright installation (`bunx playwright 
 
 Also test external Osano/Fides initialization, category changes, unavailable provider, withdrawal and preferences against the deployment's real CMP configuration. Unit tests exercise both adapters, missing providers, listener cleanup, theme/language synchronization and the SDK conversion for every legacy analytics adapter.
 
-## c15t alpha.3 workarounds
+## Following c15t's Astro setup
 
-Blume works around three c15t issues. Each has a comment at its site; remove them once c15t ships the fix.
+Blume renders c15t's own Astro components: `ConsentScript` in the head (first-paint styles, theme tokens, server-resolved config), `ConsentBanner` and `ConsentDialog` in the layout, and `ConsentDialogLink` for the footer's settings link. The banner styles are inlined; the dialog links its stylesheet when it opens.
 
-- Astro 7 drops CSS that a page script reaches only through a dynamic import, so the React and Svelte dialog islands open unstyled. c15t already injects `@c15t/ui/styles/dialog.css` page-wide for Vue; Blume does the same for React (`consent/integration.ts`). Reproduces in a bare Astro 7 app with `ui: 'react'` or `'svelte'`; Astro 5 emits the chunk's CSS.
-- The Astro dialog islands pass no `colorScheme` to the framework provider, so React's `useColorScheme(undefined)` mirrors a `.dark` class onto `c15t-dark` while the dialog is open. Blume sets `colorScheme: "light"` (c15t leaves the class alone), then owns `c15t-dark` and keeps `.dark` in step with `data-theme` (`consent/runtime.ts`, `ConsentHead.astro`). The fix upstream is `colorScheme: null` in `buildProviderProps`.
-- `--consent-manager-font-family` is a hardcoded system stack rather than `var(--c15t-font-family)`, so the preference list ignores the theme font (`consent/c15t.css`).
+c15t's alpha.3 gaps are fixed upstream, so the workarounds are gone: the page-wide dialog stylesheet, the `.dark` class mirror, the font-family override, the `@layer` order statement, and Blume's own footer layout. What remains:
+
+- `colorScheme: "none"`. Blume's theme toggle owns `c15t-dark` (`ConsentHead.astro`, `src/consent/runtime.ts`), since c15t's `"system"` would follow the OS while the reader has pinned the site's theme.
+- `src/consent/c15t.css` sets c15t's tokens for the footer surface and the "Secured by" tag, and fits the floating banner into the gutter beside the article from `lg`.
 
 The banner and dialog map c15t's color, radius, shadow and font tokens to `--blume-*` variables, which switch with the theme, so one set of values serves both palettes. A site's `c15t({ theme })` overrides them group by group.
-
-## UI workarounds for the pinned alphas
-
-Blume works around four `@c15t/astro` 3.0.0-alpha.3 gaps. Remove each once c15t ships the fix:
-
-- Astro 7 drops CSS reached only through a page script's dynamic import, so the React and Svelte dialog islands open unstyled. Blume imports `@c15t/ui/styles/dialog.css` page-wide, as c15t already does for Vue (`src/consent/integration.ts`).
-- The dialog islands mount `ConsentProvider` without a `colorScheme`, so React mirrors a `.dark` class onto `c15t-dark` while the dialog is open. Blume passes `colorScheme: "light"`, owns `c15t-dark` itself, and keeps `.dark` in sync with its theme (`src/consent/runtime.ts`, `ConsentHead.astro`).
-- `--consent-manager-font-family` is a hardcoded system stack rather than `var(--c15t-font-family)` (`src/consent/c15t.css`).
-- The server-rendered banner ignores `theme.consentActions` and lays out actions by viewport width, so a narrow card on a wide screen overflows. Blume clears `primaryActions` and lays out the sidebar-width banner's footer itself (`src/consent/c15t.css`).
 
 ## Maintainer decisions and release boundaries
 

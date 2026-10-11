@@ -71,6 +71,7 @@ This catalog is generated from the installed c15t registry. The default category
 | Plausible Analytics | `blume/integrations/plausible-analytics` | `measurement` |
 | Umami Analytics | `blume/integrations/umami-analytics` | `measurement` |
 | Vercel Analytics | `blume/integrations/vercel-analytics` | `measurement` |
+| Vercel Speed Insights | `blume/integrations/vercel-speed-insights` | `measurement` |
 | Crisp | `blume/integrations/crisp` | `functionality` |
 | Front Chat | `blume/integrations/front-chat` | `functionality` |
 | Intercom | `blume/integrations/intercom` | `functionality` |
@@ -122,7 +123,8 @@ import { c15t, hosted } from "blume/consent";
 
 export default defineConfig({
   consent: c15t({
-    mode: hosted({ url: "https://consent.example.com" }),
+    backendURL: "https://consent.example.com",
+    mode: hosted(),
   }),
 });
 ```
