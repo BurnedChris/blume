@@ -29,6 +29,11 @@ export const customers = {
     logo: { height: 152, src: "/logos/chatjs.svg", width: 631 },
     name: "ChatJS",
   },
+  electrolux: {
+    href: "https://opensource.electrolux.one/infrakitchen/introduction/",
+    logo: { height: 50, src: "/logos/electrolux.svg", width: 218 },
+    name: "Electrolux",
+  },
   filesSdk: {
     href: "https://files-sdk.dev/",
     logo: { height: 152, src: "/logos/files-sdk.svg", width: 768 },
@@ -78,8 +83,8 @@ export const customers = {
   },
 } satisfies Record<string, Customer>;
 
-/** The logo marquee and logo wall, in display order. */
-export const logoWall: Customer[] = [
+/** The homepage logo marquee, in display order. */
+export const logoMarquee: Customer[] = [
   customers.neon,
   customers.orpc,
   customers.quiverai,
@@ -88,10 +93,16 @@ export const logoWall: Customer[] = [
   customers.stagewise,
   customers.ultracite,
   customers.filesSdk,
+  customers.electrolux,
   customers.betterResult,
   customers.chatjs,
   customers.telemetry,
 ];
+
+/** The /customers logo wall: the marquee's order, without Better Result. */
+export const logoWall: Customer[] = logoMarquee.filter(
+  (customer) => customer !== customers.betterResult
+);
 
 export interface CustomerStory {
   /**

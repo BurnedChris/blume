@@ -2,8 +2,8 @@
 // Customer logos — one row of faded wordmarks drifting past as a marquee,
 // shown right under the product preview, so the strip never wraps however
 // many customers it holds. Each links to that customer's Blume-built site.
-// The list lives in _customers/customers.ts, shared with the /customers logo
-// wall. The wordmarks are single-color SVG files in `public/logos/`, drawn as CSS
+// The list lives in _customers/customers.ts beside the /customers logo wall's.
+// The wordmarks are single-color SVG files in `public/logos/`, drawn as CSS
 // masks over `currentColor` rather than inlined: inlined (and doubled for the
 // loop) they were a third of the homepage's HTML, which pulled its
 // text-to-markup ratio under what agent-readiness scanners expect. The mask
@@ -15,7 +15,7 @@
 // hidden from assistive tech and the tab order. Hover or focus pauses it, and
 // reduced motion swaps it for a static, centered wrap of the first row.
 import { NEW_TAB_ATTRS } from "blume/core/new-tab.ts";
-import { logoWall } from "../_customers/customers.ts";
+import { logoMarquee } from "../_customers/customers.ts";
 ---
 
 <!-- Logo marquee: two identical rows sliding left by their own width. -->
@@ -40,7 +40,7 @@ import { logoWall } from "../_customers/customers.ts";
               : "motion-reduce:w-full motion-reduce:shrink motion-reduce:flex-wrap motion-reduce:justify-center motion-reduce:gap-y-10 motion-reduce:pr-0",
           ]}
         >
-          {logoWall.map((customer) => (
+          {logoMarquee.map((customer) => (
             <a
               aria-label={customer.name}
               class="flex shrink-0 items-center justify-center text-muted-foreground/50 hover:text-foreground"
