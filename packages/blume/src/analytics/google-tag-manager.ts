@@ -2,8 +2,6 @@ import { z } from "zod";
 
 import type { AdapterDescriptor } from "../core/adapter.ts";
 import { adapterDescriptorSchema } from "../core/adapter.ts";
-import type { HeadScript } from "./head.ts";
-import { inlineJson } from "./inline.ts";
 
 /** Options for {@link googleTagManager}. */
 export interface GoogleTagManagerOptions {
@@ -31,6 +29,8 @@ export const googleTagManagerAdapterSchema = adapterDescriptorSchema(
 /**
  * Google Tag Manager. Blume loads the container; which tags fire, and on what,
  * is the container's configuration. The container ID is public.
+ *
+ * @deprecated Use blume/integrations/* in consent.ts. Removed in the next major release.
  */
 export const googleTagManager = (
   options: GoogleTagManagerOptions
@@ -40,22 +40,3 @@ export const googleTagManager = (
   requiredSecrets: [],
   runtimeDeps: [],
 });
-
-/**
- * The container snippet from the workspace's install instructions (the
- * `<head>` half; the `<noscript>` iframe is for browsers without JavaScript,
- * which never run analytics anyway). Client-router navigations reach the
- * container as history changes — fire pageview tags from a History Change
- * trigger rather than the page-load one. The snippet also keeps a reference
- * to its data layer on `window.__blumeGtmLayer`, so `track()` pushes custom
- * events into the layer this container reads rather than the default
- * `dataLayer`.
- */
-export const googleTagManagerHead = (
-  options: GoogleTagManagerOptions
-): HeadScript[] => [
-  {
-    attributes: {},
-    content: `(function(w,d,s,l,i){w[l]=w[l]||[];w.__blumeGtmLayer=w[l];w[l].push({"gtm.start":new Date().getTime(),event:"gtm.js"});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!="dataLayer"?"&l="+l:"";j.async=true;j.src="https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);})(window,document,"script",${inlineJson(options.dataLayer ?? "dataLayer")},${inlineJson(encodeURIComponent(options.id))});`,
-  },
-];

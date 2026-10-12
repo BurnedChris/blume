@@ -2,9 +2,12 @@
 // The site footer, below the content on every page: one row, as tall as the
 // header, with `footer.links` on one side, the social profile icons on the
 // other, and `footer.copyright` centered between them. The site's repository
-// (`github`, unless `navigation.repo` hides it) is the first icon; the footer is the only place it's linked. With `consent` configured the links end with the
-// Cookie settings link, which reopens the reader's consent choices. Renders
-// nothing when there's none of these; a `components.ts` `Footer` replaces it.
+// (`github`, unless `navigation.repo` hides it) is the first icon; the footer is the only place it's linked. With `consent`
+// configured the links end with the Cookie settings link, which reopens the
+// reader's consent choices while their policy owes consent UI (see
+// `consentTrigger` below). Renders nothing when there's none of these; a
+// `components.ts` `Footer` replaces it.
+import ConsentDialogLink from "@c15t/astro/components/consent-dialog-link.astro";
 import data from "blume:data";
 
 import type { BlumeDataConfig } from "../../core/data.ts";
@@ -59,17 +62,35 @@ const links = footerLinks(footer?.links ?? [], {
 const consentSettings = data.config.consent
   ? { ...EN_UI.consent, ...ui?.consent }.settings
   : null;
+// The Cookie settings control is c15t's `ConsentDialogLink`, a trigger
+// surface: c15t's client hides it while the visitor's policy owes no consent
+// UI (a `none` rule with no rights) and shows it for opt-in, opt-out, IAB,
+// rights, or an external CMP. Start from the server's answer so it does not
+// flash; fall back to visible. Its list item, and the whole footer when the
+// control is all it holds, are triggers too, so hiding the control leaves no
+// gap or empty bordered strip behind.
+const consentUi = Astro.locals.c15t?.hasConsentUi ?? true;
+const consentTrigger = {
+  "data-c15t-surface": "trigger",
+  hidden: consentUi ? undefined : true,
+};
 const linkClass =
   "text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground";
 // Round icon buttons, like the header's.
 const iconButton =
   "inline-flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:text-foreground";
 const hasLinks = links.length > 0 || consentSettings !== null;
+const onlyConsent =
+  links.length === 0 && copyright === null && socials.length === 0;
 ---
 
 {
   (copyright !== null || hasLinks || socials.length > 0) && (
-    <footer class="border-border border-t px-4 md:px-6" data-blume-footer>
+    <footer
+      class="border-border border-t px-4 md:px-6"
+      data-blume-footer
+      {...(onlyConsent ? consentTrigger : {})}
+    >
       {/* With a copyright, three columns from `md`, the outer two sharing
           what it leaves so it sits at the true center; without one, the
           links keep the row's full width. Narrower, the row wraps. */}
@@ -93,14 +114,10 @@ const hasLinks = links.length > 0 || consentSettings !== null;
               </li>
             ))}
             {consentSettings && (
-              <li>
-                <button
-                  class:list={[linkClass, "cursor-pointer"]}
-                  data-blume-consent-open
-                  type="button"
-                >
+              <li {...consentTrigger}>
+                <ConsentDialogLink class={`${linkClass} cursor-pointer`}>
                   {consentSettings}
-                </button>
+                </ConsentDialogLink>
               </li>
             )}
           </ul>

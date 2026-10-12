@@ -8,7 +8,6 @@ import { ASK_MAX_MESSAGES, ASK_MAX_MESSAGES_CHARS } from "../ai/ask-limits.ts";
 import type { AskBackend } from "../ai/ask.ts";
 import { buildHomeLinkHeader } from "../ai/link-headers.ts";
 import type { CaptchaAdapter } from "../captcha/schema.ts";
-import { CONSENT_CLIENT_MODULES } from "../consent/clients.ts";
 import { normalizeBasePath } from "../core/base-path.ts";
 import { TOC_HIDDEN_KEY, TOC_TEXT_KEY } from "../core/heading-markers.ts";
 import {
@@ -188,7 +187,10 @@ export const runtimeDependencies = (options: {
 }): string[] => {
   const { config, needsReact, needsSvelte, needsVue } = options;
   const deps = ["@astrojs/mdx"];
-  if (needsReact) {
+  if (config.consent) {
+    deps.push("@c15t/astro", "@c15t/core", "@c15t/integrations", "@c15t/react");
+  }
+  if (needsReact || config.consent) {
     deps.push("@astrojs/react");
   }
   if (needsVue) {
@@ -589,6 +591,7 @@ const blumeIntegrationOptions = (options: {
     : shared;
 };
 
+// oxlint-disable-next-line complexity -- The generated Astro config keeps optional integrations explicit.
 export const astroConfigTemplate = (options: {
   context: ProjectContext;
   config: ResolvedConfig;
@@ -603,8 +606,6 @@ export const astroConfigTemplate = (options: {
   /** The example-preview Tailwind entry (`blume:examples-theme`). */
   examplesThemePath: string;
   themePath: string;
-  /** The configured consent adapter's browser module (`blume:consent-client`). */
-  consentClientPath: string;
   searchClientPath: string;
   /** The generated client-feature loaders (`blume:features`). */
   featuresPath: string;
@@ -632,7 +633,8 @@ export const astroConfigTemplate = (options: {
   /** Bridge used to load configured integrations without serializing them. */
   integrationBridge?: IntegrationBridgeOptions;
 }): string => {
-  const { context, config, needsReact, pages, themePath } = options;
+  const { context, config, pages, themePath } = options;
+  const needsReact = options.needsReact || config.consent !== null;
 
   const { astro: cacheOptions, vite: viteCacheOption } = runtimeCacheOptions(
     context,
@@ -640,7 +642,6 @@ export const astroConfigTemplate = (options: {
   );
   const {
     askPath,
-    consentClientPath,
     contentRoutes,
     examplesPath,
     examplesThemePath,
@@ -798,6 +799,9 @@ export const astroConfigTemplate = (options: {
 
   // Framework renderers are only wired in when an island (or the assistant, for React)
   // needs them. The core theme is Astro-first and ships no client JS.
+  const consentImport = config.consent
+    ? `import { blumeConsentIntegrations } from "blume/consent/integration";\n`
+    : "";
   const reactImport = needsReact ? `import react from "@astrojs/react";\n` : "";
   const vueImport = needsVue ? `import vue from "@astrojs/vue";\n` : "";
   const svelteImport = needsSvelte
@@ -865,6 +869,11 @@ export const astroConfigTemplate = (options: {
   if (needsSvelte) {
     integrations.push("svelte()");
   }
+  if (config.consent) {
+    integrations.push(
+      `...blumeConsentIntegrations({ basePath: ${JSON.stringify(`${deployBase}${config.basePath}`)}, consent: ${JSON.stringify(config.consent)}, analytics: ${JSON.stringify(config.analytics)}, root: ${ejected ? 'fileURLToPath(new URL(".", import.meta.url))' : JSON.stringify(context.root)} })`
+    );
+  }
   // Always mounted: injects user pages (a no-op when there are none) and wires
   // up dev-server `Accept: text/markdown` negotiation over the content routes,
   // plus the homepage agent-discovery `Link` header.
@@ -897,7 +906,7 @@ ${fileUrlImport}${defineConfigImport}
 import mdx from "@astrojs/mdx";
 import tailwindcss from "@tailwindcss/vite";
 import { blumeMarkdownProcessor, blumeMdxProcessor, blumeShikiTransformers, blumeTwoslashTransformer } from "blume/markdown";
-${reactImport}${vueImport}${svelteImport}${blumeImport}${adapterImport}
+${consentImport}${reactImport}${vueImport}${svelteImport}${blumeImport}${adapterImport}
 ${userConfigSetup}export default defineConfig({
   root: ${JSON.stringify(context.outDir)},
   srcDir: ${JSON.stringify(`${context.outDir}/src`)},
@@ -997,8 +1006,8 @@ ${userConfigSetup}export default defineConfig({
     },
     resolve: {
       alias: {
+        "blume:consent-ui": "blume/components/layout/${config.consent ? "ConsentBanner" : "NoConsent"}.astro",
         "blume:ask": ${configPath(askPath, ejected)},
-        "blume:consent-client": ${configPath(consentClientPath, ejected)},
         "blume:examples": ${configPath(examplesPath, ejected)},
         "blume:examples-theme": ${configPath(examplesThemePath, ejected)},
         "blume:features": ${configPath(featuresPath, ejected)},
@@ -1640,36 +1649,6 @@ ${
     : "export const loadEpub: (() => Promise<unknown>) | null = null;"
 }
 `;
-
-/**
- * Generate `.blume/src/generated/consent-client.ts`, behind the
- * `blume:consent-client` alias: the configured consent adapter's browser
- * module (see `consent/clients.ts`), started by `ConsentHead.astro` with the
- * adapter's options baked in. Only that adapter's module is referenced, so a
- * site bundles no other adapter's code. An adapter without one (a hosted
- * manager), or no `consent` at all, gets a no-op so the alias always resolves.
- */
-export const consentClientTemplate = (
-  consent: ResolvedConfig["consent"]
-): string => {
-  const module = consent ? CONSENT_CLIENT_MODULES.get(consent.kind) : undefined;
-  if (!(consent && module)) {
-    return `// Generated by Blume. Do not edit.
-// The consent adapter has no browser module, or consent is off.
-export const startConsentClient = (): void => {};
-`;
-  }
-  return `// Generated by Blume. Do not edit.
-// The \`${consent.kind}\` consent adapter's browser module, with its options.
-import { start } from ${JSON.stringify(module)};
-
-export const startConsentClient = (
-  consent: Parameters<typeof start>[0]
-): void => {
-  start(consent, ${JSON.stringify(consent.options)});
-};
-`;
-};
 
 /**
  * Generate `.blume/src/generated/search-client.ts` — the provider-specific

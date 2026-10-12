@@ -1,9 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
-import { ETHYCA_BRIDGE } from "../src/consent/ethyca.ts";
 import { consentHead } from "../src/consent/head.ts";
 import { ethyca, native, osano } from "../src/consent/index.ts";
-import { OSANO_BRIDGE } from "../src/consent/osano.ts";
 import { EN_UI } from "../src/core/i18n-ui.ts";
 import { blumeConfigSchema } from "../src/core/schema.ts";
 import { UI_PACKS } from "../src/core/ui-packs/index.ts";
@@ -63,7 +61,7 @@ describe(consentHead, () => {
     expect(consentHead(native())).toStrictEqual([]);
   });
 
-  it("loads Osano synchronously, then bridges it", () => {
+  it("loads Osano synchronously, leaves consent decisions to c15t", () => {
     expect(
       consentHead(osano({ configId: "cfg/1", customerId: "Az0 9" }))
     ).toStrictEqual([
@@ -71,11 +69,10 @@ describe(consentHead, () => {
         attributes: { src: "https://cmp.osano.com/Az0%209/cfg%2F1/osano.js" },
         content: null,
       },
-      { attributes: {}, content: OSANO_BRIDGE },
     ]);
   });
 
-  it("loads fides.js from the privacy center, then bridges it", () => {
+  it("loads fides.js from the privacy center, leaves consent decisions to c15t", () => {
     expect(
       consentHead(ethyca({ privacyCenter: "https://privacy.example.com/" }))
     ).toStrictEqual([
@@ -83,9 +80,8 @@ describe(consentHead, () => {
         attributes: { src: "https://privacy.example.com/fides.js" },
         content: null,
       },
-      { attributes: { "data-notice": "analytics" }, content: ETHYCA_BRIDGE },
     ]);
-    const [loader, bridge] = consentHead(
+    const [loader] = consentHead(
       ethyca({
         notice: "measurement",
         privacyCenter: "https://example.com/privacy",
@@ -95,7 +91,6 @@ describe(consentHead, () => {
     expect(loader?.attributes.src).toBe(
       "https://example.com/privacy/fides.js?property_id=FDS-A1+B2"
     );
-    expect(bridge?.attributes["data-notice"]).toBe("measurement");
   });
 });
 

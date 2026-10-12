@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename } from "pathe";
 import { z } from "zod";
 
+import { c15t } from "../consent/c15t.ts";
 import { ACCENTS, invalidColorSettings } from "../theme/palette.ts";
 import type { BlumeConfig } from "./config-input.ts";
 import { applyDeploymentEnv } from "./deployment-env.ts";
@@ -12,7 +13,7 @@ import {
   diagnosticsFromZod,
 } from "./diagnostics.ts";
 import { createDefaultExportLoader } from "./load-module.ts";
-import { findConfigFile } from "./project.ts";
+import { findConfigFile, findConsentFile } from "./project.ts";
 import { blumeConfigSchema } from "./schema.ts";
 import type { ResolvedConfig } from "./schema.ts";
 import type { Diagnostic } from "./types.ts";
@@ -306,10 +307,39 @@ const colorDiagnostics = (
   }));
 };
 
+/** A deprecation warning while `analytics` still lists adapters. */
+const analyticsDiagnostics = (
+  config: ResolvedConfig,
+  configFile: string | null
+): Diagnostic[] =>
+  config.analytics.length > 0
+    ? [
+        {
+          code: "BLUME_ANALYTICS_DEPRECATED",
+          file: configFile ?? undefined,
+          message:
+            "blume/analytics is deprecated and will be removed in the next major release. Existing adapters remain supported in this release but will receive no new integrations.",
+          severity: "warning",
+          suggestion:
+            "Move integrations to blume/integrations/* in consent.ts. See https://useblume.dev/docs/configuration/analytics-migration.",
+        },
+      ]
+    : [];
+
 /**
  * Load and validate the project config. When no config file exists, schema
  * defaults produce a fully resolved config so the zero-boilerplate path works.
  */
+/**
+ * A `consent.ts` turns consent on by being there, as an analytics list does:
+ * offline c15t unless `consent` picks a backend or provider.
+ */
+const resolveConsent = (
+  config: ResolvedConfig,
+  root: string
+): ResolvedConfig["consent"] =>
+  config.consent ?? (findConsentFile(root) ? c15t() : null);
+
 export const loadConfig = async (
   root: string,
   /**
@@ -403,6 +433,7 @@ export const loadConfig = async (
   return {
     config: {
       ...config,
+      consent: resolveConsent(config, root),
       deployment: site
         ? {
             ...config.deployment,
@@ -412,7 +443,10 @@ export const loadConfig = async (
       seo: { ...config.seo, og: { ...config.seo.og, enabled: ogEnabled } },
     },
     configFile,
-    diagnostics: colorDiagnostics(config, configFile),
+    diagnostics: [
+      ...analyticsDiagnostics(config, configFile),
+      ...colorDiagnostics(config, configFile),
+    ],
     themeFontsConfigured,
   };
 };

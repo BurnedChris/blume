@@ -35,6 +35,7 @@ const DOCS_MARKDOWN_AND_MDX = "/docs/content#markdown-and-mdx";
 const DOCS_PATHS = new Map(
   Object.entries({
     BLUME_ADAPTER_REQUIRED: DOCS_DEPLOYMENT,
+    BLUME_ANALYTICS_DEPRECATED: "/docs/configuration/analytics-migration",
     BLUME_ASSET_FETCH_FAILED: DOCS_CONTENT_SOURCES,
     BLUME_BROKEN_ANCHOR: DOCS_CLI_VALIDATE,
     BLUME_BROKEN_ASSET: DOCS_CLI_VALIDATE,

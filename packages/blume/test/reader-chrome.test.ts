@@ -83,7 +83,7 @@ describe("print stylesheet", () => {
     );
     expect(page).toContain("data-blume-nav-drawer");
     expect(assistant).toContain('data-blume-assistant-panel=""');
-    expect(footer).toContain("data-blume-footer>");
+    expect(footer).toContain("data-blume-footer\n");
   });
 
   it("prints a collapsed expandable block in full", () => {

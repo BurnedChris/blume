@@ -19,13 +19,6 @@ declare module "blume:search-client" {
   export const createSearch: (options?: Options) => Fn | Promise<Fn>;
 }
 
-declare module "blume:consent-client" {
-  /** Start the configured consent adapter's browser module (see `consentClientTemplate`); a no-op for one without. */
-  // oxlint-disable-next-line typescript/consistent-type-imports
-  type Consent = import("./components/layout/consent/types.ts").BlumeConsent;
-  export const startConsentClient: (consent: Consent) => void;
-}
-
 declare module "blume:ask" {
   /** The generated Ask trigger (see `askComponentTemplate`); empty when Ask is off. */
   // Mirrors the generated `.blume/src/env.d.ts` declaration: the trigger's type
@@ -50,5 +43,11 @@ declare module "blume:data" {
 declare module "*.astro" {
   // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type, anti-slop/no-unknown-returns -- a wildcard shim spans every `.astro` component, whose prop shapes and render output only Astro's own TS plugin can type
   const component: (props: Record<string, unknown>) => unknown;
+  export default component;
+}
+
+declare module "blume:consent-ui" {
+  // oxlint-disable-next-line typescript/consistent-type-imports -- Ambient declarations must remain a global script.
+  const component: typeof import("./components/layout/ConsentBanner.astro").default;
   export default component;
 }

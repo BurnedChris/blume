@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import type { AdapterDescriptor } from "../core/adapter.ts";
 import { adapterDescriptorSchema } from "../core/adapter.ts";
-import type { HeadScript } from "./head.ts";
 
 /** The script Fathom's dashboard snippet loads. */
 export const FATHOM_SCRIPT_SRC = "https://cdn.usefathom.com/script.js";
@@ -37,6 +36,8 @@ export const fathomAdapterSchema = adapterDescriptorSchema(
 
 /**
  * Fathom Analytics. The site ID is public — it's in the tag on every page.
+ *
+ * @deprecated Use blume/integrations/* in consent.ts. Removed in the next major release.
  */
 export const fathom = (options: FathomOptions): FathomAdapter => ({
   kind: "fathom",
@@ -44,21 +45,3 @@ export const fathom = (options: FathomOptions): FathomAdapter => ({
   requiredSecrets: [],
   runtimeDeps: [],
 });
-
-/**
- * The deferred tag from the dashboard, with `site` as `data-site` and every
- * other option as its own `data-` attribute. Fathom only tracks history
- * changes when the tag opts in, so `spa` defaults to `"auto"` — Blume's
- * client router navigates without full loads — and an explicit `spa` wins.
- */
-export const fathomHead = (options: FathomOptions): HeadScript[] => {
-  const { site, ...settings } = { spa: "auto", ...options };
-  const attributes: HeadScript["attributes"] = {};
-  for (const [setting, value] of Object.entries(settings)) {
-    attributes[`data-${setting}`] = value;
-  }
-  attributes["data-site"] = site;
-  attributes.defer = true;
-  attributes.src = FATHOM_SCRIPT_SRC;
-  return [{ attributes, content: null }];
-};

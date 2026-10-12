@@ -284,7 +284,6 @@ describe("astro config template", () => {
     const output = astroConfigTemplate({
       askPath: "/r/.blume/src/generated/Ask.astro",
       config,
-      consentClientPath: "/r/.blume/src/generated/consent-client.ts",
       contentRoutes: [],
       context,
       examplesPath: "/r/.blume/src/generated/examples.ts",
@@ -316,7 +315,6 @@ describe("astro config template", () => {
     const output = astroConfigTemplate({
       askPath: "/r/.blume/src/generated/Ask.astro",
       config,
-      consentClientPath: "/r/.blume/src/generated/consent-client.ts",
       contentRoutes: [],
       context,
       examplesPath: "/r/.blume/src/generated/examples.ts",
@@ -364,7 +362,6 @@ describe("astro config template", () => {
     const output = astroConfigTemplate({
       askPath: "/r/.blume/src/generated/Ask.astro",
       config,
-      consentClientPath: "/r/.blume/src/generated/consent-client.ts",
       contentRoutes: [],
       context,
       examplesPath: "/r/.blume/src/generated/examples.ts",
@@ -392,7 +389,6 @@ describe("astro config template", () => {
     astroConfigTemplate({
       askPath: "/r/.blume/src/generated/Ask.astro",
       config,
-      consentClientPath: "/r/.blume/src/generated/consent-client.ts",
       contentRoutes: [],
       context,
       examplesPath: "/r/.blume/src/generated/examples.ts",
