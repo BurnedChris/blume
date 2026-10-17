@@ -36,7 +36,8 @@
     "docs",
     "skills",
     "AGENTS.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "THIRD-PARTY-NOTICES.md"
   ],
   "type": "module",
   "types": "./dist/types/index.d.ts",
