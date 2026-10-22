@@ -51,7 +51,7 @@ import { searchLocaleFor } from "./search-locale.ts";
 import "blume:theme";
 import { ClientRouter } from "astro:transitions";
 import Analytics from "./Analytics.astro";
-import ConsentBanner from "blume:consent-ui";
+import ConsentBanner from "./ConsentBanner.astro";
 import ConsentHead from "./ConsentHead.astro";
 import Banner from "./Banner.astro";
 import DiscoveryLinks from "./DiscoveryLinks.astro";
@@ -494,9 +494,9 @@ const localeRedirect = localeTargets
     }
     <WebMcp />
     {
-      (consent?.kind === "native" || consent?.kind === "c15t") && (
+      consent?.kind === "native" && (
         <ConsentBanner
-          policy={consent.kind === "native" ? consent.options.policy : undefined}
+          policy={consent.options.policy}
           strings={strings.consent}
         />
       )

@@ -18,6 +18,7 @@ const configFor = (mermaid: boolean): string =>
   astroConfigTemplate({
     askPath: "/p/.blume/src/generated/Ask.astro",
     config: blumeConfigSchema.parse({}),
+    consentClientPath: "/p/.blume/src/generated/consent-client.ts",
     contentRoutes: [],
     context,
     examplesPath: "/p/.blume/src/generated/examples.ts",

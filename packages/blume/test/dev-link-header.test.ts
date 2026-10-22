@@ -95,6 +95,7 @@ describe("the dev server's homepage Link header", () => {
     const out = astroConfigTemplate({
       askPath: "./src/generated/Ask.astro",
       config: blumeConfigSchema.parse({}),
+      consentClientPath: "./src/generated/consent-client.ts",
       contentRoutes: ["/"],
       context: {
         componentsFile: null,

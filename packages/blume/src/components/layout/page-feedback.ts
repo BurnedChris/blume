@@ -1,3 +1,4 @@
+import { track } from "./analytics-client.ts";
 /**
  * The "Was this page helpful?" rating (`PageFeedback.astro`). A rating is
  * sent as a `feedback` analytics event, the buttons give way to a thank-you,
@@ -13,8 +14,7 @@
  * rebuilds the widget from server-rendered markup, so the handlers always
  * bind to the freshly swapped-in elements.
  */
-import type { BlumeConsent } from "../../consent/runtime.ts";
-import { track } from "./analytics-client.ts";
+import type { BlumeConsent } from "./consent/types.ts";
 
 /** The longest comment the box takes. */
 export const COMMENT_MAX_LENGTH = 1000;
@@ -24,7 +24,7 @@ export const COMMENT_MAX_LENGTH = 1000;
  * the reader has allowed analytics.
  */
 const answersReachAnalytics = (): boolean => {
-  // SAFETY: the c15t compatibility bridge is the only writer of
+  // SAFETY: the consent init script (`consent/init.ts`) is the only writer of
   // `window.blumeConsent`; without a consent layer it's absent.
   const { blumeConsent } = window as Window & { blumeConsent?: BlumeConsent };
   return blumeConsent === undefined || blumeConsent.analytics === true;

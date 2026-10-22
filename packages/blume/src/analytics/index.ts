@@ -1,8 +1,5 @@
 /**
- * Deprecated compatibility adapters for `blume.config.ts`. Frozen until removal
- * in the next major release; use blume/integrations/* for new integrations.
- *
- * Existing configuration:
+ * Analytics adapters for `blume.config.ts`:
  *
  * ```ts
  * import { defineConfig } from "blume";

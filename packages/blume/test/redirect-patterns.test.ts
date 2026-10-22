@@ -501,6 +501,7 @@ describe("the generated Astro config", () => {
     astroConfigTemplate({
       askPath: "/p/.blume/src/generated/Ask.astro",
       config: blumeConfigSchema.parse(input),
+      consentClientPath: "/p/.blume/src/generated/consent-client.ts",
       contentRoutes,
       context,
       examplesPath: "/p/.blume/src/generated/examples.ts",

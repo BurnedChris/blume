@@ -111,6 +111,7 @@ describe("modules the generated Astro config loads", () => {
   const output = astroConfigTemplate({
     askPath: "/r/.blume/src/generated/Ask.astro",
     config: blumeConfigSchema.parse({ deployment: vercel() }),
+    consentClientPath: "/r/.blume/src/generated/consent-client.ts",
     contentRoutes: [],
     context,
     examplesPath: "/r/.blume/src/generated/examples.ts",

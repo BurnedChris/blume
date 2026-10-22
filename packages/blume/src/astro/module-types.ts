@@ -59,11 +59,6 @@ declare module "blume:examples" {
   export const examplesBase: string;
 }
 
-declare module "blume:consent-ui" {
-  const component: typeof import("blume/components/layout/ConsentBanner.astro").default;
-  export default component;
-}
-
 declare module "blume:examples-theme";
 
 declare module "blume:openapi" {
@@ -78,6 +73,12 @@ declare module "blume:features" {
   export const loadEpub:
     | (() => Promise<typeof import("epub-gen-memory/bundle")>)
     | null;
+}
+
+declare module "blume:consent-client" {
+  export const startConsentClient: (
+    consent: import("blume/components/layout/consent/types.ts").BlumeConsent
+  ) => void;
 }
 
 declare module "blume:search-client" {

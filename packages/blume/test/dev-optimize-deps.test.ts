@@ -18,6 +18,7 @@ const includeFor = (search?: BlumeConfig["search"]): string[] => {
   const out = astroConfigTemplate({
     askPath: "/p/.blume/src/generated/Ask.astro",
     config: blumeConfigSchema.parse({ search }),
+    consentClientPath: "/p/.blume/src/generated/consent-client.ts",
     contentRoutes: [],
     context: {
       componentsFile: null,

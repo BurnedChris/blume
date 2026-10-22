@@ -29,18 +29,4 @@ export default defineConfig({
     "apps/docs/diffs",
     "packages/blume/CHANGELOG.md",
   ],
-  overrides: [
-    {
-      // `blume/integrations/*` are generated one-line facades over c15t's
-      // script SDK subpaths (scripts/sync-c15t-integrations.ts). The barrel
-      // rule counts every module a re-export loads, and each c15t vendor
-      // pulls in `@c15t/core`'s index (100+ files in the published dist), so
-      // the count is c15t's graph, not ours. Enumerating names instead of
-      // `export *` loads the same modules and would drift from the SDK.
-      files: ["packages/blume/src/integrations/**/*.ts"],
-      rules: {
-        "oxc/no-barrel-file": "off",
-      },
-    },
-  ],
 });

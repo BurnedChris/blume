@@ -22,6 +22,5 @@
     "src/reference/index.ts",
     "src/search/adapters/index.ts",
     "src/sources/index.ts"
-  ],
-  "include": ["src/integrations/**/*.ts"]
+  ]
 }

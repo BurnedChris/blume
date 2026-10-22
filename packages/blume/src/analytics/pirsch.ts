@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { AdapterDescriptor } from "../core/adapter.ts";
 import { adapterDescriptorSchema } from "../core/adapter.ts";
+import type { HeadScript } from "./head.ts";
 
 /** The script Pirsch's dashboard snippet loads. */
 export const PIRSCH_SCRIPT_SRC = "https://api.pirsch.io/pa.js";
@@ -37,8 +38,6 @@ export const pirschAdapterSchema = adapterDescriptorSchema(
 /**
  * Pirsch Analytics. The identification code is public — it's in the tag on
  * every page.
- *
- * @deprecated Use blume/integrations/* in consent.ts. Removed in the next major release.
  */
 export const pirsch = (options: PirschOptions): PirschAdapter => ({
   kind: "pirsch",
@@ -46,3 +45,22 @@ export const pirsch = (options: PirschOptions): PirschAdapter => ({
   requiredSecrets: [],
   runtimeDeps: [],
 });
+
+/**
+ * The deferred tag from the dashboard, with `code` as `data-code`, every other
+ * option as its own `data-` attribute, and the `pianjs` id the script finds
+ * itself by. Pirsch's script tracks history changes on its own, so
+ * client-router navigations need no extra hook.
+ */
+export const pirschHead = (options: PirschOptions): HeadScript[] => {
+  const { code, ...settings } = options;
+  const attributes: HeadScript["attributes"] = {};
+  for (const [setting, value] of Object.entries(settings)) {
+    attributes[`data-${setting}`] = value;
+  }
+  attributes["data-code"] = code;
+  attributes.defer = true;
+  attributes.id = "pianjs";
+  attributes.src = PIRSCH_SCRIPT_SRC;
+  return [{ attributes, content: null }];
+};
