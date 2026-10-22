@@ -26,6 +26,12 @@ const fakeClient = () => {
     translations: { language: "en" },
   };
   const listeners = new Set<(next: FakeSnapshot) => void>();
+  const kernelEvents = new Map<string, (() => void)[]>();
+  const emit = (type: string) => {
+    for (const listener of kernelEvents.get(type) ?? []) {
+      listener();
+    }
+  };
   const client = {
     allow: (measurement: boolean) => {
       snapshot = { ...snapshot, effectivePermissions: { measurement } };
@@ -42,6 +48,19 @@ const fakeClient = () => {
     opened: 0,
     runtime: {
       kernel: {
+        events: {
+          on: (type: string, listener: () => void) => {
+            kernelEvents.set(type, [
+              ...(kernelEvents.get(type) ?? []),
+              listener,
+            ]);
+            return () =>
+              kernelEvents.set(
+                type,
+                (kernelEvents.get(type) ?? []).filter((l) => l !== listener)
+              );
+          },
+        },
         set: {
           language: (language: string) => {
             client.languages.push(language);
@@ -49,6 +68,12 @@ const fakeClient = () => {
           },
         },
       },
+    },
+    /** A save as c15t runs one: the snapshot changes before it's stored. */
+    save: (measurement: boolean) => {
+      emit("command:save:started");
+      client.allow(measurement);
+      return () => emit("command:save:completed");
     },
     subscribe: (listener: (next: FakeSnapshot) => void) => {
       listeners.add(listener);
@@ -151,6 +176,18 @@ describe("c15t()'s browser module", () => {
     c15t.client?.allow(true);
     expect(consent.analytics).toBe(true);
     c15t.client?.allow(false);
+    expect(reports).toEqual([false, true, false]);
+  });
+
+  it("reports a saved choice only once c15t has stored it", () => {
+    page();
+    const { consent, reports } = consentState();
+    start(consent, {});
+    c15t.client?.allow(true);
+    const complete = c15t.client?.save(false);
+    // Reporting the withdrawal now would reload with the old choice stored.
+    expect(reports).toEqual([false, true]);
+    complete?.();
     expect(reports).toEqual([false, true, false]);
   });
 

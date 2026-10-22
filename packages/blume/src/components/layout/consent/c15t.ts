@@ -28,11 +28,27 @@ const connect = (consent: BlumeConsent, client: AstroConsentClient): void => {
   consent.open = () => {
     void client.openDialog();
   };
+  // A save changes the snapshot before c15t has stored it. Reporting a
+  // withdrawal then would let Blume reload the page with the old choice
+  // still stored, so the report waits for the save to finish, the way
+  // c15t's own reload on withdrawal does.
+  let saving = 0;
   const sync = () => {
+    if (saving > 0) {
+      return;
+    }
     consent.set({
       analytics: client.getConsent().effectivePermissions.measurement === true,
     });
   };
+  const { events } = client.runtime.kernel;
+  events.on("command:save:started", () => {
+    saving += 1;
+  });
+  events.on("command:save:completed", () => {
+    saving = Math.max(0, saving - 1);
+    sync();
+  });
   sync();
   client.subscribe(sync);
   syncPresentation(client);

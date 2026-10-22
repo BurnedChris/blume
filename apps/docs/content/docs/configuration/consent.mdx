@@ -99,6 +99,12 @@ export default {
 
 Install `@c15t/integrations` to use its helpers. Load each vendor one way: through c15t's `scripts` or through Blume's `analytics`, not both.
 
+Everything in Blume's `analytics` waits for consent. To load one script without asking, such as cookieless analytics you've decided doesn't need consent, load it through c15t in the `necessary` category, and keep the rest in `analytics`:
+
+```ts c15t.client.ts
+scripts: [{ ...plausibleAnalytics({ domain: "docs.example.com" }), category: "necessary" }],
+```
+
 The banner also works in `blume dev`.
 
 ## Osano
