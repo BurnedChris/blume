@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { noC15tPlugin } from "../src/astro/integration.ts";
 import {
   consentAdapterDependencies,
   missingRuntimeDependencies,
@@ -18,6 +19,7 @@ import {
 } from "../src/consent/c15t-integration.ts";
 import { c15t, native } from "../src/consent/index.ts";
 import type { ConsentAdapter } from "../src/consent/schema.ts";
+import { packageRoot } from "../src/core/package-root.ts";
 import { blumeConfigSchema } from "../src/core/schema.ts";
 import type { ProjectContext } from "../src/core/types.ts";
 
@@ -141,23 +143,55 @@ describe("c15tAstroOptions", () => {
   });
 });
 
+/** The config update Blume's c15t hook hands Astro. */
+interface AstroConfigUpdate {
+  vite: { resolve: { alias: Record<string, string> } };
+}
+
 describe("blumeC15t", () => {
-  it("adds Blume's stylesheet ahead of c15t's own integration", () => {
-    const [styles, integration] = blumeC15t({ options: {}, root });
-    expect(styles?.name).toBe("blume:c15t-styles");
+  it("adds Blume's stylesheet and components ahead of c15t's own integration", () => {
+    const [blume, integration] = blumeC15t({ options: {}, root });
+    expect(blume?.name).toBe("blume:c15t");
     expect(integration?.name).toContain("c15t");
     const injected: [string, string][] = [];
-    // SAFETY: Blume's styles hook reads only `injectScript`, which is all the
-    // stand-in setup options carry.
-    const setup = styles?.hooks["astro:config:setup"] as (options: {
+    const updates: AstroConfigUpdate[] = [];
+    // SAFETY: Blume's hook reads only `injectScript` and `updateConfig`,
+    // which is all the stand-in setup options carry.
+    const setup = blume?.hooks["astro:config:setup"] as (options: {
       injectScript: (stage: string, content: string) => void;
+      updateConfig: (config: AstroConfigUpdate) => void;
     }) => void;
     setup({
       injectScript: (stage, content) => injected.push([stage, content]),
+      updateConfig: (config) => updates.push(config),
     });
     expect(injected).toEqual([
       ["page-ssr", 'import "blume/consent/c15t.css";'],
     ]);
+    expect(updates).toEqual([
+      {
+        vite: {
+          resolve: {
+            alias: {
+              "blume:c15t-banner": "blume/components/layout/C15tBanner.astro",
+              "blume:c15t-head": "blume/components/layout/C15tHead.astro",
+            },
+          },
+        },
+      },
+    ]);
+  });
+});
+
+describe("noC15tPlugin", () => {
+  it("resolves the c15t components to an empty one where c15t didn't alias them", () => {
+    const { resolveId } = noC15tPlugin();
+    for (const id of ["blume:c15t-banner", "blume:c15t-head"]) {
+      expect(resolveId(id)).toBe(
+        path.join(packageRoot(), "src/components/layout/NoConsent.astro")
+      );
+    }
+    expect(resolveId("blume:consent-client")).toBeUndefined();
   });
 });
 
@@ -211,7 +245,7 @@ const renderConfig = (
   });
 
 describe("astroConfigTemplate with consent", () => {
-  it("mounts c15t's integration and components only for c15t()", () => {
+  it("mounts c15t's integration only for c15t()", () => {
     const out = renderConfig(c15t({ backendURL: "https://c.example.com" }));
     expect(out).toContain(
       'import { blumeC15t } from "blume/consent/c15t-integration";'
@@ -219,24 +253,11 @@ describe("astroConfigTemplate with consent", () => {
     expect(out).toContain(
       '...blumeC15t({ options: {"backendURL":"https://c.example.com"}, root: "/p" })'
     );
-    expect(out).toContain(
-      '"blume:c15t-banner": "blume/components/layout/C15tBanner.astro"'
-    );
-    expect(out).toContain(
-      '"blume:c15t-head": "blume/components/layout/C15tHead.astro"'
-    );
   });
 
-  it("points other sites' c15t aliases at an empty component", () => {
+  it("leaves c15t out of other sites' configs", () => {
     for (const consent of [undefined, native()]) {
-      const out = renderConfig(consent);
-      expect(out).not.toContain("blumeC15t");
-      expect(out).toContain(
-        '"blume:c15t-banner": "blume/components/layout/NoConsent.astro"'
-      );
-      expect(out).toContain(
-        '"blume:c15t-head": "blume/components/layout/NoConsent.astro"'
-      );
+      expect(renderConfig(consent)).not.toContain("c15t");
     }
   });
 

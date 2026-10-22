@@ -143,8 +143,9 @@ export const c15tAstroOptions = (
 
 /**
  * The Astro integrations behind `consent: c15t()`: Blume's stylesheet for
- * c15t's surfaces, then c15t's own integration, which adds its middleware,
- * its boot script, and the scripts from its options and client entrypoint.
+ * c15t's surfaces and the layouts' `blume:c15t-*` imports pointed at c15t's
+ * components, then c15t's own integration, which adds its middleware, its
+ * boot script, and the scripts from its options and client entrypoint.
  */
 export const blumeC15t = (input: {
   options: C15tOptions;
@@ -152,11 +153,21 @@ export const blumeC15t = (input: {
 }): AstroIntegration[] => [
   {
     hooks: {
-      "astro:config:setup": ({ injectScript }) => {
+      "astro:config:setup": ({ injectScript, updateConfig }) => {
         injectScript("page-ssr", 'import "blume/consent/c15t.css";');
+        updateConfig({
+          vite: {
+            resolve: {
+              alias: {
+                "blume:c15t-banner": "blume/components/layout/C15tBanner.astro",
+                "blume:c15t-head": "blume/components/layout/C15tHead.astro",
+              },
+            },
+          },
+        });
       },
     },
-    name: "blume:c15t-styles",
+    name: "blume:c15t",
   },
   c15tIntegration(c15tAstroOptions(input.options, input.root)),
 ];

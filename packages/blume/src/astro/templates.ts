@@ -174,13 +174,6 @@ const astroConfigImportLine = (options: { hasFonts: boolean }): string => {
 };
 
 /**
- * Integration packages the generated runtime imports. Declaring them in
- * `.blume/package.json` lets Astro's framework-package crawl discover and bundle
- * them — notably the React renderer's server entry, which imports the
- * `astro:react:opts` virtual module and must not be externalized (this applies
- * across the `ssr`, `prerender`, and `client` Vite environments).
- */
-/**
  * Whether the generated project needs React's renderer: for project
  * `.tsx`/`.jsx`, the assistant, React islands, and `consent: c15t()`, whose
  * preferences dialog is a React island.
@@ -198,14 +191,12 @@ export const projectNeedsReact = (input: {
 
 /**
  * The generated config's share of `consent: c15t()`: c15t's own integration,
- * and the `blume:c15t-*` aliases that point at its components. Other sites
- * get no integration and aliases to `NoConsent.astro`, so they never import
- * c15t. c15t resolves the client entrypoint from the Blume project, which an
- * ejected app's config sits at the root of.
+ * which also points the layouts' `blume:c15t-*` imports at its components.
+ * Other sites get nothing, so they never import c15t. c15t resolves the
+ * client entrypoint from the Blume project, which an ejected app's config
+ * sits at the root of.
  */
 interface C15tWiring {
-  /** A `blume:c15t-*` alias target: the named component, or `NoConsent`. */
-  component: (name: string) => string;
   importLine: string;
   integrations: string[];
 }
@@ -215,26 +206,27 @@ const renderC15tWiring = (
   context: ProjectContext,
   ejected: boolean
 ): C15tWiring => {
-  const c15t = consent?.kind === "c15t" ? consent : null;
-  const component = (name: string): string =>
-    JSON.stringify(
-      `blume/components/layout/${c15t ? name : "NoConsent"}.astro`
-    );
-  if (!c15t) {
-    return { component, importLine: "", integrations: [] };
+  if (consent?.kind !== "c15t") {
+    return { importLine: "", integrations: [] };
   }
   const root = ejected
     ? `fileURLToPath(new URL(".", import.meta.url))`
     : JSON.stringify(context.root);
   return {
-    component,
     importLine: `import { blumeC15t } from "blume/consent/c15t-integration";\n`,
     integrations: [
-      `...blumeC15t({ options: ${JSON.stringify(c15t.options)}, root: ${root} })`,
+      `...blumeC15t({ options: ${JSON.stringify(consent.options)}, root: ${root} })`,
     ],
   };
 };
 
+/**
+ * Integration packages the generated runtime imports. Declaring them in
+ * `.blume/package.json` lets Astro's framework-package crawl discover and bundle
+ * them — notably the React renderer's server entry, which imports the
+ * `astro:react:opts` virtual module and must not be externalized (this applies
+ * across the `ssr`, `prerender`, and `client` Vite environments).
+ */
 export const runtimeDependencies = (options: {
   config: ResolvedConfig;
   needsReact: boolean;
@@ -1056,8 +1048,6 @@ ${userConfigSetup}export default defineConfig({
     resolve: {
       alias: {
         "blume:ask": ${configPath(askPath, ejected)},
-        "blume:c15t-banner": ${c15t.component("C15tBanner")},
-        "blume:c15t-head": ${c15t.component("C15tHead")},
         "blume:consent-client": ${configPath(consentClientPath, ejected)},
         "blume:examples": ${configPath(examplesPath, ejected)},
         "blume:examples-theme": ${configPath(examplesThemePath, ejected)},
