@@ -1,0 +1,35 @@
+/* Blume's look for c15t's banner and dialog, through c15t's own tokens.
+   c15t sets its defaults on `:where(:root)`, so a plain `:root` wins. */
+:root {
+  /* One flat surface, like Blume's other cards, instead of a tinted footer. */
+  --consent-banner-footer-background-color: var(--c15t-surface);
+  --consent-banner-footer-background-color-dark: var(--c15t-surface);
+  /* The "Secured by" tag as a tab of the card: same surface and border,
+     muted text, the accent on the c15t mark only, no shadow, and a line
+     where it meets the card so it reads as separate. */
+  --consent-branding-tag-background-color: var(--c15t-surface);
+  --consent-branding-tag-border-color: var(--c15t-border);
+  --consent-branding-tag-text-color: var(--c15t-text-muted);
+  --consent-branding-tag-mark-color: var(--c15t-primary);
+  --consent-branding-tag-shadow: none;
+  --consent-branding-tag-attached-edge-width: 1px;
+}
+
+/* From `lg`, fill the gutter beside the article instead of covering it.
+   `--blume-consent-free` is the room before the article's leading edge
+   (CONSENT_FIT_SCRIPT); take off the 1rem inset and a 1.5rem gap. Never
+   narrower than the sidebar's 15.5rem content box, nor wider than c15t's
+   own 27.5rem. c15t lays the footer out by the card's width, so a narrow
+   card gets Reject/Accept on one row and Customize below. */
+@media (min-width: 64rem) {
+  :root {
+    --consent-banner-max-width: clamp(
+      15.5rem,
+      calc(var(--blume-consent-free, 0px) - 2.5rem),
+      27.5rem
+    );
+  }
+  [data-testid="consent-banner-root"][data-variant="floating"] {
+    padding: 1rem;
+  }
+}

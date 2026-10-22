@@ -58,6 +58,7 @@ import {
 import { isExternalUrl } from "../../core/base-path.ts";
 import { NEW_TAB_HINT_ID, newTabAttrs } from "../../core/new-tab.ts";
 import Analytics from "./Analytics.astro";
+import C15tBanner from "blume:c15t-banner";
 import ConsentBanner from "./ConsentBanner.astro";
 import ConsentHead from "./ConsentHead.astro";
 import WebMcp from "./WebMcp.astro";
@@ -1414,6 +1415,7 @@ const localeRedirect = localeTargets
         />
       )
     }
+    {consent?.kind === "c15t" && <C15tBanner />}
   <IconSprite />
   </body>
 </html>

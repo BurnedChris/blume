@@ -75,6 +75,16 @@ declare module "blume:features" {
     | null;
 }
 
+declare module "blume:c15t-banner" {
+  const C15tBanner: typeof import("blume/components/layout/C15tBanner.astro").default;
+  export default C15tBanner;
+}
+
+declare module "blume:c15t-head" {
+  const C15tHead: typeof import("blume/components/layout/C15tHead.astro").default;
+  export default C15tHead;
+}
+
 declare module "blume:consent-client" {
   export const startConsentClient: (
     consent: import("blume/components/layout/consent/types.ts").BlumeConsent

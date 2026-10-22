@@ -15,6 +15,7 @@ import { NEW_TAB_HINT_ID } from "../../core/new-tab.ts";
 import type { FontHead } from "../../theme/fonts.ts";
 import type { Navigation } from "../../core/types.ts";
 import Analytics from "./Analytics.astro";
+import C15tBanner from "blume:c15t-banner";
 import ConsentBanner from "./ConsentBanner.astro";
 import ConsentHead from "./ConsentHead.astro";
 import WebMcp from "./WebMcp.astro";
@@ -186,6 +187,7 @@ createIconSprite(Astro.locals);
         />
       )
     }
+    {consent?.kind === "c15t" && <C15tBanner />}
   <IconSprite />
   </body>
 </html>

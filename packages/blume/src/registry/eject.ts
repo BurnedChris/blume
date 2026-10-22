@@ -61,6 +61,7 @@ import {
   playgroundProxyTemplate,
   rawMarkdownEndpointTemplate,
   rssEndpointTemplate,
+  projectNeedsReact,
   runtimeDependencies,
   runtimeTsconfigTemplate,
   consentClientTemplate,
@@ -625,8 +626,12 @@ export const eject = async (
     ...examples.examples.map((example) => example.framework),
     ...slotPlan.frameworks,
   ]);
-  const needsReact =
-    needsReactRaw || assistantEnabled || frameworks.has("react");
+  const needsReact = projectNeedsReact({
+    assistantEnabled,
+    consent: config.consent,
+    detectedReact: needsReactRaw,
+    frameworks,
+  });
   const needsVue = frameworks.has("vue");
   const needsSvelte = frameworks.has("svelte");
 

@@ -15,5 +15,6 @@
 
 /** Each adapter's browser module, as the generated project imports it. */
 export const CONSENT_CLIENT_MODULES = new Map([
+  ["c15t", "blume/components/layout/consent/c15t.ts"],
   ["native", "blume/components/layout/consent/native.ts"],
 ]);

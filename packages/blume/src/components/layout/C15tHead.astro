@@ -1,0 +1,18 @@
+---
+import ConsentScript from "@c15t/astro/components/consent-script.astro";
+
+// `c15t()`'s `<head>` output, behind the `blume:c15t-head` alias so a site
+// without c15t never imports it (`NoConsent.astro` stands in). c15t's
+// `ConsentScript` inlines its first-paint styles and the server-resolved
+// consent config, so the banner boots without a request.
+---
+
+{/* Runs right after the theme script, before paint: c15t's dark tokens key
+    off this class, and Blume's theme, not c15t, decides it. */}
+<script is:inline>
+  document.documentElement.classList.toggle(
+    "c15t-dark",
+    document.documentElement.dataset.theme === "dark"
+  );
+</script>
+<ConsentScript />
