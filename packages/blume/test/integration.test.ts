@@ -292,7 +292,7 @@ const configDone = (withSetup: boolean): InjectedTypes | undefined => {
   const integration = blumeIntegration({ contentRoutes: [], pages: [] });
   if (withSetup) {
     // SAFETY: the setup hook only calls `addMiddleware`, `createCodegenDir`,
-    // and `injectRoute`, all of which the fixture provides.
+    // `injectRoute`, and `updateConfig`, all of which the fixture provides.
     integration.hooks["astro:config:setup"]?.({
       addMiddleware: () => {
         // The icon-sprite middleware; irrelevant to the injected types.
@@ -300,6 +300,9 @@ const configDone = (withSetup: boolean): InjectedTypes | undefined => {
       createCodegenDir: () => CODEGEN_DIR,
       injectRoute: () => {
         // No pages configured, so this is never reached.
+      },
+      updateConfig: () => {
+        // The c15t fallback plugin; irrelevant to the injected types.
       },
     } as never);
   }
@@ -342,8 +345,8 @@ describe("blumeIntegration astro:config:setup", () => {
   it("injects each user page route as a prerendered route", () => {
     const injected: InjectedPageRoute[] = [];
     const middleware: { entrypoint: string; order: string }[] = [];
-    // SAFETY: the hook only calls `addMiddleware`, `createCodegenDir`, and
-    // `injectRoute`, which the fixture provides.
+    // SAFETY: the hook only calls `addMiddleware`, `createCodegenDir`,
+    // `injectRoute`, and `updateConfig`, which the fixture provides.
     blumeIntegration({
       contentRoutes: [],
       pages: [
@@ -355,6 +358,7 @@ describe("blumeIntegration astro:config:setup", () => {
         middleware.push(entry),
       createCodegenDir: () => CODEGEN_DIR,
       injectRoute: (route: InjectedPageRoute) => injected.push(route),
+      updateConfig: () => null,
     } as never);
 
     // Both run innermost, so a project's own middleware sees the finished
@@ -394,6 +398,7 @@ describe("blumeIntegration astro:config:setup", () => {
         middleware.push(entry.entrypoint),
       createCodegenDir: () => CODEGEN_DIR,
       injectRoute: () => {},
+      updateConfig: () => null,
     } as never);
     expect(middleware).toEqual(["blume/components/icon-sprite-middleware.ts"]);
   });

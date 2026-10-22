@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   BANNER_INIT_SCRIPT,
+  CONSENT_FIT_SCRIPT,
   SCALAR_THEME_INIT_SCRIPT,
   THEME_INIT_SCRIPT,
 } from "../src/components/layout/head-scripts.ts";
@@ -454,5 +455,127 @@ describe("BANNER_INIT_SCRIPT", () => {
     globalThis.localStorage.getItem = () => "1";
     document.dispatch("astro:after-swap", incoming);
     expect(document.documentElement.hasAttribute(HIDDEN)).toBe(true);
+  });
+});
+
+const runConsentFit = async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "blume-head-scripts-"));
+  runs += 1;
+  const file = path.join(dir, `consent-fit-${runs}.js`);
+  await writeFile(file, CONSENT_FIT_SCRIPT);
+  await import(file);
+};
+
+const consentFitPage = (input: {
+  dir?: string;
+  article?: { left: number; right: number };
+}) => {
+  const style = new Map<string, string>();
+  const documentListeners = new Map<string, (() => void)[]>();
+  const fitWindowListeners = new Map<string, (() => void)[]>();
+  const frames: (() => void)[] = [];
+  const page = {
+    article: input.article,
+  };
+  const document = {
+    addEventListener: (type: string, listener: () => void) => {
+      documentListeners.set(type, [
+        ...(documentListeners.get(type) ?? []),
+        listener,
+      ]);
+    },
+    documentElement: {
+      dir: input.dir ?? "",
+      style: {
+        removeProperty: (name: string) => style.delete(name),
+        setProperty: (name: string, value: string) => style.set(name, value),
+      },
+    },
+    querySelector: (selector: string) =>
+      selector === "#blume-content article" && page.article
+        ? { getBoundingClientRect: () => page.article }
+        : null,
+  };
+  const window = {};
+  Object.assign(globalThis, {
+    addEventListener: (type: string, listener: () => void) => {
+      fitWindowListeners.set(type, [
+        ...(fitWindowListeners.get(type) ?? []),
+        listener,
+      ]);
+    },
+    document,
+    innerWidth: 1440,
+    requestAnimationFrame: (frame: () => void) => {
+      frames.push(frame);
+      return frames.length;
+    },
+    window,
+  });
+  return {
+    documentListeners,
+    frames,
+    page,
+    run: runConsentFit,
+    style,
+    windowListeners: fitWindowListeners,
+  };
+};
+
+describe("CONSENT_FIT_SCRIPT", () => {
+  afterEach(() => {
+    for (const name of [
+      "addEventListener",
+      "innerWidth",
+      "requestAnimationFrame",
+      "window",
+    ]) {
+      Reflect.deleteProperty(globalThis, name);
+    }
+  });
+
+  test("measures the room before the article's leading edge", async () => {
+    const ltr = consentFitPage({ article: { left: 384, right: 1056 } });
+    await ltr.run();
+    expect(ltr.style.get("--blume-consent-free")).toBe("384px");
+
+    const rtl = consentFitPage({
+      article: { left: 384, right: 1056 },
+      dir: "rtl",
+    });
+    await rtl.run();
+    expect(rtl.style.get("--blume-consent-free")).toBe("384px");
+    rtl.page.article = { left: 400, right: 1100 };
+    await rtl.run();
+    expect(rtl.style.get("--blume-consent-free")).toBe("340px");
+  });
+
+  test("leaves the stylesheet default on pages without an article", async () => {
+    const page = consentFitPage({});
+    page.style.set("--blume-consent-free", "384px");
+    await page.run();
+    expect(page.style.has("--blume-consent-free")).toBe(false);
+  });
+
+  test("measures again on resize and navigation, listening once", async () => {
+    const page = consentFitPage({ article: { left: 384, right: 1056 } });
+    await page.run();
+    // A swapped body runs the script again; it must not stack listeners.
+    await page.run();
+    expect(page.windowListeners.get("resize")).toHaveLength(1);
+    expect(page.documentListeners.get("astro:page-load")).toHaveLength(1);
+
+    page.page.article = { left: 320, right: 960 };
+    const [resize] = page.windowListeners.get("resize") ?? [];
+    resize?.();
+    // A burst of resizes waits for one frame.
+    resize?.();
+    expect(page.frames).toHaveLength(1);
+    page.frames[0]?.();
+    expect(page.style.get("--blume-consent-free")).toBe("320px");
+
+    page.page.article = { left: 280, right: 952 };
+    page.documentListeners.get("astro:page-load")?.[0]?.();
+    expect(page.style.get("--blume-consent-free")).toBe("280px");
   });
 });

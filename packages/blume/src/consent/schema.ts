@@ -1,11 +1,12 @@
 import { z } from "zod";
 
+import { c15tAdapterSchema } from "./c15t.ts";
 import { ethycaAdapterSchema } from "./ethyca.ts";
 import { nativeAdapterSchema } from "./native.ts";
 import { osanoAdapterSchema } from "./osano.ts";
 
 const ADAPTER_HINT =
-  'consent takes one adapter — e.g. `consent: native()` or `consent: osano({ customerId, configId })`, imported from "blume/consent".';
+  'consent takes one adapter — e.g. `consent: native()`, `consent: c15t()`, or `consent: osano({ customerId, configId })`, imported from "blume/consent".';
 
 /**
  * The configured consent adapter, as its factory returned it. Anything that
@@ -14,7 +15,12 @@ const ADAPTER_HINT =
  */
 export const consentAdapterSchema = z.discriminatedUnion(
   "kind",
-  [ethycaAdapterSchema, nativeAdapterSchema, osanoAdapterSchema],
+  [
+    c15tAdapterSchema,
+    ethycaAdapterSchema,
+    nativeAdapterSchema,
+    osanoAdapterSchema,
+  ],
   { error: ADAPTER_HINT }
 );
 

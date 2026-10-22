@@ -1,0 +1,15 @@
+---
+import ConsentBanner from "@c15t/astro/components/consent-banner.astro";
+import ConsentDialog from "@c15t/astro/components/consent-dialog.astro";
+
+import { CONSENT_FIT_SCRIPT } from "./head-scripts.ts";
+
+// `c15t()`'s banner and preferences dialog, behind the `blume:c15t-banner`
+// alias so a site without c15t never imports them (`NoConsent.astro` stands
+// in). The fit script, right after the banner, sizes it to the gutter beside
+// the article before it first paints (see `consent/c15t.css`).
+---
+
+<ConsentBanner />
+<ConsentDialog />
+<script is:inline set:html={CONSENT_FIT_SCRIPT} />

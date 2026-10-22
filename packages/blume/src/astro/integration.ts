@@ -9,6 +9,7 @@ import { loadEnvFiles } from "../cli/env.ts";
 import { normalizeBasePath } from "../core/base-path.ts";
 import type { CustomPageRoute } from "../core/custom-pages.ts";
 import { enrichDiagnostic } from "../core/diagnostics.ts";
+import { packageRoot } from "../core/package-root.ts";
 import { POWERED_BY_HEADERS } from "../core/powered-by.ts";
 import { scanProject } from "../core/project-graph.ts";
 import type { BlumeProject } from "../core/project-graph.ts";
@@ -471,6 +472,22 @@ const identifyBlume = (
   next();
 };
 
+/**
+ * The layouts' `blume:c15t-*` imports. `consent: c15t()` aliases them to
+ * c15t's components (see `consent/c15t-integration.ts`), and Vite resolves
+ * aliases ahead of plugins. Every other site, including an app ejected
+ * before `c15t()` existed, gets the empty component from here.
+ */
+const C15T_MODULE_IDS = new Set(["blume:c15t-banner", "blume:c15t-head"]);
+
+export const noC15tPlugin = () => {
+  const empty = join(packageRoot(), "src/components/layout/NoConsent.astro");
+  return {
+    name: "blume:no-c15t",
+    resolveId: (id: string) => (C15T_MODULE_IDS.has(id) ? empty : undefined),
+  };
+};
+
 /** The `.d.ts` the integration injects for the `blume:*` virtual modules. */
 const MODULE_TYPES_FILE = "modules.d.ts";
 
@@ -538,8 +555,10 @@ export const blumeIntegration = (
         addMiddleware,
         createCodegenDir,
         injectRoute,
+        updateConfig,
       }) => {
         codegenDir = createCodegenDir();
+        updateConfig({ vite: { plugins: [noC15tPlugin()] } });
         // Splices each page's icon sprite in once the page has rendered (see
         // components/icon-sprite-middleware.ts). Innermost, so a project's
         // own middleware sees the finished HTML.

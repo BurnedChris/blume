@@ -173,6 +173,7 @@ import {
   rawMarkdownEndpointTemplate,
   rssEndpointTemplate,
   staticJsonEndpointTemplate,
+  projectNeedsReact,
   runtimeDependencies,
   runtimePackageTemplate,
   runtimeTsconfigTemplate,
@@ -2117,8 +2118,12 @@ export const generateRuntime = async (
     ...slotPlan.frameworks,
   ]);
   const dependencyWarnings = await dependencyPreflight(project, frameworks);
-  const needsReact =
-    detectedReact || assistantEnabled || frameworks.has("react");
+  const needsReact = projectNeedsReact({
+    assistantEnabled,
+    consent: config.consent,
+    detectedReact,
+    frameworks,
+  });
   const needsVue = frameworks.has("vue");
   const needsSvelte = frameworks.has("svelte");
 

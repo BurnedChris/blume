@@ -140,6 +140,24 @@ export const deploymentAdapterDependencies = (
     pkgDir
   );
 
+/**
+ * The consent adapter's packages, when missing: `c15t()` imports c15t's
+ * Astro integration and dialog, which are optional peers.
+ */
+export const consentAdapterDependencies = (
+  consent: ResolvedConfig["consent"],
+  root: string,
+  pkgDir: string = packageRoot()
+): MissingDependency[] =>
+  consent
+    ? unresolved(
+        `Consent adapter "${consent.kind}"`,
+        consent.runtimeDeps,
+        root,
+        pkgDir
+      )
+    : [];
+
 /** Astro integration package each non-React island framework needs installed. */
 const ISLAND_FRAMEWORK_DEPS = new Map([
   ["svelte", "@astrojs/svelte"],
@@ -172,7 +190,7 @@ export const islandFrameworkDependencies = (
  * Every package the resolved config's adapters (and the given island
  * frameworks) import that isn't installed: the search SDK, content source
  * SDKs, the assistant and narration provider SDKs, the deployment adapter,
- * and island integrations. The adapters' `runtimeDeps` are the one place that
+ * the consent adapter, and island integrations. The adapters' `runtimeDeps` are the one place that
  * knows.
  */
 export const missingRuntimeDependencies = (
@@ -186,6 +204,7 @@ export const missingRuntimeDependencies = (
   ...assistantProviderDependencies(config.ai.assistant, root, pkgDir),
   ...narrationProviderDependencies(config.narration, root, pkgDir),
   ...deploymentAdapterDependencies(config.deployment, root, pkgDir),
+  ...consentAdapterDependencies(config.consent, root, pkgDir),
   ...islandFrameworkDependencies(frameworks, root),
 ];
 

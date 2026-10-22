@@ -174,6 +174,53 @@ const astroConfigImportLine = (options: { hasFonts: boolean }): string => {
 };
 
 /**
+ * Whether the generated project needs React's renderer: for project
+ * `.tsx`/`.jsx`, the assistant, React islands, and `consent: c15t()`, whose
+ * preferences dialog is a React island.
+ */
+export const projectNeedsReact = (input: {
+  assistantEnabled: boolean;
+  consent: ResolvedConfig["consent"];
+  detectedReact: boolean;
+  frameworks: ReadonlySet<string>;
+}): boolean =>
+  input.detectedReact ||
+  input.assistantEnabled ||
+  input.frameworks.has("react") ||
+  input.consent?.kind === "c15t";
+
+/**
+ * The generated config's share of `consent: c15t()`: c15t's own integration,
+ * which also points the layouts' `blume:c15t-*` imports at its components.
+ * Other sites get nothing, so they never import c15t. c15t resolves the
+ * client entrypoint from the Blume project, which an ejected app's config
+ * sits at the root of.
+ */
+interface C15tWiring {
+  importLine: string;
+  integrations: string[];
+}
+
+const renderC15tWiring = (
+  consent: ResolvedConfig["consent"],
+  context: ProjectContext,
+  ejected: boolean
+): C15tWiring => {
+  if (consent?.kind !== "c15t") {
+    return { importLine: "", integrations: [] };
+  }
+  const root = ejected
+    ? `fileURLToPath(new URL(".", import.meta.url))`
+    : JSON.stringify(context.root);
+  return {
+    importLine: `import { blumeC15t } from "blume/consent/c15t-integration";\n`,
+    integrations: [
+      `...blumeC15t({ options: ${JSON.stringify(consent.options)}, root: ${root} })`,
+    ],
+  };
+};
+
+/**
  * Integration packages the generated runtime imports. Declaring them in
  * `.blume/package.json` lets Astro's framework-package crawl discover and bundle
  * them — notably the React renderer's server entry, which imports the
@@ -799,6 +846,7 @@ export const astroConfigTemplate = (options: {
   // Framework renderers are only wired in when an island (or the assistant, for React)
   // needs them. The core theme is Astro-first and ships no client JS.
   const reactImport = needsReact ? `import react from "@astrojs/react";\n` : "";
+  const c15t = renderC15tWiring(config.consent, context, ejected);
   const vueImport = needsVue ? `import vue from "@astrojs/vue";\n` : "";
   const svelteImport = needsSvelte
     ? `import svelte from "@astrojs/svelte";\n`
@@ -865,10 +913,12 @@ export const astroConfigTemplate = (options: {
   if (needsSvelte) {
     integrations.push("svelte()");
   }
-  // Always mounted: injects user pages (a no-op when there are none) and wires
-  // up dev-server `Accept: text/markdown` negotiation over the content routes,
-  // plus the homepage agent-discovery `Link` header.
+  // c15t's integration, when it's the consent adapter. Then, always mounted:
+  // injects user pages (a no-op when there are none) and wires up dev-server
+  // `Accept: text/markdown` negotiation over the content routes, plus the
+  // homepage agent-discovery `Link` header.
   integrations.push(
+    ...c15t.integrations,
     `blumeIntegration(${JSON.stringify(
       blumeIntegrationOptions({
         config,
@@ -897,7 +947,7 @@ ${fileUrlImport}${defineConfigImport}
 import mdx from "@astrojs/mdx";
 import tailwindcss from "@tailwindcss/vite";
 import { blumeMarkdownProcessor, blumeMdxProcessor, blumeShikiTransformers, blumeTwoslashTransformer } from "blume/markdown";
-${reactImport}${vueImport}${svelteImport}${blumeImport}${adapterImport}
+${c15t.importLine}${reactImport}${vueImport}${svelteImport}${blumeImport}${adapterImport}
 ${userConfigSetup}export default defineConfig({
   root: ${JSON.stringify(context.outDir)},
   srcDir: ${JSON.stringify(`${context.outDir}/src`)},

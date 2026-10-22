@@ -25,9 +25,11 @@
  * script (`osano.ts` is an example). A manager that ships as an npm package
  * does it in a browser module instead, registered in `clients.ts`, with its
  * packages in the factory's `runtimeDeps` (`native()`'s banner is the
- * example).
+ * example; `c15t()` is one with packages).
  */
 export type { AdapterDescriptor, JsonValue } from "../core/adapter.ts";
+export { c15t } from "./c15t.ts";
+export type { C15tAdapter, C15tOptions } from "./c15t.ts";
 export { ethyca } from "./ethyca.ts";
 export type { EthycaAdapter, EthycaOptions } from "./ethyca.ts";
 export { native } from "./native.ts";

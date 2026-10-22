@@ -19,6 +19,20 @@ declare module "blume:search-client" {
   export const createSearch: (options?: Options) => Fn | Promise<Fn>;
 }
 
+declare module "blume:c15t-banner" {
+  /** c15t's banner and dialog for `consent: c15t()`; `NoConsent.astro` otherwise. */
+  // oxlint-disable-next-line typescript/consistent-type-imports
+  const C15tBanner: typeof import("./components/layout/C15tBanner.astro").default;
+  export default C15tBanner;
+}
+
+declare module "blume:c15t-head" {
+  /** c15t's head script for `consent: c15t()`; `NoConsent.astro` otherwise. */
+  // oxlint-disable-next-line typescript/consistent-type-imports
+  const C15tHead: typeof import("./components/layout/C15tHead.astro").default;
+  export default C15tHead;
+}
+
 declare module "blume:consent-client" {
   /** Start the configured consent adapter's browser module (see `consentClientTemplate`); a no-op for one without. */
   // oxlint-disable-next-line typescript/consistent-type-imports

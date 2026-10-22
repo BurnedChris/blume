@@ -1,9 +1,9 @@
 ---
 title: Cookie consent
-description: Ask readers before analytics runs, with Blume's own banner or a hosted consent manager like Osano or Ethyca, as an adapter in blume.config.ts.
+description: Ask readers before analytics runs, with Blume's own banner, c15t, or a hosted consent manager like Osano or Ethyca, as an adapter in blume.config.ts.
 ---
 
-Set `consent` in `blume.config.ts` to ask readers before your [analytics](/docs/configuration/analytics) runs. It takes one adapter from `blume/consent`: Blume's own banner, or a hosted consent manager you already use.
+Set `consent` in `blume.config.ts` to ask readers before your [analytics](/docs/configuration/analytics) runs. It takes one adapter from `blume/consent`: Blume's own banner, [c15t](#c15t), or a hosted consent manager you already use.
 
 ```ts blume.config.ts lineNumbers
 import { defineConfig } from "blume";
@@ -30,6 +30,7 @@ Consent is opt-in. Without `consent`, analytics runs as the page loads, as it al
 | Adapter    | Consent manager                      | Required                 |
 | ---------- | ------------------------------------ | ------------------------ |
 | `native()` | [Blume's own banner](#blumes-banner) | —                        |
+| `c15t()`   | [c15t](#c15t)                        | —                        |
 | `osano()`  | [Osano](#osano)                      | `customerId`, `configId` |
 | `ethyca()` | [Ethyca](#ethyca)                    | `privacyCenter`          |
 
@@ -46,6 +47,65 @@ consent: native({
 `policy` takes a page route or a full URL. The banner's text is translated in every built-in language. To change the wording, override the `consent` [UI strings](/docs/content/i18n#translated-ui) (`message`, `accept`, `decline`, `policy`, `settings`) with `i18n.ui`.
 
 The banner also works in `blume dev`, so you can see it while you write. Analytics itself only loads in production builds.
+
+## c15t
+
+`c15t()` runs [c15t](https://c15t.com)'s banner and preferences dialog through c15t's own Astro integration. Blume's analytics run once the reader allows c15t's `measurement` category, and the footer's **Cookie settings** link opens c15t's dialog. The banner and dialog take your site's colors, corners, fonts, and light/dark theme. Install c15t's packages first:
+
+```bash
+npm install @c15t/astro @c15t/react
+```
+
+With no backend, the banner works offline: choices stay in the reader's browser, and every reader is asked. To keep consent records and pick a policy by region, connect an [Inth](https://inth.com) project or a self-hosted c15t backend with `backendURL`, or set `PUBLIC_C15T_BACKEND_URL` in `.env`:
+
+```ts blume.config.ts lineNumbers
+import { defineConfig } from "blume";
+import { c15t } from "blume/consent";
+
+export default defineConfig({
+  consent: c15t({
+    backendURL: "https://your-project.inth.app",
+    legalLinks: { privacyPolicy: { href: "/privacy" } },
+  }),
+});
+```
+
+`c15t()` takes the same options as c15t's Astro integration, such as `mode`, `legalLinks`, `theme`, and `scripts`, except `ui` and `colorScheme`, which Blume sets. Build a `mode` with `hosted()`, `manifest()`, or `offline()` from `@c15t/astro`. The options have to be plain data, since Blume writes them into the generated site.
+
+### Scripts
+
+c15t can also load your vendor scripts and gate them by category. Scripts load the way they do on any c15t site. A script with no callbacks can go in `scripts` on `c15t()`:
+
+```ts blume.config.ts
+consent: c15t({
+  scripts: [
+    { id: "analytics", category: "measurement", src: "https://analytics.example.com/script.js" },
+  ],
+}),
+```
+
+Helpers from [`@c15t/integrations`](https://c15t.com/docs/integrations) carry callbacks, so they go in a `c15t.client.ts` next to `blume.config.ts`. Blume finds the file by name; set `clientEntrypoint` on `c15t()` to use another path.
+
+```ts c15t.client.ts lineNumbers
+import type { C15tClientOptionsExtension } from "@c15t/astro";
+import { posthog } from "@c15t/integrations/posthog";
+
+export default {
+  scripts: [
+    posthog({ id: "phc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }),
+  ],
+} satisfies C15tClientOptionsExtension;
+```
+
+Install `@c15t/integrations` to use its helpers. Load each vendor one way: through c15t's `scripts` or through Blume's `analytics`, not both.
+
+Everything in Blume's `analytics` waits for consent. To load one script without asking, such as cookieless analytics you've decided doesn't need consent, load it through c15t in the `necessary` category, and keep the rest in `analytics`:
+
+```ts c15t.client.ts
+scripts: [{ ...plausibleAnalytics({ domain: "docs.example.com" }), category: "necessary" }],
+```
+
+The banner also works in `blume dev`.
 
 ## Osano
 

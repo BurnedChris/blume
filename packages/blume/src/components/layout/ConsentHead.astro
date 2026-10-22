@@ -1,4 +1,6 @@
 ---
+import C15tHead from "blume:c15t-head";
+
 import { consentHead } from "../../consent/head.ts";
 import { CONSENT_INIT_SCRIPT } from "../../consent/init.ts";
 import type { BlumeDataConfig } from "../../core/data.ts";
@@ -9,8 +11,9 @@ import type { BlumeDataConfig } from "../../core/data.ts";
 // hosted consent manager's loader and the bridge that reports its answers —
 // and the runtime that runs the held analytics (`consent/client.ts`), which
 // starts the adapter's browser module, if it has one (`blume:consent-client`,
-// see `consent/clients.ts`). Like analytics, a hosted manager loads in
-// production builds only; a browser module (`native()`'s banner) works in
+// see `consent/clients.ts`). `c15t()` adds c15t's own head script
+// (`C15tHead.astro`). Like analytics, a hosted manager loads in production
+// builds only; a browser module (`native()`'s banner, `c15t()`) works in
 // `blume dev` too.
 interface Props {
   consent: NonNullable<BlumeDataConfig["consent"]>;
@@ -21,6 +24,7 @@ const tags = import.meta.env.PROD ? consentHead(consent) : [];
 ---
 
 <script data-kind={consent.kind} is:inline set:html={CONSENT_INIT_SCRIPT} />
+{consent.kind === "c15t" && <C15tHead />}
 {
   tags.map((tag) =>
     tag.content === null ? (
